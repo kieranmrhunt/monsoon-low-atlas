@@ -8,6 +8,8 @@ Notes:
 
 - Track geometry uses the v5.4 globally smoothed published centres.
 - Complete ERA5 physics is resampled at every published centre, including interpolated track positions.
+- The public map renders every atlas track with one solid style; reconstruction provenance remains in downloads and build metadata.
+- Pressure deficit, vorticity, wind, minimum MSLP depth, and 24 h precipitation have independent catalogue-percentile filters that can be combined.
 - Peak classes are ERA5-derived IMD-equivalent classes, not official IMD classifications.
 - The default map draws only positions in the selected months; whole-system lifecycles remain available.
 - Cyclone names come from a v5.4-specific match to NOAA IBTrACS v04r01 NI and WP best tracks. Low-confidence matches remain unnamed.

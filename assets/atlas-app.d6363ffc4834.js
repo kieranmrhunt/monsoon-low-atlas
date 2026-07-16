@@ -12,7 +12,6 @@
 	const SEASON_MONTHS = {jjas: [6, 7, 8, 9], mam: [3, 4, 5], ond: [10, 11, 12], djf: [12, 1, 2], all: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]};
 	const CLASS_COLOURS = ['#8b7b63', '#c3931d', '#c9631b', '#ad4328', '#8f2938', '#64224f', '#35204e'];
 	const QC_LABELS = ['Strong support', 'Mixed support', 'Low support'];
-	const QC_TONES = ['good', 'review', 'flag'];
 	const COMPLETE_END_YEAR = 2025;
 	const MAP_DIRTY = Object.freeze({BASE: 1, DATA: 2, OVERLAY: 4, ALL: 7});
 
@@ -33,7 +32,6 @@
 	let pointerFrame = 0;
 	let pendingPointer = null;
 	let suppressUrl = false;
-	let pinnedA = null;
 	let lastAutoFitSignature = '';
 	let rainfallMapCache = null;
 
@@ -46,6 +44,7 @@
 		q: {label: 'q850', title: 'q850', raw: 'peak_q850_x10', series: 'q850_x10', divisor: 10, unit: 'g kg⁻¹', colour: '#4360a0', direction: 1},
 		rh: {label: 'RH850', title: 'RH850', series: 'rh850_x10', divisor: 10, unit: '%', colour: '#477a4a', direction: 1}
 	};
+	const FILTER_METRIC_KEYS = ['deficit', 'vort', 'wind', 'mslp', 'rain'];
 
 	const state = {
 		tab: 'explore',
@@ -58,7 +57,7 @@
 		monthMode: 'active',
 		classes: new Set([1, 2, 3, 4, 5, 6]),
 		metric: 'deficit',
-		metricMin: 0,
+		percentileMins: {deficit: 0, vort: 0, wind: 0, mslp: 0, rain: 0},
 		match: 'any',
 		qc: 'any',
 		stateIndex: -1,
@@ -80,9 +79,7 @@
 		pageSize: 50,
 		sort: 'metric-desc',
 		extremeMetric: 'duration',
-		extremeEligibility: 'recommended',
-		compareMetric: 'deficit',
-		compareAlign: 'life',
+		extremeEligibility: 'all',
 		evolutionMetric: 'deficit'
 	};
 
@@ -559,7 +556,8 @@
 	}
 
 	function filterSignature() {
-		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, state.metricMin, state.match, state.qc, state.stateIndex, state.stateMin, state.search].join('|');
+		const percentiles = FILTER_METRIC_KEYS.map(key => `${key}:${state.percentileMins[key]}`).join(',');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
 	function applyFilters(options) {
@@ -577,7 +575,7 @@
 			} else if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) continue;
 			if (!monthPass(index)) continue;
 			if (!state.classes.has(row[T.category])) continue;
-			if (percentileMetric(index) < state.metricMin) continue;
+			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
 			if (!matchPass(index) || !qcPass(index) || !statePass(index)) continue;
 			if (query && (exactTrackId == null ? !CORE.search[index].includes(query) : atlasId(index) !== exactTrackId)) continue;
 			bits[index] = 1;
@@ -602,27 +600,33 @@
 		if (!(options && options.noUrl)) writeUrl('replace');
 	}
 
-	function physicalThreshold() {
-		if (!state.metricMin) return '';
-		const values = CORE.tracks.map((row, index) => ({pct: percentileMetric(index), raw: rawMetric(index)})).filter(item => item.pct >= state.metricMin).map(item => item.raw);
+	function physicalThreshold(key) {
+		const minimum = state.percentileMins[key];
+		if (!minimum) return '';
+		const values = CORE.tracks.map((row, index) => ({pct: percentileMetric(index, key), raw: rawMetric(index, key)})).filter(item => item.pct >= minimum).map(item => item.raw);
 		if (!values.length) return '';
-		const definition = metric();
+		const definition = METRICS[key];
 		const threshold = definition.direction < 0 ? Math.max(...values) : Math.min(...values);
 		return `${definition.direction < 0 ? '≤' : '≥'} ${fmt(threshold, 1)} ${definition.unit}`;
 	}
 
 	function updateFilterReadout() {
 		$('#mlaResultCount').textContent = `${fmt(state.active.length)} of ${fmt(CORE.tracks.length)} systems`;
-		$('#mlaMetricLabel').textContent = metric().label;
-		$('#mlaMetricMinValue').textContent = `${state.metricMin}%`;
+		$$('[data-percentile-filter]').forEach(control => {
+			const key = control.dataset.percentileFilter;
+			const output = $(`#${control.id}Value`);
+			if (output) output.textContent = `${state.percentileMins[key]}%`;
+		});
 		$('#mlaStateMinValue').textContent = `${state.stateMin}%`;
 		const filters = [];
 		if (state.timeMode === 'dates') filters.push(`Genesis ${state.dateMin} to ${state.dateMax}`);
 		else if (state.yearMin !== 1940 || state.yearMax !== 2025) filters.push(`${state.yearMin}–${state.yearMax}`);
 		if (state.months.size !== 12) filters.push(`${[...state.months].sort((a, b) => a - b).map(month => MONTHS[month - 1]).join(', ')} · ${state.monthMode}`);
 		if (state.classes.size !== 6) filters.push(`${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(', ')} class`);
-		if (state.metricMin) filters.push(`P${state.metricMin} ${physicalThreshold()}`);
-		if (state.qc !== 'any') filters.push(`Continuity: ${state.qc}`);
+		FILTER_METRIC_KEYS.forEach(key => {
+			const minimum = state.percentileMins[key];
+			if (minimum) filters.push(`${METRICS[key].title} P${minimum} (${physicalThreshold(key)})`);
+		});
 		if (state.stateIndex >= 0) filters.push(`Track crosses ${CORE.states[state.stateIndex]}`);
 		if (state.search) filters.push(`Search: “${state.search}”`);
 		$('#mlaActiveFilters').innerHTML = filters.length ? filters.map(value => `<span class="mla-active-filter">${esc(value)}</span>`).join('') : '<span class="mla-active-filter">Default JJAS cohort · complete through 2025</span>';
@@ -661,7 +665,12 @@
 		$('#mlaDateMax').value = state.dateMax;
 		$('#mlaMonthMode').value = state.monthMode;
 		$('#mlaMetric').value = state.metric;
-		$('#mlaMetricMin').value = state.metricMin;
+		$$('[data-percentile-filter]').forEach(control => {
+			const key = control.dataset.percentileFilter;
+			control.value = state.percentileMins[key];
+			const output = $(`#${control.id}Value`);
+			if (output) output.textContent = `${state.percentileMins[key]}%`;
+		});
 		$('#mlaMatch').value = state.match;
 		$('#mlaQc').value = state.qc;
 		$('#mlaState').value = state.stateIndex < 0 ? '' : String(state.stateIndex);
@@ -676,8 +685,6 @@
 		$('#mlaSystemSort').value = state.sort;
 		$('#mlaExtremeMetric').value = state.extremeMetric;
 		$('#mlaExtremeEligibility').value = state.extremeEligibility;
-		$('#mlaCompareMetric').value = state.compareMetric;
-		$('#mlaCompareAlign').value = state.compareAlign;
 		$('#mlaEvolutionMetric').value = state.evolutionMetric;
 		$$('[data-month]').forEach(button => button.setAttribute('aria-pressed', String(state.months.has(Number(button.dataset.month)))));
 		$$('[data-class]').forEach(button => button.setAttribute('aria-pressed', String(state.classes.has(Number(button.dataset.class)))));
@@ -718,7 +725,7 @@
 		state.monthMode = 'active';
 		state.classes = new Set([1, 2, 3, 4, 5, 6]);
 		state.metric = 'deficit';
-		state.metricMin = 0;
+		state.percentileMins = {deficit: 0, vort: 0, wind: 0, mslp: 0, rain: 0};
 		state.match = 'any';
 		state.qc = 'any';
 		state.stateIndex = -1;
@@ -783,9 +790,13 @@
 			syncControls();
 			applyFilters();
 		});
-		$('#mlaMetricMin').addEventListener('input', event => {
-			state.metricMin = Number(event.target.value);
-			$('#mlaMetricMinValue').textContent = `${state.metricMin}%`;
+		$('#mlaPercentileFilters').addEventListener('input', event => {
+			const control = event.target.closest('[data-percentile-filter]');
+			if (!control) return;
+			const key = control.dataset.percentileFilter;
+			state.percentileMins[key] = Number(control.value);
+			const output = $(`#${control.id}Value`);
+			if (output) output.textContent = `${state.percentileMins[key]}%`;
 			debouncedFilter();
 		});
 		$('#mlaMatch').addEventListener('change', event => { state.match = event.target.value; applyFilters(); });
@@ -815,9 +826,6 @@
 			setMonths(SEASON_MONTHS[button.dataset.season]);
 		});
 		$('#mlaResetFilters').addEventListener('click', resetFilters);
-		$('#mlaPinA').addEventListener('click', pinCurrentA);
-		$('#mlaComparePin').addEventListener('click', pinCurrentA);
-		$('#mlaCompareClear').addEventListener('click', () => { pinnedA = null; renderCompare(); });
 		$('#mlaMapLayer').addEventListener('change', event => { state.mapLayer = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY); writeUrl('replace'); });
 		$('#mlaMapColour').addEventListener('change', event => { state.mapColour = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA); writeUrl('replace'); });
 		$('#mlaStateFill').addEventListener('change', async event => {
@@ -842,8 +850,6 @@
 		$('#mlaNextPage').addEventListener('click', () => { state.page++; renderSystems(); });
 		$('#mlaExtremeMetric').addEventListener('change', event => { state.extremeMetric = event.target.value; renderExtremes(); });
 		$('#mlaExtremeEligibility').addEventListener('change', event => { state.extremeEligibility = event.target.value; renderExtremes(); });
-		$('#mlaCompareMetric').addEventListener('change', event => { state.compareMetric = event.target.value; renderCompare(); });
-		$('#mlaCompareAlign').addEventListener('change', event => { state.compareAlign = event.target.value; renderCompare(); });
 		$('#mlaEvolutionMetric').addEventListener('change', event => { state.evolutionMetric = event.target.value; renderLifeCharts(); writeUrl('replace'); });
 		$('#mlaLoadProfile').addEventListener('click', () => ensureDetail('Opening detailed cohort series…').then(renderLifeCharts).catch(showFatal));
 		$('#mlaCopyLink').addEventListener('click', copyViewLink);
@@ -904,9 +910,10 @@
 		const classes = [...state.classes].sort((a, b) => a - b);
 		if (classes.join(',') !== '1,2,3,4,5,6') parameters.set('class', classes.join(','));
 		if (state.metric !== 'deficit') parameters.set('metric', state.metric);
-		if (state.metricMin) parameters.set('pmin', String(state.metricMin));
+		FILTER_METRIC_KEYS.forEach(key => {
+			if (state.percentileMins[key]) parameters.set(`p${key}`, String(state.percentileMins[key]));
+		});
 		if (state.match !== 'any') parameters.set('match', state.match);
-		if (state.qc !== 'any') parameters.set('qc', state.qc);
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
@@ -930,7 +937,7 @@
 
 	function readUrl() {
 		const parameters = new URLSearchParams(window.location.search);
-		const validTabs = new Set(['explore', 'systems', 'climatology', 'compare', 'extremes', 'data']);
+		const validTabs = new Set(['explore', 'systems', 'climatology', 'extremes', 'data']);
 		if (validTabs.has(parameters.get('tab'))) state.tab = parameters.get('tab');
 		const years = parameters.get('years');
 		if (years && /^\d{4}-\d{4}$/.test(years)) {
@@ -950,14 +957,16 @@
 		const classes = (parameters.get('class') || '').split(',').map(Number).filter(value => value >= 1 && value <= 6);
 		if (classes.length) state.classes = new Set(classes);
 		if (METRICS[parameters.get('metric')] && !['q', 'rh'].includes(parameters.get('metric'))) state.metric = parameters.get('metric');
-		state.metricMin = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
+		FILTER_METRIC_KEYS.forEach(key => {
+			state.percentileMins[key] = clamp(Number(parameters.get(`p${key}`)) || 0, 0, 100);
+		});
+		if (parameters.has('pmin') && !parameters.has(`p${state.metric}`)) state.percentileMins[state.metric] = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
 		if (['any', 'unmatched', 'high', 'credible', 'named'].includes(parameters.get('match'))) state.match = parameters.get('match');
-		if (['any', 'good', 'usable', 'flagged'].includes(parameters.get('qc'))) state.qc = parameters.get('qc');
 		const overIndex = CORE.state_slugs.indexOf(parameters.get('over'));
 		if (overIndex >= 0) state.stateIndex = overIndex;
 		state.search = parameters.get('q') || '';
 		if (['auto', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
-		if (['single', 'class', 'metric', 'year', 'qc'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
+		if (['single', 'class', 'metric', 'year'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['none', 'selected', 'cohort'].includes(parameters.get('statefill'))) state.stateFill = parameters.get('statefill');
 		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
 		if (['months', 'full'].includes(parameters.get('path'))) state.mapPath = parameters.get('path');
@@ -1276,7 +1285,6 @@
 		if (state.mapColour === 'class') return CLASS_COLOURS[track(index)[T.category]];
 		if (state.mapColour === 'metric') return ramp(percentileMetric(index) / 100);
 		if (state.mapColour === 'year') return ramp((track(index)[T.start_year] - 1940) / (2025 - 1940));
-		if (state.mapColour === 'qc') return [css('--mla-good', '#2f7152'), css('--mla-review', '#a06912'), css('--mla-flag', '#a23d34')][CORE.qc[index][4]];
 		const item = crosswalk(index);
 		if (!item || !item.ib) return '#8b7b63';
 		return item.ib.confidence === 'high' ? '#08736f' : item.ib.confidence === 'medium' ? '#c3931d' : '#aa3d2d';
@@ -1363,23 +1371,6 @@
 		}
 	}
 
-	function appendObservedTrackPath(context, projection, trackIndex) {
-		const points = paths.decoded[trackIndex];
-		const breaks = new Set((CORE.breaks[trackIndex] || []).map(item => Number(item[0])));
-		const posterior = new Uint8Array(points.length);
-		for (const range of CORE.posterior_runs[trackIndex] || []) {
-			for (let index = Number(range[0]); index <= Number(range[1]); index++) posterior[index] = 1;
-		}
-		let started = false;
-		for (let index = 0; index < points.length; index++) {
-			if (posterior[index] || !pointVisible(trackIndex, index)) { started = false; continue; }
-			const point = projection.project(points[index][0], points[index][1]);
-			if (!started || breaks.has(index)) context.moveTo(point[0], point[1]);
-			else context.lineTo(point[0], point[1]);
-			started = true;
-		}
-	}
-
 	function drawTrackLayer(context, projection) {
 		const groups = new Map();
 		for (const index of state.active) {
@@ -1420,8 +1411,6 @@
 			trackLegend = [1, 2, 3, 4, 5, 6].map(value => `<span class="mla-legend-item"><span class="mla-swatch" style="background:${CLASS_COLOURS[value]}"></span>${CLASS_SHORT[value]}</span>`).join('');
 		} else if (state.mapColour === 'single') {
 			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${trackColour(0)}"></span>v5.4 track</span>`;
-		} else if (state.mapColour === 'qc') {
-			trackLegend = QC_LABELS.map((value, index) => `<span class="mla-legend-item"><span class="mla-swatch" style="background:${[css('--mla-good', '#2f7152'), css('--mla-review', '#a06912'), css('--mla-flag', '#a23d34')][index]}"></span>${value}</span>`).join('');
 		} else {
 			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.1)}"></span>low</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.55)}"></span>middle</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(1)}"></span>high</span>`;
 		}
@@ -1447,56 +1436,25 @@
 		mapLegend(layer, maximum);
 	}
 
-	function strokeTrack(context, projection, index, colour, width, gapConnectors) {
-		const hasPosterior = CORE.posterior_runs && (CORE.posterior_runs[index] || []).length;
+	function strokeTrack(context, projection, index, colour, width) {
 		context.save();
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
-		if (hasPosterior) {
-			context.beginPath();
-			appendTrackPath(context, projection, index, 1, false);
-			context.setLineDash([4, 4]);
-			context.strokeStyle = rgba(colour, .42);
-			context.lineWidth = width;
-			context.stroke();
-			context.beginPath();
-			appendObservedTrackPath(context, projection, index);
-			context.setLineDash([]);
-			context.strokeStyle = colour;
-			context.lineWidth = width;
-			context.stroke();
-		} else {
-			context.beginPath();
-			appendTrackPath(context, projection, index, 1, false);
-			context.strokeStyle = colour;
-			context.lineWidth = width;
-			context.stroke();
-		}
-		context.restore();
-		if (!gapConnectors) return;
-		const points = paths.decoded[index];
-		context.save();
-		context.setLineDash([5, 4]);
-		context.strokeStyle = rgba(colour, .50);
-		context.lineWidth = Math.max(1, width * .45);
-		for (const entry of CORE.breaks[index] || []) {
-			const pointIndex = Number(entry[0]);
-			const gap = Number(entry[1]);
-			const speed = Number(entry[2]);
-			if (pointIndex <= 0 || pointIndex >= points.length || gap > 18 || speed > 35) continue;
-			const first = projection.project(points[pointIndex - 1][0], points[pointIndex - 1][1]);
-			const second = projection.project(points[pointIndex][0], points[pointIndex][1]);
-			context.beginPath(); context.moveTo(first[0], first[1]); context.lineTo(second[0], second[1]); context.stroke();
-		}
+		context.beginPath();
+		appendTrackPath(context, projection, index, 1, false);
+		context.setLineDash([]);
+		context.strokeStyle = colour;
+		context.lineWidth = width;
+		context.stroke();
 		context.restore();
 	}
 
 	function drawMapOverlay() {
 		const drawing = setupCanvas('mlaMapOverlay');
-		if (state.hovered != null && state.hovered !== state.selected && state.activeBit[state.hovered]) strokeTrack(drawing.context, drawing.projection, state.hovered, css('--mla-madder', '#aa3d2d'), 2.5, false);
+		if (state.hovered != null && state.hovered !== state.selected && state.activeBit[state.hovered]) strokeTrack(drawing.context, drawing.projection, state.hovered, css('--mla-madder', '#aa3d2d'), 2.5);
 		if (state.selected == null) return;
-		strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 6.4, false);
-		strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-indigo-deep', '#17294f'), 3.6, true);
+		strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 6.4);
+		strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-indigo-deep', '#17294f'), 3.6);
 		const item = credibleIb(state.selected);
 		if (item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path) {
 			const official = decodePolyline(CORE.ibtracs_tracks[item.sid].path);
@@ -1730,12 +1688,6 @@
 		return '';
 	}
 
-	function qcExplanation(index) {
-		const qc = CORE.qc[index];
-		const row = track(index);
-		return `${fmt(qc[2], 1)}% observed-position occupancy; longest missing run ${fmt(row[T.max_missing_run_hours])} h; maximum linked speed ${fmt(qc[1], 1)} m s⁻¹`;
-	}
-
 	function renderDossier() {
 		const node = $('#mlaDossier');
 		if (state.selected == null) {
@@ -1744,33 +1696,27 @@
 				return;
 			}
 			const durations = state.active.map(index => Number(track(index)[T.duration_hours]));
-			const support = state.active.map(index => Number(CORE.qc[index][2]));
+			const distances = state.active.map(index => Number(track(index)[T.distance_km]));
+			const rainfall = state.active.map(index => Number(track(index)[T.peak_precip_x10]) / 10);
 			const named = state.active.filter(index => Boolean(officialName(index))).length;
-			const strong = state.active.filter(index => Number(CORE.qc[index][4]) === 0).length;
 			const facts = [
 				['Systems', fmt(state.active.length)],
 				['Median duration', durationText(median(durations))],
-				['Median observed support', `${fmt(median(support), 1)}%`],
-				['Strong continuity support', `${fmt(strong / state.active.length * 100, 1)}%`],
+				['Median path length', `${fmt(median(distances))} km`],
+				['Median peak 24 h rain', `${fmt(median(rainfall), 1)} mm`],
 				['Named cyclone matches', fmt(named)],
-				['Displayed fixes', fmt(visiblePointCount(state.active))]
+				['Displayed positions', fmt(visiblePointCount(state.active))]
 			];
-			node.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current cohort</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">${state.mapPath === 'months' ? 'Selected-month fixes' : 'Whole lifecycles'} on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, continuity diagnostics and downloads.</p>`;
+			node.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current cohort</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">${state.mapPath === 'months' ? 'Selected-month positions' : 'Whole lifecycles'} on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, rainfall context and downloads.</p>`;
 			return;
 		}
 		const index = state.selected;
 		const row = track(index);
-		const qc = CORE.qc[index];
 		const badges = [
-			badge(`Atlas ${CLASS_SHORT[row[T.category]]}`, 'official'),
-			badge(QC_LABELS[qc[4]], QC_TONES[qc[4]])
+			badge(`Atlas ${CLASS_SHORT[row[T.category]]}`, 'official')
 		];
 		const facts = [
 			['Duration', durationText(row[T.duration_hours])],
-			['Observed fixes', fmt(row[T.observed_positions])],
-			['Interpolated', `${fmt(row[T.posterior_fraction_x1000] / 10, 1)}%`],
-			['Qualifying fixes', fmt(row[T.qualifying_positions])],
-			['Track stitches', fmt(row[T.stitch_count])],
 			['Pressure deficit', `${fmt(row[T.peak_deficit_x10] / 10, 1)} hPa`],
 			['Maximum wind', `${fmt(row[T.peak_wind_x10] / 10, 1)} m s⁻¹`],
 			['Minimum MSLP', `${fmt(row[T.min_mslp_x10] / 10, 1)} hPa`],
@@ -1781,7 +1727,6 @@
 		node.innerHTML = `
 			<div class="mla-dossier-head"><div><div class="mla-badge-row">${badges.join('')}</div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · stable track ID ${atlasId(index)}</p></div><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaClearSelection" type="button" aria-label="Clear selected track">×</button></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
-			<p class="mla-caution"><strong>Continuity:</strong> ${esc(qcExplanation(index))}. Dashed sections are interpolated between observed-support positions; v5.4 physics is resampled at every published centre.</p>
 			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
 			`;
 		$('#mlaClearSelection').addEventListener('click', () => selectTrack(null));
@@ -1831,19 +1776,18 @@
 	}
 
 	function tableHead() {
-		return `<tr><th>System</th><th>Genesis</th><th>Peak class</th><th>${esc(metric().title)}</th><th>Duration</th><th>Observed support</th></tr>`;
+		return `<tr><th>System</th><th>Genesis</th><th>Peak class</th><th>${esc(metric().title)}</th><th>Duration</th></tr>`;
 	}
 
 	function tableRow(index, openExplore) {
 		const row = track(index);
-		const qc = CORE.qc[index];
-		return `<tr data-selected="${index === state.selected}"><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="${openExplore}">${esc(systemLabel(index))}</button></td><td>${date(row[T.start_ms])}</td><td>${esc(CLASS_SHORT[row[T.category]])}</td><td class="mla-num">${fmt(rawMetric(index), 1)} ${esc(metric().unit)}<br><small>P${fmt(percentileMetric(index))}</small></td><td class="mla-num">${durationText(row[T.duration_hours])}</td><td>${badge(QC_LABELS[qc[4]], QC_TONES[qc[4]])}<br><small>${fmt(qc[2])}% observed</small></td></tr>`;
+		return `<tr data-selected="${index === state.selected}"><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="${openExplore}">${esc(systemLabel(index))}</button></td><td>${date(row[T.start_ms])}</td><td>${esc(CLASS_SHORT[row[T.category]])}</td><td class="mla-num">${fmt(rawMetric(index), 1)} ${esc(metric().unit)}<br><small>P${fmt(percentileMetric(index))}</small></td><td class="mla-num">${durationText(row[T.duration_hours])}</td></tr>`;
 	}
 
 	function renderTopTable() {
 		const table = $('#mlaTopTable');
 		table.querySelector('thead').innerHTML = tableHead();
-		table.querySelector('tbody').innerHTML = sortedActive('metric-desc').slice(0, 12).map(index => tableRow(index, false)).join('') || '<tr><td colspan="6">No systems match the current filters.</td></tr>';
+		table.querySelector('tbody').innerHTML = sortedActive('metric-desc').slice(0, 12).map(index => tableRow(index, false)).join('') || '<tr><td colspan="5">No systems match the current filters.</td></tr>';
 	}
 
 	function renderSystems() {
@@ -1854,7 +1798,7 @@
 		const start = (state.page - 1) * state.pageSize;
 		const table = $('#mlaSystemsTable');
 		table.querySelector('thead').innerHTML = tableHead();
-		table.querySelector('tbody').innerHTML = indexes.slice(start, start + state.pageSize).map(index => tableRow(index, true)).join('') || '<tr><td colspan="6">No systems match the current filters.</td></tr>';
+		table.querySelector('tbody').innerHTML = indexes.slice(start, start + state.pageSize).map(index => tableRow(index, true)).join('') || '<tr><td colspan="5">No systems match the current filters.</td></tr>';
 		$('#mlaPageReadout').textContent = indexes.length ? `Rows ${fmt(start + 1)}–${fmt(Math.min(indexes.length, start + state.pageSize))} of ${fmt(indexes.length)} · page ${state.page} of ${pages}` : 'No matching systems';
 		$('#mlaPrevPage').disabled = state.page <= 1;
 		$('#mlaNextPage').disabled = state.page >= pages;
@@ -1975,8 +1919,6 @@
 		const rainSeries = seriesValues(trackIndex, 'rain');
 		const hours = lineSeries.hours;
 		if (!hours.length) { emptyChart('mlaLifeChart'); return null; }
-		const posterior = new Uint8Array(hours.length);
-		for (const range of CORE.posterior_runs[trackIndex] || []) posterior.fill(1, Number(range[0]), Number(range[1]) + 1);
 		const breakPrefix = new Uint16Array(hours.length + 1);
 		const breakSet = new Set((CORE.breaks[trackIndex] || []).map(item => Number(item[0])));
 		for (let index = 0; index < hours.length; index++) breakPrefix[index + 1] = breakPrefix[index] + (breakSet.has(index) ? 1 : 0);
@@ -1985,7 +1927,7 @@
 		if (!linePoints.length && !rainPoints.length) { emptyChart('mlaLifeChart'); return null; }
 
 		const {canvas, context, width, height} = drawing;
-		const padding = {left: 58, right: 56, top: 42, bottom: 58};
+		const padding = {left: 58, right: 56, top: 42, bottom: 44};
 		const plotBottom = height - padding.bottom;
 		const plotWidth = width - padding.left - padding.right;
 		const plotHeight = plotBottom - padding.top;
@@ -2060,21 +2002,9 @@
 			for (const point of linePoints) { context.beginPath(); context.arc(X(point.hour), Y(point.value), 1.7, 0, Math.PI * 2); context.fill(); }
 		}
 
-		const coverageY = plotBottom + 10;
-		const coverageHeight = 7;
-		for (let index = 0; index < hours.length; index++) {
-			const leftHour = index ? (hours[index - 1] + hours[index]) / 2 : hours[index];
-			const rightHour = index + 1 < hours.length ? (hours[index] + hours[index + 1]) / 2 : hours[index];
-			context.fillStyle = posterior[index] ? 'rgba(104, 92, 77, .28)' : rgba(css('--mla-good', '#2f7152'), .72);
-			context.fillRect(X(leftHour), coverageY, Math.max(1, X(rightHour) - X(leftHour) + .4), coverageHeight);
-		}
-		context.font = '10px Aptos, Segoe UI, sans-serif';
-		context.fillStyle = css('--mla-muted', '#685c4d');
-		context.fillText('coverage', 6, coverageY + 7);
 		context.restore();
 
-		const observedCount = hours.length - posterior.reduce((sum, value) => sum + value, 0);
-		const summary = `${fmt(observedCount)} of ${fmt(hours.length)} linked positions have observed detector support (${fmt(observedCount / hours.length * 100, 1)}%); grey intervals are interpolated positions. Published-centre physics is available throughout.`;
+		const summary = `${fmt(hours.length)} hourly positions · ${definition.title} ${fmt(Math.min(...linePoints.map(point => point.value)), 1)}–${fmt(Math.max(...linePoints.map(point => point.value)), 1)} ${definition.unit} · peak 24 h rain ${fmt(Math.max(...rainPoints.map(point => point.value)), 1)} mm.`;
 		const readout = $('#mlaLifeReadout');
 		readout.textContent = summary;
 		function showPoint(event) {
@@ -2087,14 +2017,13 @@
 				if (hours[middle] < targetHour) low = middle + 1; else high = middle;
 			}
 			const index = low > 0 && Math.abs(hours[low - 1] - targetHour) < Math.abs(hours[low] - targetHour) ? low - 1 : low;
-			const source = posterior[index] ? 'interpolated position' : 'observed-support position';
-			readout.textContent = `${timeLabel(hours[index])} from genesis · ${source} · ${definition.title} ${fmt(lineSeries.values[index], 1)} ${definition.unit} · 24 h rain ${fmt(rainSeries.values[index], 1)} mm.`;
+			readout.textContent = `${timeLabel(hours[index])} from genesis · ${definition.title} ${fmt(lineSeries.values[index], 1)} ${definition.unit} · 24 h rain ${fmt(rainSeries.values[index], 1)} mm.`;
 		}
 		canvas.onpointermove = showPoint;
 		canvas.onpointerdown = showPoint;
 		canvas.onpointerleave = () => { readout.textContent = summary; };
-		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars and position-source coverage for ${systemLabel(trackIndex)}`);
-		return {hours, lineValues: lineSeries.values, rainValues: rainSeries.values, posterior, summary};
+		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars for ${systemLabel(trackIndex)}`);
+		return {hours, lineValues: lineSeries.values, rainValues: rainSeries.values, summary};
 	}
 
 	function drawBars(id, items, options) {
@@ -2267,7 +2196,7 @@
 		if (state.selected == null) {
 			emptyChart('mlaLifeChart', 'Select a system to view raw meteorology');
 			$('#mlaLifeData').innerHTML = '';
-			$('#mlaLifeReadout').textContent = 'Select a system to inspect hourly published-centre physics and position source.';
+			$('#mlaLifeReadout').textContent = 'Select a system to inspect hourly published-centre physics.';
 		} else if (!DETAIL) {
 			emptyChart('mlaLifeChart', 'Loading selected-system detail…');
 			$('#mlaLifeReadout').textContent = 'Loading hourly published-centre physics…';
@@ -2276,16 +2205,12 @@
 			const definition = METRICS[state.evolutionMetric];
 			const evolution = drawEvolutionPlot(state.selected, state.evolutionMetric);
 			const stride = Math.max(1, Math.ceil(evolution.hours.length / 160));
-			const rows = evolution.hours.map((hour, index) => ({hour, index})).filter((item, index) => {
-				const transition = index && evolution.posterior[index] !== evolution.posterior[index - 1];
-				return index % stride === 0 || transition || index === evolution.hours.length - 1;
-			}).map(item => [
+			const rows = evolution.hours.map((hour, index) => ({hour, index})).filter((item, index) => index % stride === 0 || index === evolution.hours.length - 1).map(item => [
 				item.hour,
-				evolution.posterior[item.index] ? 'Interpolated position' : 'Observed-support position',
 				fmt(evolution.lineValues[item.index], 2),
 				fmt(evolution.rainValues[item.index], 2)
 			]);
-			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', 'Position source', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Physics is resampled at each published v5.4 centre; lines break across structural track discontinuities.');
+			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Physics is resampled at each published v5.4 centre.');
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
@@ -2333,64 +2258,6 @@
 		return result;
 	}
 
-	function cohortDescription() {
-		const months = [...state.months].sort((a, b) => a - b).map(value => MONTHS[value - 1]).join('/');
-		const period = state.timeMode === 'dates' ? `${state.dateMin} to ${state.dateMax}` : `${state.yearMin}–${state.yearMax}`;
-		return `${period}; ${months}; ${state.monthMode}; ${state.metricMin ? `P${state.metricMin}+ ${metric().title}` : 'all intensities'}; ${fmt(state.active.length)} systems`;
-	}
-
-	function pinCurrentA() {
-		pinnedA = {ids: state.active.slice(), description: cohortDescription(), signature: filterSignature()};
-		toast(`Pinned ${fmt(pinnedA.ids.length)} systems as cohort A`);
-		if (state.tab !== 'compare') activateTab('compare', true);
-		else renderCompare();
-	}
-
-	function cohortStats(indexes, metricKey) {
-		return {
-			count: indexes.length,
-			duration: median(indexes.map(index => track(index)[T.duration_hours])),
-			metric: median(indexes.map(index => rawMetric(index, metricKey))),
-			coverage: median(indexes.map(index => CORE.qc[index][2]))
-		};
-	}
-
-	function renderCompareStats(first, second) {
-		const definition = METRICS[state.compareMetric];
-		const rows = [
-			['Systems', fmt(first.count), fmt(second.count), second.count - first.count],
-			['Median duration', durationText(first.duration), durationText(second.duration), second.duration - first.duration],
-			[`Median ${definition.title}`, `${fmt(first.metric, 1)} ${definition.unit}`, `${fmt(second.metric, 1)} ${definition.unit}`, second.metric - first.metric],
-			['Median observed support', `${fmt(first.coverage, 1)}%`, `${fmt(second.coverage, 1)}%`, second.coverage - first.coverage]
-		];
-		$('#mlaCompareStats').innerHTML = rows.map(row => `<section class="mla-card mla-stat"><span>${esc(row[0])}</span><strong>A ${esc(row[1])}</strong><small>B ${esc(row[2])}${Number.isFinite(row[3]) ? ` · Δ ${row[3] > 0 ? '+' : ''}${fmt(row[3], 1)}` : ''}</small></section>`).join('');
-	}
-
-	async function renderCompare() {
-		if ($('#mlaPanelCompare').hidden) return;
-		$('#mlaCohortA').innerHTML = `<h3>Cohort A</h3><p>${pinnedA ? esc(pinnedA.description) : 'Not pinned yet.'}</p>`;
-		$('#mlaCohortB').innerHTML = `<h3>Cohort B</h3><p>${esc(cohortDescription())}</p>`;
-		if (!pinnedA) {
-			$('#mlaCompareStats').innerHTML = '';
-			emptyChart('mlaCompareChart', 'Pin the current filters as cohort A, then change filters to create cohort B');
-			$('#mlaCompareData').innerHTML = '';
-			return;
-		}
-		await ensureDetail('Opening detailed series for cohort comparison…');
-		const definition = METRICS[state.compareMetric];
-		const first = cohortStats(pinnedA.ids, state.compareMetric);
-		const second = cohortStats(state.active, state.compareMetric);
-		renderCompareStats(first, second);
-		const profileA = cohortProfile(pinnedA.ids, state.compareMetric, state.compareAlign);
-		const profileB = cohortProfile(state.active, state.compareMetric, state.compareAlign);
-		const peak = state.compareAlign === 'peak';
-		drawLinePlot('mlaCompareChart', [
-			{name: 'Cohort A median', colour: css('--mla-indigo', '#233f78'), points: profileA.points},
-			{name: 'Cohort B median', colour: css('--mla-madder', '#aa3d2d'), points: profileB.points}
-		], {zero: definition.direction > 0 && state.compareMetric !== 'vort', xMin: peak ? -72 : 0, xMax: peak ? 72 : 100, xFormat: value => peak ? `${value > 0 ? '+' : ''}${fmt(value)}h` : `${fmt(value)}%`, yFormat: value => fmt(value, 1)});
-		$('#mlaCompareData').innerHTML = accessibleTable(['Alignment', 'A median', 'A Q1–Q3', 'A n', 'B median', 'B Q1–Q3', 'B n'], profileA.points.map((point, index) => [peak ? `${point.x > 0 ? '+' : ''}${point.x} h` : `${fmt(point.x)}%`, fmt(point.y, 2), `${fmt(point.low, 2)}–${fmt(point.high, 2)}`, point.n, fmt(profileB.points[index].y, 2), `${fmt(profileB.points[index].low, 2)}–${fmt(profileB.points[index].high, 2)}`, profileB.points[index].n]));
-	}
-
 	const EXTREMES = {
 		duration: {label: 'Duration', unit: 'h', value: index => track(index)[T.duration_hours], descending: true, continuity: true},
 		distance: {label: 'Linked path length', unit: 'km', value: index => track(index)[T.distance_km], descending: true, continuity: true},
@@ -2401,28 +2268,20 @@
 		mslp: {label: 'Minimum MSLP', unit: 'hPa', value: index => track(index)[T.min_mslp_x10] / 10, descending: false}
 	};
 
-	function eligibleExtreme(index, definition) {
-		if (state.extremeEligibility === 'all') return true;
-		if (state.extremeEligibility === 'good') return CORE.qc[index][4] === 0;
-		return definition.continuity ? CORE.qc[index][4] === 0 : true;
-	}
-
 	function renderExtremes() {
 		if ($('#mlaPanelExtremes').hidden) return;
 		const definition = EXTREMES[state.extremeMetric];
-		const indexes = state.active.filter(index => eligibleExtreme(index, definition)).sort((first, second) => definition.descending ? definition.value(second) - definition.value(first) : definition.value(first) - definition.value(second));
-		$('#mlaExtremeCaveat').textContent = definition.continuity && state.extremeEligibility === 'recommended'
-			? 'Recommended: strong observed support'
-			: 'Intensity diagnostics retain continuity context; they are not externally validated records';
+		const indexes = state.active.slice().sort((first, second) => definition.descending ? definition.value(second) - definition.value(first) : definition.value(first) - definition.value(second));
+		$('#mlaExtremeCaveat').textContent = 'Catalogue diagnostics · not externally validated records';
 		$('#mlaRecordCards').innerHTML = indexes.slice(0, 3).map((index, rank) => {
 			const value = definition.value(index);
-			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${fmt(value, 1)} ${esc(definition.unit)}</strong> · ${date(track(index)[T.start_ms])}</p><p>${esc(qcExplanation(index))}</p></article>`;
+			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${fmt(value, 1)} ${esc(definition.unit)}</strong> · ${date(track(index)[T.start_ms])} · ${esc(CLASS_SHORT[track(index)[T.category]])}</p></article>`;
 		}).join('') || '<p>No eligible systems in this cohort.</p>';
 		const table = $('#mlaExtremeTable');
-		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak class</th><th>Observed support</th><th>Stitches</th></tr>`;
+		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak class</th></tr>`;
 		table.querySelector('tbody').innerHTML = indexes.slice(0, 50).map((index, rank) => {
-			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${fmt(definition.value(index), 1)} ${esc(definition.unit)}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td><td>${badge(QC_LABELS[CORE.qc[index][4]], QC_TONES[CORE.qc[index][4]])}<br><small>${fmt(CORE.qc[index][2])}% observed</small></td><td>${fmt(track(index)[T.stitch_count])}</td></tr>`;
-		}).join('') || '<tr><td colspan="7">No eligible systems.</td></tr>';
+			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${fmt(definition.value(index), 1)} ${esc(definition.unit)}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td></tr>`;
+		}).join('') || '<tr><td colspan="5">No eligible systems.</td></tr>';
 	}
 
 	function officialGradeCategory(grade) {
@@ -2585,8 +2444,8 @@
 				months: [...state.months].sort((a, b) => a - b),
 				month_definition: state.monthMode,
 				atlas_peak_classes: [...state.classes].sort((a, b) => a - b),
-				metric: state.metric,
-				minimum_fixed_catalogue_percentile: state.metricMin,
+				analysis_metric: state.metric,
+				minimum_fixed_catalogue_percentiles: {...state.percentileMins},
 				continuity_screen: state.qc,
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
 				search: state.search || null
@@ -2644,7 +2503,7 @@
 
 	function renderData() {
 		$('#mlaCoverageText').textContent = `${CORE.meta.coverage_start} to ${CORE.meta.coverage_end}; complete through ${COMPLETE_END_YEAR}.`;
-		$('#mlaBuildText').textContent = `Atlas ${CORE.meta.atlas_version}, built ${CORE.meta.built_utc}; ${fmt(CORE.meta.tracks)} systems, ${fmt(CORE.meta.rows)} linked positions, ${fmt(CORE.meta.observed_rows)} observed-support and ${fmt(CORE.meta.posterior_rows)} interpolated.`;
+		$('#mlaBuildText').textContent = `Atlas ${CORE.meta.atlas_version}, built ${CORE.meta.built_utc}; ${fmt(CORE.meta.tracks)} systems and ${fmt(CORE.meta.rows)} hourly linked positions.`;
 		const release = $('#mlaReleaseSummary');
 		if (release) release.href = CORE.meta.sources.release_summary;
 	}
@@ -2662,7 +2521,6 @@
 		if (state.tab === 'explore') renderExplore();
 		else if (state.tab === 'systems') renderSystems();
 		else if (state.tab === 'climatology') renderClimatology();
-		else if (state.tab === 'compare') renderCompare();
 		else if (state.tab === 'extremes') renderExtremes();
 		else if (state.tab === 'verification') renderVerification();
 		else if (state.tab === 'data') renderData();

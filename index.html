@@ -234,13 +234,13 @@
 .mla-date-fields label { display: grid; gap: 2px; min-width: 0; color: var(--mla-muted); font-size: 10px; }
 .mla-date-fields input { min-width: 0; padding-inline: 6px; font-size: 12px; }
 .mla-filter-more { border-top: 1px solid var(--mla-line); }
-.mla-filter-more > summary { cursor: pointer; list-style: none; padding: 10px 13px; font-weight: 500; color: var(--mla-muted); }
-.mla-filter-more > summary::-webkit-details-marker { display: none; }
-.mla-filter-more > summary::after { content: "+"; float: right; color: var(--mla-peacock); }
-.mla-filter-more[open] > summary::after { content: "−"; }
-.mla-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 4px 13px 14px; }
+.mla-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 12px 13px 14px; }
 .mla-filter-group { min-width: 0; }
 .mla-filter-group h3 { margin: 0 0 7px; font-size: 14px; font-weight: 500; }
+.mla-percentile-group { grid-column: 1 / -1; border-top: 1px solid var(--mla-line); padding-top: 12px; }
+.mla-percentile-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px 16px; }
+.mla-percentile-filter { display: grid; gap: 5px; min-width: 0; }
+.mla-percentile-filter output { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--mla-ink); }
 .mla-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-filter-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--mla-line); padding: 9px 13px; }
 .mla-result-count { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
@@ -386,6 +386,7 @@
 @media (max-width: 1180px) {
 	.mla-filter-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.mla-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.mla-percentile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 	.mla-explore-grid { grid-template-columns: 1fr; }
 	.mla-dossier { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }
 	.mla-dossier > * { min-width: 0; }
@@ -405,6 +406,7 @@
 	.mla-chart-grid,
 	.mla-method-grid,
 	.mla-cohort-grid { grid-template-columns: 1fr; }
+	.mla-percentile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.mla-map-stack { height: 500px; }
 	.mla-dossier { display: block; }
 	.mla-fact-grid { grid-template-columns: 1fr 1fr; }
@@ -417,6 +419,7 @@
 }
 
 @media (max-width: 460px) {
+	.mla-percentile-grid { grid-template-columns: 1fr; }
 	.mla-fact-grid,
 	.mla-stat-grid { grid-template-columns: 1fr; }
 	.mla-map-stack { height: 320px; }
@@ -443,7 +446,7 @@
 				<div>
 					<div class="mla-eyebrow">ERA5-derived LPS v5.4 catalogue · 1940–2025</div>
 					<h1 class="mla-title">Indian Monsoon Low Atlas</h1>
-					<p class="mla-deck">Explore 2,721 linked low-pressure systems with complete published-centre physics and explicit continuity support.</p>
+					<p class="mla-deck">Explore 2,721 linked low-pressure systems with complete published-centre physics from 1940 to 2025.</p>
 				</div>
 				<div class="mla-header-actions">
 					<span class="mla-status-pill" id="mlaDataStatus">Loading catalogue</span>
@@ -454,8 +457,8 @@
 			<dl class="mla-release-strip" aria-label="Catalogue coverage">
 				<div><dt>Systems</dt><dd>2,721</dd></div>
 				<div><dt>Linked positions</dt><dd>547,956</dd></div>
-				<div><dt>Observed support</dt><dd>394,576 · 72.0%</dd></div>
-				<div><dt>Interpolated</dt><dd>153,380 · 28.0%</dd></div>
+				<div><dt>Coverage</dt><dd>1940–2025</dd></div>
+				<div><dt>Named cyclones</dt><dd>94</dd></div>
 			</dl>
 		</div>
 	</header>
@@ -465,7 +468,6 @@
 			<button class="mla-tab" role="tab" id="mlaTabExplore" aria-selected="true" aria-controls="mlaPanelExplore" data-tab="explore" type="button">Explore</button>
 			<button class="mla-tab" role="tab" id="mlaTabSystems" aria-selected="false" aria-controls="mlaPanelSystems" data-tab="systems" type="button">Systems</button>
 			<button class="mla-tab" role="tab" id="mlaTabClimatology" aria-selected="false" aria-controls="mlaPanelClimatology" data-tab="climatology" type="button">Climatology</button>
-			<button class="mla-tab" role="tab" id="mlaTabCompare" aria-selected="false" aria-controls="mlaPanelCompare" data-tab="compare" type="button">Compare</button>
 			<button class="mla-tab" role="tab" id="mlaTabExtremes" aria-selected="false" aria-controls="mlaPanelExtremes" data-tab="extremes" type="button">Extremes</button>
 			<button class="mla-tab" role="tab" id="mlaTabData" aria-selected="false" aria-controls="mlaPanelData" data-tab="data" type="button">Data & methods</button>
 		</nav>
@@ -506,14 +508,19 @@
 						<option value="peak">Peak selected metric</option>
 					</select>
 				</label>
-				<div class="mla-field">
-					<label class="mla-label" for="mlaMetricMin">Minimum <span id="mlaMetricLabel">pressure-deficit</span> percentile: <strong id="mlaMetricMinValue">0%</strong></label>
-					<input class="mla-range" id="mlaMetricMin" type="range" min="0" max="100" step="1" value="0">
-				</div>
+				<label class="mla-field" for="mlaMetric">
+					<span class="mla-label">Analysis and ranking variable</span>
+					<select class="mla-select" id="mlaMetric">
+						<option value="deficit">Pressure deficit</option>
+						<option value="vort">Smoothed vorticity</option>
+						<option value="wind">Maximum wind</option>
+						<option value="mslp">Minimum MSLP</option>
+						<option value="rain">24 h precipitation</option>
+					</select>
+				</label>
 			</div>
 
-			<details class="mla-filter-more" id="mlaAdvancedFilters">
-				<summary>Months, class, metric and continuity</summary>
+			<div class="mla-filter-more" id="mlaAdvancedFilters">
 				<div class="mla-filter-grid">
 					<div class="mla-filter-group">
 						<h3>Months</h3>
@@ -531,18 +538,8 @@
 						<div class="mla-chip-row" id="mlaClassChips"></div>
 					</div>
 					<div class="mla-filter-group">
-						<h3>Metric</h3>
-						<label class="mla-field" for="mlaMetric">
-							<span class="mla-label">Rank/filter metric</span>
-							<select class="mla-select" id="mlaMetric">
-								<option value="deficit">Pressure deficit</option>
-								<option value="vort">Smoothed vorticity</option>
-								<option value="wind">Maximum wind</option>
-								<option value="mslp">MSLP depth</option>
-								<option value="rain">24 h precipitation</option>
-							</select>
-						</label>
-						<label class="mla-field" for="mlaMatch" style="margin-top:7px" hidden>
+						<h3>Catalogue association</h3>
+						<label class="mla-field" for="mlaMatch" hidden>
 							<span class="mla-label">IBTrACS association</span>
 							<select class="mla-select" id="mlaMatch">
 								<option value="any">Any</option>
@@ -554,16 +551,8 @@
 						</label>
 					</div>
 					<div class="mla-filter-group">
-						<h3>Continuity support</h3>
-						<label class="mla-field" for="mlaQc">
-							<span class="mla-label">Automated continuity screen</span>
-							<select class="mla-select" id="mlaQc">
-								<option value="any">All systems</option>
-								<option value="good">Strong support</option>
-								<option value="usable">Strong or mixed support</option>
-								<option value="flagged">Low support only</option>
-							</select>
-						</label>
+						<h3>Track location</h3>
+						<input id="mlaQc" type="hidden" value="any">
 						<label class="mla-field" for="mlaState" style="margin-top:7px">
 							<span class="mla-label">Track crosses state / UT</span>
 							<select class="mla-select" id="mlaState"><option value="">All tracks</option></select>
@@ -573,15 +562,24 @@
 							<input class="mla-range" id="mlaStateMin" type="range" min="0" max="100" step="1" value="0">
 						</label>
 					</div>
+					<div class="mla-filter-group mla-percentile-group" id="mlaPercentileFilters">
+						<h3>Minimum catalogue percentiles</h3>
+						<div class="mla-percentile-grid">
+							<label class="mla-percentile-filter" for="mlaPercentileDeficit"><span class="mla-label">Pressure deficit: <output id="mlaPercentileDeficitValue">0%</output></span><input class="mla-range" id="mlaPercentileDeficit" data-percentile-filter="deficit" type="range" min="0" max="100" step="1" value="0"></label>
+							<label class="mla-percentile-filter" for="mlaPercentileVort"><span class="mla-label">Smoothed vorticity: <output id="mlaPercentileVortValue">0%</output></span><input class="mla-range" id="mlaPercentileVort" data-percentile-filter="vort" type="range" min="0" max="100" step="1" value="0"></label>
+							<label class="mla-percentile-filter" for="mlaPercentileWind"><span class="mla-label">Maximum wind: <output id="mlaPercentileWindValue">0%</output></span><input class="mla-range" id="mlaPercentileWind" data-percentile-filter="wind" type="range" min="0" max="100" step="1" value="0"></label>
+							<label class="mla-percentile-filter" for="mlaPercentileMslp"><span class="mla-label">Minimum MSLP depth: <output id="mlaPercentileMslpValue">0%</output></span><input class="mla-range" id="mlaPercentileMslp" data-percentile-filter="mslp" type="range" min="0" max="100" step="1" value="0"></label>
+							<label class="mla-percentile-filter" for="mlaPercentileRain"><span class="mla-label">24 h precipitation: <output id="mlaPercentileRainValue">0%</output></span><input class="mla-range" id="mlaPercentileRain" data-percentile-filter="rain" type="range" min="0" max="100" step="1" value="0"></label>
+						</div>
+					</div>
 				</div>
-			</details>
+			</div>
 			<div class="mla-filter-summary">
 				<div>
 					<strong class="mla-result-count" id="mlaResultCount">Preparing systems…</strong>
 					<div class="mla-active-filters" id="mlaActiveFilters" aria-label="Active filter summary"></div>
 				</div>
 				<div class="mla-toolbar-group">
-					<button class="mla-btn mla-btn-small" id="mlaPinA" type="button">Pin current cohort as A</button>
 					<button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaResetFilters" type="button">Reset filters</button>
 				</div>
 			</div>
@@ -590,7 +588,7 @@
 		<section class="mla-panel" id="mlaPanelExplore" role="tabpanel" aria-labelledby="mlaTabExplore" data-panel="explore">
 			<div class="mla-panel-heading">
 				<h2>System explorer</h2>
-				<p>A density-first map of the selected cohort. Selected tracks distinguish observed-support positions from interpolated continuity.</p>
+				<p>A density-first map of the selected cohort, with individual systems available for closer inspection.</p>
 			</div>
 			<div class="mla-explore-grid">
 				<section class="mla-card mla-map-card" aria-labelledby="mlaMapHeading">
@@ -598,7 +596,7 @@
 						<h3 id="mlaMapHeading">Tracks and density</h3>
 						<div class="mla-map-tools">
 							<label class="mla-map-control" for="mlaMapLayer"><span>Layer</span><select class="mla-select" id="mlaMapLayer"><option value="auto">Auto: density then tracks</option><option value="density">Unique-track density</option><option value="tracks">Individual tracks</option><option value="genesis">Genesis locations</option><option value="lysis">Lysis locations</option></select></label>
-							<label class="mla-map-control" for="mlaMapColour"><span>Colour</span><select class="mla-select" id="mlaMapColour"><option value="single">Single atlas blue</option><option value="class">Atlas class</option><option value="metric">Selected percentile</option><option value="year">Genesis year</option><option value="qc">Continuity screen</option></select></label>
+							<label class="mla-map-control" for="mlaMapColour"><span>Colour</span><select class="mla-select" id="mlaMapColour"><option value="single">Single atlas blue</option><option value="class">Atlas class</option><option value="metric">Selected percentile</option><option value="year">Genesis year</option></select></label>
 							<label class="mla-map-control" for="mlaStateFill"><span>State fill</span><select class="mla-select" id="mlaStateFill"><option value="none">Outlines only</option><option value="selected">Mean rain: selected system</option><option value="cohort">Mean rain: filtered cohort</option></select></label>
 							<label class="mla-map-control" for="mlaMapPath"><span>Track period</span><select class="mla-select" id="mlaMapPath"><option value="months">Selected months only</option><option value="full">Whole system lifecycle</option></select></label>
 							<label class="mla-map-control" for="mlaMapScope"><span>Geography</span><select class="mla-select" id="mlaMapScope"><option value="southasia">Indian monsoon core</option><option value="full">Full catalogue domain</option></select></label>
@@ -614,7 +612,7 @@
 						<canvas class="mla-map-layer" id="mlaMapOverlay" role="img" aria-describedby="mlaMapDescription">Interactive map of filtered atlas tracks. Use the systems table for a keyboard-accessible alternative.</canvas>
 						<div class="mla-map-tip" id="mlaMapTip" role="tooltip"></div>
 					</div>
-					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered cohort. Density counts each track at most once per half-degree cell. Broken links are not treated as continuous paths.</p>
+					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered cohort. Density counts each track at most once per half-degree cell. Individual systems use a uniform track style throughout.</p>
 					<div class="mla-map-foot">
 						<span id="mlaMapStatus">Preparing map…</span>
 						<span class="mla-legend" id="mlaMapLegend"></span>
@@ -627,7 +625,7 @@
 				</aside>
 			</div>
 			<div class="mla-chart-grid" style="margin-top:14px">
-				<section class="mla-card mla-chart-card"><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Maximum wind (m s⁻¹)</option><option value="vort">Smoothed vorticity</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Line: v5.4 physics resampled at each published centre. Bars: 24 h rainfall. Coverage strip: observed support (green) or interpolated position (grey).</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
+				<section class="mla-card mla-chart-card"><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Maximum wind (m s⁻¹)</option><option value="vort">Smoothed vorticity</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Line: v5.4 physics resampled at each published centre. Bars: 24 h rainfall.</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
 				<section class="mla-card mla-chart-card"><h3>Cohort evolution</h3><p>Median and interquartile range in physical units; each system contributes once per life-fraction bin.</p><button class="mla-btn mla-btn-small" id="mlaLoadProfile" type="button">Load detailed cohort profile</button><canvas class="mla-chart" id="mlaProfileChart" role="img" aria-label="Median lifecycle evolution for the filtered cohort"></canvas><details class="mla-a11y-data"><summary>Accessible cohort summary</summary><div id="mlaProfileData"></div></details></section>
 			</div>
 			<section class="mla-card mla-section-card">
@@ -642,7 +640,7 @@
 		<section class="mla-panel" id="mlaPanelSystems" role="tabpanel" aria-labelledby="mlaTabSystems" data-panel="systems" hidden>
 			<div class="mla-panel-heading">
 				<h2>Systems</h2>
-				<p>The accessible, sortable catalogue with stable v5.4 track identifiers and observed-support diagnostics.</p>
+				<p>The accessible, sortable catalogue with stable v5.4 track identifiers and physical diagnostics.</p>
 			</div>
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
@@ -670,28 +668,15 @@
 			</div>
 		</section>
 
-		<section class="mla-panel" id="mlaPanelCompare" role="tabpanel" aria-labelledby="mlaTabCompare" data-panel="compare" hidden>
-			<div class="mla-panel-heading"><h2>Compare cohorts</h2><p>Pin one filtered cohort as A, change the shared filters, and compare it with the current cohort B in physical units.</p></div>
-			<div class="mla-compare-controls">
-				<button class="mla-btn mla-btn-primary" id="mlaComparePin" type="button">Pin current as cohort A</button>
-				<button class="mla-btn" id="mlaCompareClear" type="button">Clear cohort A</button>
-				<label class="mla-field" for="mlaCompareMetric"><span class="mla-label">Composite variable</span><select class="mla-select" id="mlaCompareMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Maximum wind (m s⁻¹)</option><option value="rain">24 h precipitation (mm)</option><option value="vort">Smoothed vorticity (catalogue units)</option><option value="q">q850 (g kg⁻¹)</option></select></label>
-				<label class="mla-field" for="mlaCompareAlign"><span class="mla-label">Alignment</span><select class="mla-select" id="mlaCompareAlign"><option value="life">Fraction of system lifetime</option><option value="peak">Hours from peak selected variable</option></select></label>
-			</div>
-			<div class="mla-cohort-grid"><section class="mla-card mla-cohort-card" data-cohort="A" id="mlaCohortA"><h3>Cohort A</h3><p>Not pinned yet.</p></section><section class="mla-card mla-cohort-card" data-cohort="B" id="mlaCohortB"><h3>Cohort B</h3><p>Current filters.</p></section></div>
-			<div class="mla-stat-grid" id="mlaCompareStats"></div>
-			<section class="mla-card mla-chart-card"><h3>Median evolution and interquartile range</h3><p>Each system contributes at most once per bin; <em>n</em> is shown in the accessible summary.</p><canvas class="mla-chart" id="mlaCompareChart" role="img" aria-label="Comparison of median lifecycle evolution with interquartile ranges"></canvas><details class="mla-a11y-data"><summary>Accessible composite summary</summary><div id="mlaCompareData"></div></details></section>
-		</section>
-
 		<section class="mla-panel" id="mlaPanelExtremes" role="tabpanel" aria-labelledby="mlaTabExtremes" data-panel="extremes" hidden>
 			<div class="mla-panel-heading"><h2>Catalogue diagnostic extremes</h2><p>These are extremes within the ERA5-derived catalogue, not authoritative meteorological records. Eligibility is metric-specific.</p></div>
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
 					<div class="mla-toolbar-group">
 						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Diagnostic</span><select class="mla-select" id="mlaExtremeMetric"><option value="duration">Duration</option><option value="distance">Path length</option><option value="deficit">Pressure deficit</option><option value="wind">Maximum wind</option><option value="rain">24 h precipitation</option><option value="vort">Smoothed vorticity</option><option value="mslp">Minimum MSLP</option></select></label>
-						<label class="mla-field" for="mlaExtremeEligibility"><span class="mla-label">Eligibility</span><select class="mla-select" id="mlaExtremeEligibility"><option value="recommended">Recommended for this diagnostic</option><option value="all">All filtered systems</option><option value="good">Strong observed support</option></select></label>
+						<label class="mla-field" for="mlaExtremeEligibility" hidden><span class="mla-label">Eligibility</span><select class="mla-select" id="mlaExtremeEligibility"><option value="all">All filtered systems</option></select></label>
 					</div>
-					<span class="mla-badge" data-tone="review" id="mlaExtremeCaveat">Continuity-screened for duration/path diagnostics</span>
+					<span class="mla-badge" data-tone="review" id="mlaExtremeCaveat">Catalogue diagnostics · not externally validated records</span>
 				</div>
 				<div class="mla-record-grid" id="mlaRecordCards"></div>
 				<div class="mla-table-wrap"><table class="mla-table" id="mlaExtremeTable"><thead></thead><tbody></tbody></table></div>
@@ -699,12 +684,12 @@
 		</section>
 
 		<section class="mla-panel" id="mlaPanelData" role="tabpanel" aria-labelledby="mlaTabData" data-panel="data" hidden>
-			<div class="mla-panel-heading"><h2>Data, definitions and reproducibility</h2><p>The atlas distinguishes observed support from interpolated continuity while retaining complete v5.4 physics at every centre.</p></div>
+			<div class="mla-panel-heading"><h2>Data, definitions and reproducibility</h2><p>Complete v5.4 physics is available at every published track centre.</p></div>
 			<div class="mla-method-grid">
-				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4</strong> contains 547,956 hourly linked positions grouped into 2,721 system identities. Of these, 394,576 have observed detector support and 153,380 are interpolated positions.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions and intensity diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
-				<section class="mla-card mla-prose"><h3>Track continuity</h3><p>Observed-support and interpolated positions identify how each track centre was linked. Complete ERA5 physics is independently resampled at every published v5.4 centre.</p><h4>Support screen</h4><p>Strong, mixed and low support combine observed-position occupancy, the longest missing run and maximum linked speed. This is a review aid rather than proof of meteorological validity.</p><h4>Map convention</h4><p>Observed-support portions of a selected trajectory are solid; interpolated portions are dashed.</p></section>
-				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> the catalogue's centre diagnostic.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm.</li><li><strong>Percentiles:</strong> fixed across all 2,721 v5.4 system identities; filters do not rescale them.</li></ul><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed-support times only and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each system stores the area-mean daily rainfall averaged over the UTC calendar days touched by its track; cohort maps weight systems by active days.</p></section>
-				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include stable v5.4 track IDs, units, filter state and continuity diagnostics. Selected-track downloads label every row as observed-support or interpolated and include complete published-centre physics.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaReleaseSummary" target="_blank" rel="noopener">LPS v5.4 metadata and checksum</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
+				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4</strong> contains 547,956 hourly linked positions grouped into 2,721 system identities.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions and intensity diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
+				<section class="mla-card mla-prose"><h3>Track construction</h3><p>Published track centres define continuous system lifecycles, with complete ERA5 physics independently resampled at every v5.4 centre.</p><h4>Map convention</h4><p>Each selected trajectory is drawn as a continuous solid track.</p></section>
+				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> the catalogue's centre diagnostic.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm.</li><li><strong>Percentiles:</strong> fixed across all 2,721 v5.4 system identities; filters do not rescale them.</li></ul><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each system stores the area-mean daily rainfall averaged over the UTC calendar days touched by its track; cohort maps weight systems by active days.</p></section>
+				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include stable v5.4 track IDs, units, filter state, source provenance and complete published-centre physics.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaReleaseSummary" target="_blank" rel="noopener">LPS v5.4 metadata and checksum</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
 			</div>
 		</section>
 
@@ -714,7 +699,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.a55d2601f723.json.gz","detail":"assets/atlas-detail.8e231c616c28.json.gz"}</script>
 
-<script src="assets/atlas-app.9c5af1afbfea.js"></script>
+<script src="assets/atlas-app.d6363ffc4834.js"></script>
 
 </body>
 </html>
