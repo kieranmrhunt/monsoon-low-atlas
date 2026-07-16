@@ -1,0 +1,19 @@
+{
+  "built_utc": "2026-07-16T07:07:57.923287+00:00",
+  "catalogue_version": "v5.3.1",
+  "core": "atlas-core.a4a8346c0073.json.gz",
+  "detail": "atlas-detail.f70667357eee.json.gz",
+  "core_uncompressed_bytes": 5062911,
+  "core_compressed_bytes": 2482636,
+  "detail_uncompressed_bytes": 25631817,
+  "detail_compressed_bytes": 4142425,
+  "qa": {
+    "tracks": 2918,
+    "rows": 620292,
+    "observed_rows": 442479,
+    "posterior_rows": 177813,
+    "duplicate_track_times": 0,
+    "all_observed_rows_have_physics": true,
+    "no_posterior_rows_have_physics": true
+  }
+}

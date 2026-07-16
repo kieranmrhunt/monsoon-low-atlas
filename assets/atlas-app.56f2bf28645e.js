@@ -9,7 +9,7 @@
 	const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 	const CLASS_SHORT = {1: 'L', 2: 'D', 3: 'DD', 4: 'CS', 5: 'SCS', 6: 'VSCS+'};
 	const CLASS_COLOURS = ['#8b7b63', '#c3931d', '#c9631b', '#ad4328', '#8f2938', '#64224f', '#35204e'];
-	const QC_LABELS = ['No screen flags', 'Review', 'Flagged'];
+	const QC_LABELS = ['Strong support', 'Mixed support', 'Low support'];
 	const QC_TONES = ['good', 'review', 'flag'];
 	const COMPLETE_END_YEAR = 2025;
 	const MAP_DIRTY = Object.freeze({BASE: 1, DATA: 2, OVERLAY: 4, ALL: 7});
@@ -36,7 +36,7 @@
 		wind: {label: 'maximum-wind', title: 'Maximum wind', pct: 'pct_wind', raw: 'peak_wind_x10', series: 'max_wind_x10', divisor: 10, unit: 'm s⁻¹', colour: '#08736f', direction: 1, peakMonth: 2},
 		mslp: {label: 'MSLP-depth', title: 'Minimum MSLP', pct: 'pct_mslp_depth', raw: 'min_mslp_x10', series: 'mslp_x10', divisor: 10, unit: 'hPa', colour: '#64224f', direction: -1, peakMonth: 3},
 		rain: {label: 'rainfall', title: '24 h precipitation', pct: 'pct_precip', raw: 'peak_precip_x10', series: 'precip24_x10', divisor: 10, unit: 'mm', colour: '#c3931d', direction: 1, peakMonth: 0},
-		q: {label: 'q850', title: 'q850', series: 'q850_x10', divisor: 10, unit: 'g kg⁻¹', colour: '#4360a0', direction: 1},
+		q: {label: 'q850', title: 'q850', raw: 'peak_q850_x10', series: 'q850_x10', divisor: 10, unit: 'g kg⁻¹', colour: '#4360a0', direction: 1},
 		rh: {label: 'RH850', title: 'RH850', series: 'rh850_derived_x10', divisor: 10, unit: '%', colour: '#477a4a', direction: 1}
 	};
 
@@ -58,8 +58,8 @@
 		mapColour: 'class',
 		mapScope: 'southasia',
 		mapZoom: 1,
-		mapCenterLon: 75,
-		mapCenterLat: 18,
+		mapCenterLon: 82,
+		mapCenterLat: 20,
 		selected: null,
 		hovered: null,
 		active: [],
@@ -224,15 +224,15 @@
 		});
 		offsets[decoded.length] = cursor;
 		paths = {decoded, offsets, latitude, longitude, breakBefore};
-		segmentIndex = new UniformSegmentIndex({lon: longitude, lat: latitude, offsets, breakBefore, cellSize: 1, bounds: {minLon: 38, maxLon: 153, minLat: -5, maxLat: 41}});
+		segmentIndex = new UniformSegmentIndex({lon: longitude, lat: latitude, offsets, breakBefore, cellSize: 1, bounds: {minLon: 48, maxLon: 118, minLat: -5, maxLat: 47}});
 		densityCells = buildDensityCells(.5);
 	}
 
 	function buildDensityCells(cellSize) {
-		const minLon = 38;
+		const minLon = 48;
 		const minLat = -5;
-		const columns = Math.ceil((153 - minLon) / cellSize);
-		const rows = Math.ceil((41 - minLat) / cellSize);
+		const columns = Math.ceil((118 - minLon) / cellSize);
+		const rows = Math.ceil((47 - minLat) / cellSize);
 		const perTrack = [];
 		for (let track = 0; track < paths.decoded.length; track++) {
 			const cells = new Set();
@@ -348,6 +348,10 @@
 		return CORE.tracks[index];
 	}
 
+	function atlasId(index) {
+		return track(index)[T.id];
+	}
+
 	function metric() {
 		return METRICS[state.metric];
 	}
@@ -387,16 +391,16 @@
 		const item = credibleIb(index);
 		if (name) return `Cyclone ${name}${item && item.segment_count > 1 ? ` · segment ${item.segment_index}/${item.segment_count}` : ''}`;
 		if (item) return `IBTrACS ${item.sid}${item.segment_count > 1 ? ` · segment ${item.segment_index}/${item.segment_count}` : ''}`;
-		return `Atlas segment ${String(index).padStart(4, '0')}`;
+		return `LPS ${atlasId(index)}`;
 	}
 
 	function buildSearchIndex() {
 		CORE.search = CORE.tracks.map((row, index) => {
 			const item = crosswalk(index);
 			return [
-				index,
-				`atlas ${index}`,
-				String(index).padStart(4, '0'),
+				atlasId(index),
+				`lps ${atlasId(index)}`,
+				`track ${atlasId(index)}`,
 				date(row[T.start_ms]),
 				row[T.start_year],
 				systemLabel(index),
@@ -506,6 +510,7 @@
 		const active = [];
 		const bits = new Uint8Array(CORE.tracks.length);
 		const query = state.search.trim().toLowerCase();
+		const exactTrackId = /^\d+$/.test(query) ? Number(query) : null;
 		for (let index = 0; index < CORE.tracks.length; index++) {
 			const row = track(index);
 			if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) continue;
@@ -513,7 +518,7 @@
 			if (!state.classes.has(row[T.category])) continue;
 			if (percentileMetric(index) < state.metricMin) continue;
 			if (!matchPass(index) || !qcPass(index) || !statePass(index)) continue;
-			if (query && !CORE.search[index].includes(query)) continue;
+			if (query && (exactTrackId == null ? !CORE.search[index].includes(query) : atlasId(index) !== exactTrackId)) continue;
 			bits[index] = 1;
 			active.push(index);
 		}
@@ -537,7 +542,7 @@
 	}
 
 	function updateFilterReadout() {
-		$('#mlaResultCount').textContent = `${fmt(state.active.length)} of ${fmt(CORE.tracks.length)} atlas segments`;
+		$('#mlaResultCount').textContent = `${fmt(state.active.length)} of ${fmt(CORE.tracks.length)} systems`;
 		$('#mlaMetricLabel').textContent = metric().label;
 		$('#mlaMetricMinValue').textContent = `${state.metricMin}%`;
 		$('#mlaStateMinValue').textContent = `${state.stateMin}%`;
@@ -546,9 +551,7 @@
 		if (state.months.size !== 12) filters.push(`${[...state.months].sort((a, b) => a - b).map(month => MONTHS[month - 1]).join(', ')} · ${state.monthMode}`);
 		if (state.classes.size !== 6) filters.push(`${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(', ')} class`);
 		if (state.metricMin) filters.push(`P${state.metricMin} ${physicalThreshold()}`);
-		if (state.match !== 'any') filters.push(`IBTrACS: ${state.match}`);
 		if (state.qc !== 'any') filters.push(`Continuity: ${state.qc}`);
-		if (state.stateIndex >= 0) filters.push(`${CORE.states[state.stateIndex]} concurrent rain P${state.stateMin}, within 800 km`);
 		if (state.search) filters.push(`Search: “${state.search}”`);
 		$('#mlaActiveFilters').innerHTML = filters.length ? filters.map(value => `<span class="mla-active-filter">${esc(value)}</span>`).join('') : '<span class="mla-active-filter">Default JJAS cohort · complete through 2025</span>';
 	}
@@ -570,8 +573,7 @@
 			['date-desc', 'Genesis date: newest'],
 			['date-asc', 'Genesis date: oldest'],
 			['duration-desc', 'Duration: longest'],
-			['distance-desc', 'Path length: longest'],
-			['match', 'External match confidence']
+			['distance-desc', 'Path length: longest']
 		].map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('');
 	}
 
@@ -648,7 +650,7 @@
 			applyFilters();
 		});
 		$('#mlaYearMax').addEventListener('change', event => {
-			state.yearMax = clamp(Number(event.target.value) || 2025, state.yearMin, 2026);
+			state.yearMax = clamp(Number(event.target.value) || 2025, state.yearMin, 2025);
 			syncControls();
 			applyFilters();
 		});
@@ -768,17 +770,14 @@
 		if (classes.join(',') !== '1,2,3,4,5,6') parameters.set('class', classes.join(','));
 		if (state.metric !== 'deficit') parameters.set('metric', state.metric);
 		if (state.metricMin) parameters.set('pmin', String(state.metricMin));
-		if (state.match !== 'any') parameters.set('match', state.match);
 		if (state.qc !== 'any') parameters.set('qc', state.qc);
-		if (state.stateIndex >= 0) parameters.set('state', CORE.state_slugs[state.stateIndex]);
-		if (state.stateIndex >= 0 && state.stateMin) parameters.set('statep', String(state.stateMin));
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
 		if (state.mapColour !== 'class') parameters.set('colour', state.mapColour);
 		if (state.mapScope !== 'southasia') parameters.set('scope', state.mapScope);
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
 		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'southasia') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
-		if (state.selected != null) parameters.set('system', String(state.selected));
+		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
 		return parameters;
 	}
 
@@ -791,13 +790,13 @@
 
 	function readUrl() {
 		const parameters = new URLSearchParams(window.location.search);
-		const validTabs = new Set(['explore', 'systems', 'climatology', 'compare', 'extremes', 'verification', 'data']);
+		const validTabs = new Set(['explore', 'systems', 'climatology', 'compare', 'extremes', 'data']);
 		if (validTabs.has(parameters.get('tab'))) state.tab = parameters.get('tab');
 		const years = parameters.get('years');
 		if (years && /^\d{4}-\d{4}$/.test(years)) {
 			const [first, last] = years.split('-').map(Number);
-			state.yearMin = clamp(first, 1940, 2026);
-			state.yearMax = clamp(last, state.yearMin, 2026);
+			state.yearMin = clamp(first, 1940, 2025);
+			state.yearMax = clamp(last, state.yearMin, 2025);
 		}
 		const months = (parameters.get('months') || '').split(',').map(Number).filter(value => value >= 1 && value <= 12);
 		if (months.length) state.months = new Set(months);
@@ -806,26 +805,25 @@
 		if (classes.length) state.classes = new Set(classes);
 		if (METRICS[parameters.get('metric')] && !['q', 'rh'].includes(parameters.get('metric'))) state.metric = parameters.get('metric');
 		state.metricMin = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
-		if (['any', 'high', 'credible', 'named', 'unmatched'].includes(parameters.get('match'))) state.match = parameters.get('match');
 		if (['any', 'good', 'usable', 'flagged'].includes(parameters.get('qc'))) state.qc = parameters.get('qc');
-		const stateSlug = parameters.get('state');
-		if (stateSlug && CORE.state_slugs.includes(stateSlug)) state.stateIndex = CORE.state_slugs.indexOf(stateSlug);
-		state.stateMin = clamp(Number(parameters.get('statep')) || 0, 0, 100);
 		state.search = parameters.get('q') || '';
 		if (['auto', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
-		if (['class', 'metric', 'year', 'match', 'qc'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
+		if (['class', 'metric', 'year', 'qc'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
 		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 12);
 		const centre = (parameters.get('centre') || '').split(',').map(Number);
 		if (centre.length === 2 && centre.every(Number.isFinite)) {
-			state.mapCenterLon = clamp(centre[0], 38, 153);
-			state.mapCenterLat = clamp(centre[1], -5, 41);
+			state.mapCenterLon = clamp(centre[0], 45, 125);
+			state.mapCenterLat = clamp(centre[1], -8, 50);
 		} else if (state.mapScope === 'full') {
-			state.mapCenterLon = 95.5;
-			state.mapCenterLat = 18;
+			state.mapCenterLon = 85;
+			state.mapCenterLat = 21;
 		}
 		const selected = Number(parameters.get('system'));
-		if (Number.isInteger(selected) && selected >= 0 && selected < CORE.tracks.length) state.selected = selected;
+		if (Number.isInteger(selected)) {
+			const selectedIndex = CORE.tracks.findIndex(row => Number(row[T.id]) === selected);
+			if (selectedIndex >= 0) state.selected = selectedIndex;
+		}
 	}
 
 	async function copyViewLink() {
@@ -875,8 +873,8 @@
 
 	function mapBounds() {
 		return state.mapScope === 'full'
-			? {lonMin: 38, lonMax: 153, latMin: -5, latMax: 41}
-			: {lonMin: 40, lonMax: 110, latMin: -5, latMax: 41};
+			? {lonMin: 45, lonMax: 125, latMin: -8, latMax: 50}
+			: {lonMin: 48, lonMax: 118, latMin: -5, latMax: 47};
 	}
 
 	function mapProjection(width, height) {
@@ -1024,8 +1022,10 @@
 		return `rgb(${a.map((channel, index) => Math.round(channel + (b[index] - channel) * mix)).join(',')})`;
 	}
 
-	function rgba(hex, alpha) {
-		const clean = hex.replace('#', '');
+	function rgba(colour, alpha) {
+		const rgb = String(colour).match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+		if (rgb) return `rgba(${rgb[1]},${rgb[2]},${rgb[3]},${alpha})`;
+		const clean = String(colour).replace('#', '');
 		const value = clean.length === 3 ? clean.split('').map(character => character + character).join('') : clean;
 		return `rgba(${parseInt(value.slice(0, 2), 16)},${parseInt(value.slice(2, 4), 16)},${parseInt(value.slice(4, 6), 16)},${alpha})`;
 	}
@@ -1086,6 +1086,23 @@
 		}
 	}
 
+	function appendObservedTrackPath(context, projection, trackIndex) {
+		const points = paths.decoded[trackIndex];
+		const breaks = new Set((CORE.breaks[trackIndex] || []).map(item => Number(item[0])));
+		const posterior = new Uint8Array(points.length);
+		for (const range of CORE.posterior_runs[trackIndex] || []) {
+			for (let index = Number(range[0]); index <= Number(range[1]); index++) posterior[index] = 1;
+		}
+		let started = false;
+		for (let index = 0; index < points.length; index++) {
+			if (posterior[index]) { started = false; continue; }
+			const point = projection.project(points[index][0], points[index][1]);
+			if (!started || breaks.has(index)) context.moveTo(point[0], point[1]);
+			else context.lineTo(point[0], point[1]);
+			started = true;
+		}
+	}
+
 	function drawTrackLayer(context, projection) {
 		const groups = new Map();
 		for (const index of state.active) {
@@ -1141,18 +1158,36 @@
 		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection);
 		else if (layer === 'tracks') drawTrackLayer(drawing.context, drawing.projection);
 		else drawPointLayer(drawing.context, drawing.projection, layer);
-		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} segments · ${layer === 'density' ? 'unique-track density' : layer} · zoom ${fmt(state.mapZoom, 1)}×`;
+		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} systems · ${layer === 'density' ? 'unique-track density' : layer} · zoom ${fmt(state.mapZoom, 1)}×`;
 		mapLegend(layer, maximum);
 	}
 
 	function strokeTrack(context, projection, index, colour, width, gapConnectors) {
-		context.beginPath();
-		appendTrackPath(context, projection, index, 1, false);
-		context.strokeStyle = colour;
-		context.lineWidth = width;
+		const hasPosterior = CORE.posterior_runs && (CORE.posterior_runs[index] || []).length;
+		context.save();
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
-		context.stroke();
+		if (hasPosterior) {
+			context.beginPath();
+			appendTrackPath(context, projection, index, 1, false);
+			context.setLineDash([4, 4]);
+			context.strokeStyle = rgba(colour, .42);
+			context.lineWidth = width;
+			context.stroke();
+			context.beginPath();
+			appendObservedTrackPath(context, projection, index);
+			context.setLineDash([]);
+			context.strokeStyle = colour;
+			context.lineWidth = width;
+			context.stroke();
+		} else {
+			context.beginPath();
+			appendTrackPath(context, projection, index, 1, false);
+			context.strokeStyle = colour;
+			context.lineWidth = width;
+			context.stroke();
+		}
+		context.restore();
 		if (!gapConnectors) return;
 		const points = paths.decoded[index];
 		context.save();
@@ -1203,8 +1238,8 @@
 
 	function resetMapView() {
 		state.mapZoom = 1;
-		state.mapCenterLon = state.mapScope === 'full' ? 95.5 : 75;
-		state.mapCenterLat = 18;
+		state.mapCenterLon = state.mapScope === 'full' ? 85 : 82;
+		state.mapCenterLat = state.mapScope === 'full' ? 21 : 20;
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
 	}
 
@@ -1339,14 +1374,8 @@
 
 	function qcExplanation(index) {
 		const qc = CORE.qc[index];
-		const flags = Number(qc[3]);
-		const notes = [];
-		if (flags & 1) notes.push(`maximum gap ${fmt(qc[0], 1)} h`);
-		if (flags & 2) notes.push(`maximum step speed ${fmt(qc[1], 1)} m s⁻¹`);
-		if (flags & 4) notes.push('very long linked duration');
-		if (flags & 8) notes.push('very long linked path');
-		if (flags & 16) notes.push(`${fmt(qc[2], 1)}% observed-hour coverage`);
-		return notes.length ? notes.join('; ') : `No automated flags; ${fmt(qc[2], 1)}% observed-hour coverage`;
+		const row = track(index);
+		return `${fmt(qc[2], 1)}% observed-position occupancy; longest missing run ${fmt(row[T.max_missing_run_hours])} h; maximum linked speed ${fmt(qc[1], 1)} m s⁻¹`;
 	}
 
 	function renderDossier() {
@@ -1357,53 +1386,30 @@
 		}
 		const index = state.selected;
 		const row = track(index);
-		const item = crosswalk(index);
-		const ib = item && item.ib;
-		const imd = item && item.imd;
-		const best = ib ? CORE.ibtracs_tracks[ib.sid] : null;
 		const qc = CORE.qc[index];
-		const grade = officialGrade(index);
 		const badges = [
 			badge(`Atlas ${CLASS_SHORT[row[T.category]]}`, 'official'),
 			badge(QC_LABELS[qc[4]], QC_TONES[qc[4]])
 		];
-		if (ib) badges.push(badge(`IBTrACS ${ib.confidence}`, ib.confidence === 'high' ? 'good' : ib.confidence === 'medium' ? 'review' : 'flag'));
-		if (grade) badges.push(badge(`Official ${grade}`, 'official'));
 		const facts = [
 			['Duration', durationText(row[T.duration_hours])],
+			['Observed fixes', fmt(row[T.observed_positions])],
+			['Gap posterior', `${fmt(row[T.posterior_fraction_x1000] / 10, 1)}%`],
+			['Qualifying fixes', fmt(row[T.qualifying_positions])],
+			['Track stitches', fmt(row[T.stitch_count])],
 			['Pressure deficit', `${fmt(row[T.peak_deficit_x10] / 10, 1)} hPa`],
 			['Maximum wind', `${fmt(row[T.peak_wind_x10] / 10, 1)} m s⁻¹`],
 			['Minimum MSLP', `${fmt(row[T.min_mslp_x10] / 10, 1)} hPa`],
 			['Peak 24 h rain', `${fmt(row[T.peak_precip_x10] / 10, 1)} mm`],
 			['Linked path', `${fmt(row[T.distance_km])} km`],
-			['Peak q850', `${fmt(row[T.peak_q850_x10] / 10, 1)} g kg⁻¹`],
-			['Peak RH850', `${fmt(row[T.peak_rh850_x10] / 10, 1)}%`]
+			['Peak q850', `${fmt(row[T.peak_q850_x10] / 10, 1)} g kg⁻¹`]
 		];
-		let matchHtml = '<div class="mla-match-box"><h4>External association</h4><p class="mla-caution">No accepted IBTrACS or RSMC New Delhi association for this atlas segment.</p></div>';
-		if (ib || imd) {
-			const lines = [];
-			if (ib) {
-				lines.push(['IBTrACS SID', ib.sid]);
-				lines.push(['Match', `${ib.confidence}; median ${fmt(ib.median_km)} km, p90 ${fmt(ib.p90_km)} km`]);
-				lines.push(['Temporal overlap', `${fmt(ib.overlap_hours)} h (${fmt(ib.overlap_fraction * 100, 0)}% of best track)`]);
-				if (ib.segment_count > 1) lines.push(['Relation', `Atlas segment ${ib.segment_index} of ${ib.segment_count} associated with this external event`]);
-				if (best && best.wmo_agencies && best.wmo_agencies.length) lines.push(['IBTrACS WMO agency', best.wmo_agencies.join(', ')]);
-			}
-			if (imd) {
-				lines.push(['RSMC identifier', imd.id]);
-				if (imd.system.peak_grade) lines.push(['Official peak grade', imd.system.peak_grade]);
-				if (imd.system.peak_wind_kt != null) lines.push(['Official peak wind', `${fmt(imd.system.peak_wind_kt, 1)} kt`]);
-				if (imd.system.minimum_pressure_hpa != null) lines.push(['Official minimum pressure', `${fmt(imd.system.minimum_pressure_hpa, 1)} hPa`]);
-				if (imd.system.status) lines.push(['Official status', imd.system.status]);
-			}
-			matchHtml = `<div class="mla-match-box"><h4>External association</h4><dl>${lines.map(line => `<dt>${esc(line[0])}</dt><dd>${esc(line[1])}</dd>`).join('')}</dl>${ib && ib.confidence === 'low' ? '<p class="mla-caution">Possible association: retain for review rather than silently adopting its name.</p>' : ''}</div>`;
-		}
 		node.innerHTML = `
-			<div class="mla-dossier-head"><div><div class="mla-badge-row">${badges.join('')}</div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · Atlas ID ${index}</p></div><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaClearSelection" type="button" aria-label="Clear selected track">×</button></div>
+			<div class="mla-dossier-head"><div><div class="mla-badge-row">${badges.join('')}</div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · stable track ID ${atlasId(index)}</p></div><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaClearSelection" type="button" aria-label="Clear selected track">×</button></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
-			<p class="mla-caution"><strong>Continuity:</strong> ${esc(qcExplanation(index))}. Dashed short connectors are gaps; major gaps are not drawn.</p>
+			<p class="mla-caution"><strong>Continuity:</strong> ${esc(qcExplanation(index))}. Dashed track sections are gap-posterior positions and have no detector physics.</p>
 			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
-			${matchHtml}`;
+			`;
 		$('#mlaClearSelection').addEventListener('click', () => selectTrack(null));
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
@@ -1449,21 +1455,19 @@
 	}
 
 	function tableHead() {
-		return `<tr><th>System</th><th>Genesis</th><th>Atlas class</th><th>Official grade</th><th>${esc(metric().title)}</th><th>Duration</th><th>External match</th><th>Continuity</th></tr>`;
+		return `<tr><th>System</th><th>Genesis</th><th>Peak class</th><th>${esc(metric().title)}</th><th>Duration</th><th>Observed support</th></tr>`;
 	}
 
 	function tableRow(index, openExplore) {
 		const row = track(index);
-		const item = crosswalk(index);
-		const ib = item && item.ib;
 		const qc = CORE.qc[index];
-		return `<tr data-selected="${index === state.selected}"><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="${openExplore}">${esc(systemLabel(index))}</button><br><small>Atlas ${index}</small></td><td>${date(row[T.start_ms])}</td><td>${esc(CLASS_SHORT[row[T.category]])}</td><td>${esc(officialGrade(index) || '—')}</td><td class="mla-num">${fmt(rawMetric(index), 1)} ${esc(metric().unit)}<br><small>P${fmt(percentileMetric(index))}</small></td><td class="mla-num">${durationText(row[T.duration_hours])}</td><td>${ib ? `${esc(ib.sid)}<br><small>${esc(ib.confidence)} · ${fmt(ib.median_km)} km</small>` : '—'}</td><td>${badge(QC_LABELS[qc[4]], QC_TONES[qc[4]])}</td></tr>`;
+		return `<tr data-selected="${index === state.selected}"><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="${openExplore}">${esc(systemLabel(index))}</button></td><td>${date(row[T.start_ms])}</td><td>${esc(CLASS_SHORT[row[T.category]])}</td><td class="mla-num">${fmt(rawMetric(index), 1)} ${esc(metric().unit)}<br><small>P${fmt(percentileMetric(index))}</small></td><td class="mla-num">${durationText(row[T.duration_hours])}</td><td>${badge(QC_LABELS[qc[4]], QC_TONES[qc[4]])}<br><small>${fmt(qc[2])}% observed</small></td></tr>`;
 	}
 
 	function renderTopTable() {
 		const table = $('#mlaTopTable');
 		table.querySelector('thead').innerHTML = tableHead();
-		table.querySelector('tbody').innerHTML = sortedActive('metric-desc').slice(0, 12).map(index => tableRow(index, false)).join('') || '<tr><td colspan="8">No systems match the current filters.</td></tr>';
+		table.querySelector('tbody').innerHTML = sortedActive('metric-desc').slice(0, 12).map(index => tableRow(index, false)).join('') || '<tr><td colspan="6">No systems match the current filters.</td></tr>';
 	}
 
 	function renderSystems() {
@@ -1474,7 +1478,7 @@
 		const start = (state.page - 1) * state.pageSize;
 		const table = $('#mlaSystemsTable');
 		table.querySelector('thead').innerHTML = tableHead();
-		table.querySelector('tbody').innerHTML = indexes.slice(start, start + state.pageSize).map(index => tableRow(index, true)).join('') || '<tr><td colspan="8">No systems match the current filters.</td></tr>';
+		table.querySelector('tbody').innerHTML = indexes.slice(start, start + state.pageSize).map(index => tableRow(index, true)).join('') || '<tr><td colspan="6">No systems match the current filters.</td></tr>';
 		$('#mlaPageReadout').textContent = indexes.length ? `Rows ${fmt(start + 1)}–${fmt(Math.min(indexes.length, start + state.pageSize))} of ${fmt(indexes.length)} · page ${state.page} of ${pages}` : 'No matching systems';
 		$('#mlaPrevPage').disabled = state.page <= 1;
 		$('#mlaNextPage').disabled = state.page >= pages;
@@ -1657,7 +1661,7 @@
 	function drawGenesisMap() {
 		const drawing = setupChart('mlaGenesisChart');
 		if (!drawing) return;
-		const projection = fixedProjection(drawing.width, drawing.height, {lonMin: 38, lonMax: 153, latMin: -5, latMax: 41});
+		const projection = fixedProjection(drawing.width, drawing.height, {lonMin: 48, lonMax: 118, latMin: -5, latMax: 47});
 		drawMapGeography(drawing.context, projection, drawing.width, drawing.height, {});
 		const cells = new Map();
 		for (const index of state.active) {
@@ -1681,8 +1685,12 @@
 
 	function completeYear(year) {
 		if (year > COMPLETE_END_YEAR) return false;
-		if (year > 1940) return true;
-		return ![...state.months].some(month => month <= 3);
+		const coverageStart = new Date(CORE.meta.coverage_start);
+		const firstYear = coverageStart.getUTCFullYear();
+		const firstMonth = coverageStart.getUTCMonth() + 1;
+		if (year > firstYear) return true;
+		if (year < firstYear) return false;
+		return ![...state.months].some(month => month < firstMonth);
 	}
 
 	function renderClimatology() {
@@ -1743,7 +1751,7 @@
 		const series = DETAIL.series[index];
 		return {
 			hours: series[S.hours_since_genesis],
-			values: series[S[definition.series]].map(value => Number(value) / definition.divisor)
+			values: series[S[definition.series]].map(value => value == null ? NaN : Number(value) / definition.divisor)
 		};
 	}
 
@@ -1813,33 +1821,32 @@
 
 	function cohortDescription() {
 		const months = [...state.months].sort((a, b) => a - b).map(value => MONTHS[value - 1]).join('/');
-		return `${state.yearMin}–${state.yearMax}; ${months}; ${state.monthMode}; ${state.metricMin ? `P${state.metricMin}+ ${metric().title}` : 'all intensities'}; ${fmt(state.active.length)} segments`;
+		return `${state.yearMin}–${state.yearMax}; ${months}; ${state.monthMode}; ${state.metricMin ? `P${state.metricMin}+ ${metric().title}` : 'all intensities'}; ${fmt(state.active.length)} systems`;
 	}
 
 	function pinCurrentA() {
 		pinnedA = {ids: state.active.slice(), description: cohortDescription(), signature: filterSignature()};
-		toast(`Pinned ${fmt(pinnedA.ids.length)} segments as cohort A`);
+		toast(`Pinned ${fmt(pinnedA.ids.length)} systems as cohort A`);
 		if (state.tab !== 'compare') activateTab('compare', true);
 		else renderCompare();
 	}
 
 	function cohortStats(indexes, metricKey) {
-		const matched = indexes.filter(index => credibleIb(index)).length;
 		return {
 			count: indexes.length,
 			duration: median(indexes.map(index => track(index)[T.duration_hours])),
 			metric: median(indexes.map(index => rawMetric(index, metricKey))),
-			matched: indexes.length ? matched / indexes.length * 100 : NaN
+			coverage: median(indexes.map(index => CORE.qc[index][2]))
 		};
 	}
 
 	function renderCompareStats(first, second) {
 		const definition = METRICS[state.compareMetric];
 		const rows = [
-			['Segments', fmt(first.count), fmt(second.count), second.count - first.count],
+			['Systems', fmt(first.count), fmt(second.count), second.count - first.count],
 			['Median duration', durationText(first.duration), durationText(second.duration), second.duration - first.duration],
 			[`Median ${definition.title}`, `${fmt(first.metric, 1)} ${definition.unit}`, `${fmt(second.metric, 1)} ${definition.unit}`, second.metric - first.metric],
-			['Credible IBTrACS association', `${fmt(first.matched, 1)}%`, `${fmt(second.matched, 1)}%`, second.matched - first.matched]
+			['Median observed support', `${fmt(first.coverage, 1)}%`, `${fmt(second.coverage, 1)}%`, second.coverage - first.coverage]
 		];
 		$('#mlaCompareStats').innerHTML = rows.map(row => `<section class="mla-card mla-stat"><span>${esc(row[0])}</span><strong>A ${esc(row[1])}</strong><small>B ${esc(row[2])}${Number.isFinite(row[3]) ? ` · Δ ${row[3] > 0 ? '+' : ''}${fmt(row[3], 1)}` : ''}</small></section>`).join('');
 	}
@@ -1890,18 +1897,17 @@
 		const definition = EXTREMES[state.extremeMetric];
 		const indexes = state.active.filter(index => eligibleExtreme(index, definition)).sort((first, second) => definition.descending ? definition.value(second) - definition.value(first) : definition.value(first) - definition.value(second));
 		$('#mlaExtremeCaveat').textContent = definition.continuity && state.extremeEligibility === 'recommended'
-			? 'Recommended: no automated continuity flags'
+			? 'Recommended: strong observed support'
 			: 'Intensity diagnostics retain continuity context; they are not externally validated records';
 		$('#mlaRecordCards').innerHTML = indexes.slice(0, 3).map((index, rank) => {
 			const value = definition.value(index);
 			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${fmt(value, 1)} ${esc(definition.unit)}</strong> · ${date(track(index)[T.start_ms])}</p><p>${esc(qcExplanation(index))}</p></article>`;
 		}).join('') || '<p>No eligible systems in this cohort.</p>';
 		const table = $('#mlaExtremeTable');
-		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Atlas class</th><th>Official grade</th><th>Continuity</th><th>IBTrACS</th></tr>`;
+		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak class</th><th>Observed support</th><th>Stitches</th></tr>`;
 		table.querySelector('tbody').innerHTML = indexes.slice(0, 50).map((index, rank) => {
-			const item = crosswalk(index);
-			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${fmt(definition.value(index), 1)} ${esc(definition.unit)}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td><td>${esc(officialGrade(index) || '—')}</td><td>${badge(QC_LABELS[CORE.qc[index][4]], QC_TONES[CORE.qc[index][4]])}</td><td>${item && item.ib ? `${esc(item.ib.sid)} · ${esc(item.ib.confidence)}` : '—'}</td></tr>`;
-		}).join('') || '<tr><td colspan="8">No eligible systems.</td></tr>';
+			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${fmt(definition.value(index), 1)} ${esc(definition.unit)}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td><td>${badge(QC_LABELS[CORE.qc[index][4]], QC_TONES[CORE.qc[index][4]])}<br><small>${fmt(CORE.qc[index][2])}% observed</small></td><td>${fmt(track(index)[T.stitch_count])}</td></tr>`;
+		}).join('') || '<tr><td colspan="7">No eligible systems.</td></tr>';
 	}
 
 	function officialGradeCategory(grade) {
@@ -1983,17 +1989,13 @@
 	function summaryRows(indexes) {
 		return indexes.map(index => {
 			const row = track(index);
-			const item = crosswalk(index);
-			const ib = item && item.ib;
-			const imd = item && item.imd;
 			return {
-				atlas_track_id: index,
+				atlas_track_id: atlasId(index),
 				system_label: systemLabel(index),
 				start_utc: new Date(row[T.start_ms]).toISOString(),
 				end_utc: new Date(row[T.end_ms]).toISOString(),
 				duration_hours: row[T.duration_hours],
 				atlas_peak_class: CORE.cat_labels[String(row[T.category])],
-				official_imd_peak_grade: officialGrade(index),
 				peak_vorticity_catalogue_units: row[T.peak_vort_x10] / 10,
 				peak_precip_24h_mm: row[T.peak_precip_x10] / 10,
 				peak_wind_ms: row[T.peak_wind_x10] / 10,
@@ -2004,15 +2006,13 @@
 				qc_max_step_speed_ms: CORE.qc[index][1],
 				qc_observed_hour_coverage_pct: CORE.qc[index][2],
 				qc_screen: QC_LABELS[CORE.qc[index][4]],
-				ibtracs_sid: ib ? ib.sid : '',
-				ibtracs_confidence: ib ? ib.confidence : '',
-				ibtracs_median_separation_km: ib ? ib.median_km : '',
-				ibtracs_segment_relation: ib ? `${ib.segment_index}/${ib.segment_count}` : '',
-				rsmc_newdelhi_id: imd ? imd.id : '',
-				rsmc_match_confidence: imd ? imd.confidence : '',
+				observed_positions: row[T.observed_positions],
+				qualifying_positions: row[T.qualifying_positions],
+				gap_posterior_fraction: row[T.posterior_fraction_x1000] / 1000,
+				track_stitch_count: row[T.stitch_count],
+				max_missing_run_hours: row[T.max_missing_run_hours],
 				atlas_version: CORE.meta.atlas_version,
-				catalogue_version: 'v5.2',
-				ibtracs_version: CORE.meta.ibtracs_version
+				catalogue_version: CORE.meta.catalogue_version
 			};
 		});
 	}
@@ -2045,7 +2045,7 @@
 			const summary = summaryRows([index])[0];
 			return {
 				type: 'Feature',
-				id: index,
+				id: atlasId(index),
 				properties: summary,
 				geometry: {type: 'MultiLineString', coordinates: splitPath(index)}
 			};
@@ -2060,7 +2060,7 @@
 			atlas_version: CORE.meta.atlas_version,
 			catalogue: CORE.meta.title,
 			catalogue_coverage: {start: CORE.meta.coverage_start, end: CORE.meta.coverage_end},
-			ibtracs: {version: CORE.meta.ibtracs_version, accessed: CORE.meta.ibtracs_accessed, doi: CORE.meta.sources.ibtracs_doi},
+			source_sha256: CORE.meta.core_catalogue_sha256,
 			filters: {
 				year_min: state.yearMin,
 				year_max: state.yearMax,
@@ -2069,20 +2069,16 @@
 				atlas_peak_classes: [...state.classes].sort((a, b) => a - b),
 				metric: state.metric,
 				minimum_fixed_catalogue_percentile: state.metricMin,
-				ibtracs_association: state.match,
 				continuity_screen: state.qc,
-				state: state.stateIndex >= 0 ? CORE.states[state.stateIndex] : null,
-				state_rainfall_percentile: state.stateIndex >= 0 ? state.stateMin : null,
-				state_spatial_relevance_radius_km: state.stateIndex >= 0 ? 800 : null,
 				search: state.search || null
 			},
-			selected_atlas_track_id: state.selected,
-			matching_atlas_track_ids: state.active.slice(),
+			selected_atlas_track_id: state.selected == null ? null : atlasId(state.selected),
+			matching_atlas_track_ids: state.active.map(atlasId),
 			url: window.location.href,
 			caveats: [
-				'2026 is partial through the catalogue coverage end and is not a complete annual or JJAS exposure.',
 				'Atlas-derived IMD-style class is not official IMD grade.',
-				'State rainfall is coincident whole-polygon ERA5 rainfall and is not storm attribution.',
+				'Gap-posterior rows preserve track continuity but have no detector physics.',
+				'External best-track associations and state rainfall diagnostics have not yet been recomputed for v5.3.1.',
 				'Automated continuity flags are review aids rather than definitive quality judgements.'
 			]
 		};
@@ -2100,34 +2096,34 @@
 		const row = track(index);
 		const series = DETAIL.series[index];
 		const points = paths.decoded[index];
-		const headers = ['atlas_track_id', 'time_utc', 'hours_since_genesis', 'latitude', 'longitude', 'precip_24h_mm', 'vorticity_catalogue_units', 'max_wind_ms', 'mslp_hpa', 'pressure_deficit_hpa', 'q850_gkg', 'rh850_pct', 't850_k', 'atlas_class'];
+		const valueAt = (field, pointIndex, divisor) => series[S[field]][pointIndex] == null ? '' : series[S[field]][pointIndex] / (divisor || 1);
+		const headers = ['atlas_track_id', 'time_utc', 'hours_since_genesis', 'latitude', 'longitude', 'position_source', 'precip_24h_mm', 'vorticity_catalogue_units', 'max_wind_ms', 'mslp_hpa', 'pressure_deficit_hpa', 'q850_gkg', 't850_k', 'atlas_class'];
 		const rows = series[S.hours_since_genesis].map((hour, pointIndex) => [
-			index,
+			atlasId(index),
 			new Date(row[T.start_ms] + Number(hour) * 3600000).toISOString(),
 			hour,
 			points[pointIndex][0],
 			points[pointIndex][1],
-			series[S.precip24_x10][pointIndex] / 10,
-			series[S.vort_smooth_x10][pointIndex] / 10,
-			series[S.max_wind_x10][pointIndex] / 10,
-			series[S.mslp_x10][pointIndex] / 10,
-			series[S.pressure_deficit_x10][pointIndex] / 10,
-			series[S.q850_x10][pointIndex] / 10,
-			series[S.rh850_derived_x10][pointIndex] / 10,
-			series[S.t850_x10][pointIndex] / 10,
-			series[S.category][pointIndex]
+			series[S.category][pointIndex] == null ? 'gap_posterior' : 'observed',
+			valueAt('precip24_x10', pointIndex, 10),
+			valueAt('vort_smooth_x10', pointIndex, 10),
+			valueAt('max_wind_x10', pointIndex, 10),
+			valueAt('mslp_x10', pointIndex, 10),
+			valueAt('pressure_deficit_x10', pointIndex, 10),
+			valueAt('q850_x10', pointIndex, 10),
+			valueAt('t850_x10', pointIndex, 10),
+			valueAt('category', pointIndex, 1)
 		]);
 		const csv = [headers.map(csvCell).join(','), ...rows.map(values => values.map(csvCell).join(','))].join('\n');
-		downloadBlob(`monsoon-low-atlas-track-${index}-fixes.csv`, csv, 'text/csv;charset=utf-8');
-		toast(`Exported ${fmt(rows.length)} detected positions`);
+		downloadBlob(`monsoon-low-atlas-track-${atlasId(index)}-fixes.csv`, csv, 'text/csv;charset=utf-8');
+		toast(`Exported ${fmt(rows.length)} linked positions`);
 	}
 
 	function renderData() {
-		$('#mlaCoverageText').textContent = `${CORE.meta.coverage_start} to ${CORE.meta.coverage_end}. The final period is partial; complete-year climatologies end in ${COMPLETE_END_YEAR}. The first event timestamp does not prove that January–March 1940 were processed, so early-year exposure is treated conservatively.`;
-		$('#mlaBuildText').textContent = `Atlas ${CORE.meta.atlas_version}, built ${CORE.meta.built_utc}; ${fmt(CORE.meta.tracks)} segments and ${fmt(CORE.meta.rows)} detected positions. IBTrACS ${CORE.meta.ibtracs_version} accessed ${CORE.meta.ibtracs_accessed}.`;
-		$('#mlaIbtracsLink').href = CORE.meta.sources.ibtracs;
-		$('#mlaIbtracsDoi').href = CORE.meta.sources.ibtracs_doi;
-		$('#mlaImdLink').href = CORE.meta.sources.imd;
+		$('#mlaCoverageText').textContent = `${CORE.meta.coverage_start} to ${CORE.meta.coverage_end}; complete through ${COMPLETE_END_YEAR}.`;
+		$('#mlaBuildText').textContent = `Atlas ${CORE.meta.atlas_version}, built ${CORE.meta.built_utc}; ${fmt(CORE.meta.tracks)} systems, ${fmt(CORE.meta.rows)} linked positions, ${fmt(CORE.meta.observed_rows)} observed and ${fmt(CORE.meta.posterior_rows)} gap-posterior.`;
+		const release = $('#mlaReleaseSummary');
+		if (release) release.href = CORE.meta.sources.release_summary;
 	}
 
 	function renderExplore() {
@@ -2177,7 +2173,7 @@
 		activateTab(state.tab, false);
 		renderData();
 		$('#mlaLoading').hidden = true;
-		$('#mlaDataStatus').textContent = `${fmt(CORE.meta.tracks)} segments ready`;
+		$('#mlaDataStatus').textContent = `${fmt(CORE.meta.tracks)} systems ready`;
 		$('#mlaDataStatus').dataset.status = 'ready';
 		root.dataset.ready = 'true';
 		writeUrl('replace');
