@@ -816,7 +816,7 @@
 		if (state.mapColour !== 'class') parameters.set('colour', state.mapColour);
 		if (state.mapScope !== 'full') parameters.set('scope', state.mapScope);
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
-		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'southasia') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
+		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'full') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
 		return parameters;
 	}
