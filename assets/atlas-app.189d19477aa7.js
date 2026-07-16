@@ -8,6 +8,8 @@
 	const $$ = (selector, scope) => Array.from((scope || root).querySelectorAll(selector));
 	const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 	const CLASS_SHORT = {1: 'L', 2: 'D', 3: 'DD', 4: 'CS', 5: 'SCS', 6: 'VSCS+'};
+	const SYSTEM_CODES = {1: 'L', 2: 'D', 3: 'DD', 4: 'CS', 5: 'SCS', 6: 'VSCS'};
+	const SEASON_MONTHS = {jjas: [6, 7, 8, 9], mam: [3, 4, 5], ond: [10, 11, 12], djf: [12, 1, 2], all: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]};
 	const CLASS_COLOURS = ['#8b7b63', '#c3931d', '#c9631b', '#ad4328', '#8f2938', '#64224f', '#35204e'];
 	const QC_LABELS = ['Strong support', 'Mixed support', 'Low support'];
 	const QC_TONES = ['good', 'review', 'flag'];
@@ -22,6 +24,8 @@
 	let paths;
 	let segmentIndex;
 	let densityCells;
+	let catalogueBounds;
+	let fallbackLabels = [];
 	let nearStateCache = new Map();
 	let profileCache = new Map();
 	let toastTimer;
@@ -56,7 +60,7 @@
 		search: '',
 		mapLayer: 'auto',
 		mapColour: 'class',
-		mapScope: 'southasia',
+		mapScope: 'full',
 		mapZoom: 1,
 		mapCenterLon: 82,
 		mapCenterLat: 20,
@@ -224,15 +228,28 @@
 		});
 		offsets[decoded.length] = cursor;
 		paths = {decoded, offsets, latitude, longitude, breakBefore};
-		segmentIndex = new UniformSegmentIndex({lon: longitude, lat: latitude, offsets, breakBefore, cellSize: 1, bounds: {minLon: 48, maxLon: 118, minLat: -5, maxLat: 47}});
-		densityCells = buildDensityCells(.5);
+		catalogueBounds = {
+			lonMin: Math.floor(Number(CORE.meta.lon_min)) - 2,
+			lonMax: Math.ceil(Number(CORE.meta.lon_max)) + 2,
+			latMin: Math.floor(Number(CORE.meta.lat_min)) - 2,
+			latMax: Math.ceil(Number(CORE.meta.lat_max)) + 2
+		};
+		segmentIndex = new UniformSegmentIndex({
+			lon: longitude,
+			lat: latitude,
+			offsets,
+			breakBefore,
+			cellSize: 1,
+			bounds: {minLon: catalogueBounds.lonMin, maxLon: catalogueBounds.lonMax, minLat: catalogueBounds.latMin, maxLat: catalogueBounds.latMax}
+		});
+		densityCells = buildDensityCells(.5, catalogueBounds);
 	}
 
-	function buildDensityCells(cellSize) {
-		const minLon = 48;
-		const minLat = -5;
-		const columns = Math.ceil((118 - minLon) / cellSize);
-		const rows = Math.ceil((47 - minLat) / cellSize);
+	function buildDensityCells(cellSize, bounds) {
+		const minLon = bounds.lonMin;
+		const minLat = bounds.latMin;
+		const columns = Math.ceil((bounds.lonMax - minLon) / cellSize);
+		const rows = Math.ceil((bounds.latMax - minLat) / cellSize);
 		const perTrack = [];
 		for (let track = 0; track < paths.decoded.length; track++) {
 			const cells = new Set();
@@ -386,12 +403,28 @@
 		return '';
 	}
 
+	function buildFallbackLabels() {
+		const counts = new Map();
+		fallbackLabels = Array(CORE.tracks.length);
+		const indexes = CORE.tracks.map((row, index) => index).sort((first, second) => {
+			return track(first)[T.start_ms] - track(second)[T.start_ms] || atlasId(first) - atlasId(second);
+		});
+		for (const index of indexes) {
+			const row = track(index);
+			const year = row[T.start_year];
+			const category = row[T.category];
+			const key = `${year}-${category}`;
+			const sequence = (counts.get(key) || 0) + 1;
+			counts.set(key, sequence);
+			fallbackLabels[index] = `${SYSTEM_CODES[category] || 'LPS'} ${year} ${String(sequence).padStart(2, '0')}`;
+		}
+	}
+
 	function systemLabel(index) {
 		const name = officialName(index);
 		const item = credibleIb(index);
 		if (name) return `Cyclone ${name}${item && item.segment_count > 1 ? ` · segment ${item.segment_index}/${item.segment_count}` : ''}`;
-		if (item) return `IBTrACS ${item.sid}${item.segment_count > 1 ? ` · segment ${item.segment_index}/${item.segment_count}` : ''}`;
-		return `LPS ${atlasId(index)}`;
+		return fallbackLabels[index] || `LPS ${atlasId(index)}`;
 	}
 
 	function buildSearchIndex() {
@@ -575,6 +608,8 @@
 			['duration-desc', 'Duration: longest'],
 			['distance-desc', 'Path length: longest']
 		].map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('');
+		const matchField = $('#mlaMatch').closest('.mla-field');
+		if (matchField) matchField.hidden = !CORE.crosswalk.some(Boolean);
 	}
 
 	function syncControls() {
@@ -599,6 +634,11 @@
 		$('#mlaCompareAlign').value = state.compareAlign;
 		$$('[data-month]').forEach(button => button.setAttribute('aria-pressed', String(state.months.has(Number(button.dataset.month)))));
 		$$('[data-class]').forEach(button => button.setAttribute('aria-pressed', String(state.classes.has(Number(button.dataset.class)))));
+		$$('[data-season]').forEach(button => {
+			const preset = SEASON_MONTHS[button.dataset.season] || [];
+			const selected = state.months.size === preset.length && preset.every(month => state.months.has(month));
+			button.setAttribute('aria-pressed', String(selected));
+		});
 	}
 
 	function setMonths(values) {
@@ -693,8 +733,7 @@
 		$('#mlaSeasonPresets').addEventListener('click', event => {
 			const button = event.target.closest('[data-season]');
 			if (!button) return;
-			const presets = {jjas: [6, 7, 8, 9], mam: [3, 4, 5], ond: [10, 11, 12], djf: [12, 1, 2], all: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]};
-			setMonths(presets[button.dataset.season]);
+			setMonths(SEASON_MONTHS[button.dataset.season]);
 		});
 		$('#mlaResetFilters').addEventListener('click', resetFilters);
 		$('#mlaPinA').addEventListener('click', pinCurrentA);
@@ -724,7 +763,7 @@
 			const opener = event.target.closest('[data-open-tab]');
 			if (opener) activateTab(opener.dataset.openTab, true);
 			const selector = event.target.closest('[data-select-track]');
-			if (selector) selectTrack(Number(selector.dataset.selectTrack), {openExplore: selector.dataset.openExplore === 'true'});
+			if (selector) selectTrack(Number(selector.dataset.selectTrack), {openExplore: selector.dataset.openExplore === 'true', fit: true});
 		});
 	}
 
@@ -770,11 +809,12 @@
 		if (classes.join(',') !== '1,2,3,4,5,6') parameters.set('class', classes.join(','));
 		if (state.metric !== 'deficit') parameters.set('metric', state.metric);
 		if (state.metricMin) parameters.set('pmin', String(state.metricMin));
+		if (state.match !== 'any') parameters.set('match', state.match);
 		if (state.qc !== 'any') parameters.set('qc', state.qc);
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
 		if (state.mapColour !== 'class') parameters.set('colour', state.mapColour);
-		if (state.mapScope !== 'southasia') parameters.set('scope', state.mapScope);
+		if (state.mapScope !== 'full') parameters.set('scope', state.mapScope);
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
 		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'southasia') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
@@ -805,19 +845,21 @@
 		if (classes.length) state.classes = new Set(classes);
 		if (METRICS[parameters.get('metric')] && !['q', 'rh'].includes(parameters.get('metric'))) state.metric = parameters.get('metric');
 		state.metricMin = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
+		if (['any', 'unmatched', 'high', 'credible', 'named'].includes(parameters.get('match'))) state.match = parameters.get('match');
 		if (['any', 'good', 'usable', 'flagged'].includes(parameters.get('qc'))) state.qc = parameters.get('qc');
 		state.search = parameters.get('q') || '';
 		if (['auto', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
 		if (['class', 'metric', 'year', 'qc'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
-		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 12);
+		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 16);
 		const centre = (parameters.get('centre') || '').split(',').map(Number);
 		if (centre.length === 2 && centre.every(Number.isFinite)) {
-			state.mapCenterLon = clamp(centre[0], 45, 125);
-			state.mapCenterLat = clamp(centre[1], -8, 50);
-		} else if (state.mapScope === 'full') {
-			state.mapCenterLon = 85;
-			state.mapCenterLat = 21;
+			const bounds = catalogueBounds || {lonMin: 45, lonMax: 125, latMin: -8, latMax: 50};
+			state.mapCenterLon = clamp(centre[0], bounds.lonMin, bounds.lonMax);
+			state.mapCenterLat = clamp(centre[1], bounds.latMin, bounds.latMax);
+		} else if (catalogueBounds) {
+			state.mapCenterLon = (catalogueBounds.lonMin + catalogueBounds.lonMax) / 2;
+			state.mapCenterLat = (catalogueBounds.latMin + catalogueBounds.latMax) / 2;
 		}
 		const selected = Number(parameters.get('system'));
 		if (Number.isInteger(selected)) {
@@ -872,9 +914,27 @@
 	});
 
 	function mapBounds() {
-		return state.mapScope === 'full'
-			? {lonMin: 45, lonMax: 125, latMin: -8, latMax: 50}
-			: {lonMin: 48, lonMax: 118, latMin: -5, latMax: 47};
+		if (state.mapScope === 'full') return catalogueBounds || {lonMin: 47, lonMax: 118, latMin: -6, latMax: 48};
+		return {lonMin: 58, lonMax: 105, latMin: 0, latMax: 38};
+	}
+
+	function constrainMapView(width, height) {
+		const bounds = mapBounds();
+		const padding = 24;
+		const scale = Math.min(
+			(width - padding * 2) / (bounds.lonMax - bounds.lonMin),
+			(height - padding * 2) / (bounds.latMax - bounds.latMin)
+		) * state.mapZoom;
+		const halfLongitude = width / (2 * scale);
+		const halfLatitude = height / (2 * scale);
+		const middleLongitude = (bounds.lonMin + bounds.lonMax) / 2;
+		const middleLatitude = (bounds.latMin + bounds.latMax) / 2;
+		state.mapCenterLon = halfLongitude * 2 >= bounds.lonMax - bounds.lonMin
+			? middleLongitude
+			: clamp(state.mapCenterLon, bounds.lonMin + halfLongitude, bounds.lonMax - halfLongitude);
+		state.mapCenterLat = halfLatitude * 2 >= bounds.latMax - bounds.latMin
+			? middleLatitude
+			: clamp(state.mapCenterLat, bounds.latMin + halfLatitude, bounds.latMax - halfLatitude);
 	}
 
 	function mapProjection(width, height) {
@@ -1237,26 +1297,31 @@
 	}
 
 	function resetMapView() {
+		const bounds = mapBounds();
 		state.mapZoom = 1;
-		state.mapCenterLon = state.mapScope === 'full' ? 85 : 82;
-		state.mapCenterLat = state.mapScope === 'full' ? 21 : 20;
+		state.mapCenterLon = (bounds.lonMin + bounds.lonMax) / 2;
+		state.mapCenterLat = (bounds.latMin + bounds.latMax) / 2;
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
 	}
 
-	function setMapZoom(value, x, y) {
+	const scheduleMapUrl = debounce(() => writeUrl('replace'), 180);
+
+	function setMapZoom(value, x, y, options) {
 		const canvas = $('#mlaMapOverlay');
 		const rectangle = canvas.getBoundingClientRect();
 		const before = mapProjection(rectangle.width, rectangle.height);
 		const pointX = x == null ? rectangle.width / 2 : x;
 		const pointY = y == null ? rectangle.height / 2 : y;
 		const geographical = before.invert(pointX, pointY);
-		state.mapZoom = clamp(value, 1, 12);
+		state.mapZoom = clamp(value, 1, 16);
 		const after = mapProjection(rectangle.width, rectangle.height);
 		const current = after.invert(pointX, pointY);
 		state.mapCenterLat += geographical[0] - current[0];
 		state.mapCenterLon += geographical[1] - current[1];
+		constrainMapView(rectangle.width, rectangle.height);
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
-		writeUrl('replace');
+		if (options && options.immediateUrl) writeUrl('replace');
+		else scheduleMapUrl();
 	}
 
 	function mapHitTest(clientX, clientY, touch) {
@@ -1297,16 +1362,18 @@
 	function fitSelected() {
 		if (state.selected == null) return;
 		const bounds = CORE.bounds[state.selected];
-		const full = bounds[2] > 110 || bounds[0] < 40;
+		const focus = mapBounds();
+		const full = bounds[2] > focus.lonMax || bounds[0] < focus.lonMin || bounds[3] > focus.latMax || bounds[1] < focus.latMin;
 		if (full) state.mapScope = 'full';
 		const canvas = $('#mlaMapOverlay');
 		const rectangle = canvas.getBoundingClientRect();
 		const scope = mapBounds();
 		const baseScale = Math.min((rectangle.width - 48) / (scope.lonMax - scope.lonMin), (rectangle.height - 48) / (scope.latMax - scope.latMin));
-		const neededScale = Math.min((rectangle.width - 90) / Math.max(5, bounds[2] - bounds[0]), (rectangle.height - 90) / Math.max(4, bounds[3] - bounds[1]));
-		state.mapZoom = clamp(neededScale / baseScale, 1, 8);
+		const neededScale = Math.min((rectangle.width - 90) / Math.max(1.5, bounds[2] - bounds[0]), (rectangle.height - 90) / Math.max(1.5, bounds[3] - bounds[1]));
+		state.mapZoom = clamp(neededScale / baseScale, 1, 12);
 		state.mapCenterLon = (bounds[0] + bounds[2]) / 2;
 		state.mapCenterLat = (bounds[1] + bounds[3]) / 2;
+		constrainMapView(rectangle.width, rectangle.height);
 		syncControls();
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
 		writeUrl('replace');
@@ -1314,21 +1381,50 @@
 
 	function bindMap() {
 		const canvas = $('#mlaMapOverlay');
+		const pointers = new Map();
 		let drag = null;
+		let pinch = null;
+		let suppressTap = false;
+		function pinchMetrics() {
+			const points = [...pointers.values()].slice(0, 2);
+			if (points.length < 2) return null;
+			return {
+				distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
+				x: (points[0].x + points[1].x) / 2,
+				y: (points[0].y + points[1].y) / 2
+			};
+		}
 		canvas.addEventListener('pointerdown', event => {
-			drag = {x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false};
+			pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+			if (pointers.size === 1) drag = {x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false};
+			if (pointers.size === 2) {
+				const metrics = pinchMetrics();
+				pinch = {distance: Math.max(1, metrics.distance), zoom: state.mapZoom};
+				drag = null;
+			}
+			canvas.classList.add('is-dragging');
 			if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
 		});
 		canvas.addEventListener('pointermove', event => {
+			if (pointers.has(event.pointerId)) pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+			if (pinch && pointers.size >= 2) {
+				event.preventDefault();
+				const metrics = pinchMetrics();
+				const rectangle = canvas.getBoundingClientRect();
+				setMapZoom(pinch.zoom * metrics.distance / pinch.distance, metrics.x - rectangle.left, metrics.y - rectangle.top);
+				return;
+			}
 			if (drag) {
 				const dx = event.clientX - drag.x;
 				const dy = event.clientY - drag.y;
 				if (Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) > 5) drag.moved = true;
 				if (drag.moved) {
+					event.preventDefault();
 					const rectangle = canvas.getBoundingClientRect();
 					const projection = mapProjection(rectangle.width, rectangle.height);
 					state.mapCenterLon -= dx / projection.scale;
 					state.mapCenterLat += dy / projection.scale;
+					constrainMapView(rectangle.width, rectangle.height);
 					drag.x = event.clientX;
 					drag.y = event.clientY;
 					mapScheduler.invalidate(MAP_DIRTY.ALL);
@@ -1342,19 +1438,42 @@
 			});
 		});
 		canvas.addEventListener('pointerup', event => {
+			const wasPinching = Boolean(pinch);
 			const moved = drag && drag.moved;
+			pointers.delete(event.pointerId);
+			if (wasPinching) {
+				suppressTap = true;
+				pinch = null;
+				const remaining = [...pointers.values()][0];
+				drag = remaining ? {x: remaining.x, y: remaining.y, startX: remaining.x, startY: remaining.y, moved: false} : null;
+				if (!pointers.size) canvas.classList.remove('is-dragging');
+				scheduleMapUrl();
+				return;
+			}
 			drag = null;
+			canvas.classList.remove('is-dragging');
+			if (suppressTap) { suppressTap = false; return; }
 			if (moved) { writeUrl('replace'); return; }
 			const index = mapHitTest(event.clientX, event.clientY, event.pointerType === 'touch');
 			if (index >= 0) selectTrack(index);
 		});
-		canvas.addEventListener('pointercancel', () => { drag = null; });
+		canvas.addEventListener('pointercancel', event => {
+			pointers.delete(event.pointerId);
+			drag = null;
+			pinch = null;
+			canvas.classList.remove('is-dragging');
+		});
 		canvas.addEventListener('pointerleave', () => { if (!drag) { state.hovered = null; $('#mlaMapTip').dataset.visible = 'false'; mapScheduler.invalidate(MAP_DIRTY.OVERLAY); } });
 		canvas.addEventListener('wheel', event => {
 			event.preventDefault();
 			const rectangle = canvas.getBoundingClientRect();
 			setMapZoom(state.mapZoom * (event.deltaY < 0 ? 1.22 : 1 / 1.22), event.clientX - rectangle.left, event.clientY - rectangle.top);
 		}, {passive: false});
+		canvas.addEventListener('dblclick', event => {
+			event.preventDefault();
+			const rectangle = canvas.getBoundingClientRect();
+			setMapZoom(state.mapZoom * 1.65, event.clientX - rectangle.left, event.clientY - rectangle.top, {immediateUrl: true});
+		});
 		$('#mlaZoomIn').addEventListener('click', () => setMapZoom(state.mapZoom * 1.35));
 		$('#mlaZoomOut').addEventListener('click', () => setMapZoom(state.mapZoom / 1.35));
 		$('#mlaZoomReset').addEventListener('click', () => { resetMapView(); writeUrl('replace'); });
@@ -1451,6 +1570,7 @@
 		renderTopTable();
 		mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
 		renderLifeCharts();
+		if (state.selected != null && options && options.fit) requestAnimationFrame(fitSelected);
 		writeUrl('push');
 	}
 
@@ -2161,6 +2281,7 @@
 		setLoading('Building a spatial index for responsive track selection…');
 		await new Promise(resolve => setTimeout(resolve, 0));
 		buildPathRuntime();
+		buildFallbackLabels();
 		buildSearchIndex();
 		buildFilterControls();
 		readUrl();

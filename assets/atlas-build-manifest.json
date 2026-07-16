@@ -1,10 +1,10 @@
 {
-  "built_utc": "2026-07-16T07:07:57.923287+00:00",
+  "built_utc": "2026-07-16T08:53:02.055584+00:00",
   "catalogue_version": "v5.3.1",
-  "core": "atlas-core.a4a8346c0073.json.gz",
+  "core": "atlas-core.4e4e3e99a0ca.json.gz",
   "detail": "atlas-detail.f70667357eee.json.gz",
-  "core_uncompressed_bytes": 5062911,
-  "core_compressed_bytes": 2482636,
+  "core_uncompressed_bytes": 5426956,
+  "core_compressed_bytes": 2545529,
   "detail_uncompressed_bytes": 25631817,
   "detail_compressed_bytes": 4142425,
   "qa": {
@@ -14,6 +14,8 @@
     "posterior_rows": 177813,
     "duplicate_track_times": 0,
     "all_observed_rows_have_physics": true,
-    "no_posterior_rows_have_physics": true
+    "no_posterior_rows_have_physics": true,
+    "ibtracs_matched_tracks": 820,
+    "ibtracs_named_tracks": 141
   }
 }

@@ -91,6 +91,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--track-summary", required=True, type=Path)
     parser.add_argument("--release-summary", required=True, type=Path)
     parser.add_argument("--template-core", required=True, type=Path)
+    parser.add_argument("--ibtracs-crosswalk", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser.parse_args()
 
@@ -200,6 +201,13 @@ def main() -> None:
     release = json.loads(args.release_summary.read_text(encoding="utf-8"))
     summary = pd.read_csv(args.track_summary)
     template = read_gzip_json(args.template_core)
+    ibtracs = (
+        json.loads(args.ibtracs_crosswalk.read_text(encoding="utf-8"))
+        if args.ibtracs_crosswalk
+        else None
+    )
+    if ibtracs and ibtracs.get("schema") != "lps-v5.3.1-ibtracs-v04r01-crosswalk-v1":
+        raise ValueError("Unsupported IBTrACS crosswalk schema")
 
     table = pq.read_table(args.parquet, columns=PARQUET_COLUMNS)
     data = table.to_pandas()
@@ -429,6 +437,19 @@ def main() -> None:
     coverage_start = data["time"].min().isoformat().replace("+00:00", "Z")
     coverage_end = data["time"].max().isoformat().replace("+00:00", "Z")
     built_utc = datetime.now(timezone.utc).isoformat()
+    crosswalk = []
+    matched_sids: set[str] = set()
+    for row in tracks:
+        match = ibtracs["matches"].get(str(row[0])) if ibtracs else None
+        if match:
+            matched_sids.add(match["sid"])
+            crosswalk.append({"ib": match})
+        else:
+            crosswalk.append(None)
+    ibtracs_tracks = {
+        sid: value for sid, value in (ibtracs["storms"].items() if ibtracs else [])
+        if sid in matched_sids
+    }
     core = {
         "meta": {
             "title": "LPS v5.3.1 ERA5 fixed-core South Asian low-pressure-system catalogue",
@@ -448,7 +469,7 @@ def main() -> None:
             "source_dataset": "ERA5-derived LPS v5.3.1 fixed-core enriched catalogue",
             "catalogue_version": "v5.3.1",
             "schema": release["schema"],
-            "atlas_version": "3.0.0",
+            "atlas_version": "3.1.0",
             "built_utc": built_utc,
             "catalogue_completed_utc": release["completed_at_utc"],
             "default_complete_end_year": 2025,
@@ -458,7 +479,9 @@ def main() -> None:
             "sources": {
                 "live_atlas": "https://kieranmrhunt.github.io/monsoon-low-atlas/",
                 "release_summary": "data/lps-v5.3.1-release-summary.json",
+                "ibtracs": "https://www.ncei.noaa.gov/products/international-best-track-archive",
             },
+            "ibtracs_crosswalk": ibtracs["method"] if ibtracs else None,
         },
         "states": template["states"],
         "state_slugs": template["state_slugs"],
@@ -482,8 +505,8 @@ def main() -> None:
         "bounds": bounds,
         "peak_month_fields": ["rain", "vort", "wind", "mslp", "deficit"],
         "peak_months": peak_months,
-        "crosswalk": [None] * len(tracks),
-        "ibtracs_tracks": {},
+        "crosswalk": crosswalk,
+        "ibtracs_tracks": ibtracs_tracks,
         "geo": template["geo"],
     }
     detail = {
@@ -518,6 +541,13 @@ def main() -> None:
             "duplicate_track_times": int(data.duplicated(["track_id", "time"]).sum()),
             "all_observed_rows_have_physics": bool(not data.loc[diagnostics, physics].isna().any().any()),
             "no_posterior_rows_have_physics": bool(not data.loc[~diagnostics, physics].notna().any().any()),
+            "ibtracs_matched_tracks": sum(value is not None for value in crosswalk),
+            "ibtracs_named_tracks": sum(
+                value is not None
+                and value["ib"]["confidence"] in {"high", "medium"}
+                and bool(ibtracs_tracks.get(value["ib"]["sid"], {}).get("name"))
+                for value in crosswalk
+            ),
         },
     }
     (args.output_dir / "atlas-build-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

@@ -140,7 +140,18 @@
 .mla-btn-icon { width: 40px; padding: 7px; display: inline-grid; place-items: center; }
 .mla-chip { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 .mla-chip[aria-pressed="true"],
-.mla-tab[aria-selected="true"] { background: var(--mla-indigo-deep); border-color: var(--mla-indigo-deep); color: #fffdf6; }
+.mla-btn[aria-pressed="true"],
+.mla-tab[aria-selected="true"] {
+	background: #17294f;
+	border-color: #17294f;
+	color: #fffdf6 !important;
+	font-weight: 650;
+	box-shadow: inset 0 0 0 1px rgba(255, 253, 246, .24);
+}
+.mla-chip[aria-pressed="true"]:hover,
+.mla-btn[aria-pressed="true"]:hover,
+.mla-tab[aria-selected="true"]:hover { background: #0f203f; border-color: #0f203f; }
+.mla-btn:disabled { cursor: not-allowed; opacity: .58; transform: none; }
 
 .mla-status-pill,
 .mla-badge {
@@ -237,9 +248,10 @@
 .mla-map-head h3 { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 500; margin: 0; }
 .mla-map-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .mla-map-tools .mla-select { width: auto; min-height: 36px; padding: 6px 8px; font-size: 13px; }
-.mla-map-stack { position: relative; height: 610px; overflow: hidden; background: var(--mla-sea); touch-action: pan-y; }
+.mla-map-stack { position: relative; height: 610px; overflow: hidden; background: var(--mla-sea); }
 .mla-map-layer { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
-#mlaMapOverlay { cursor: crosshair; touch-action: pan-y; }
+#mlaMapOverlay { cursor: grab; touch-action: none; }
+#mlaMapOverlay.is-dragging { cursor: grabbing; }
 .mla-map-tip {
 	position: absolute;
 	z-index: 8;
@@ -481,11 +493,11 @@
 						<h3>Months</h3>
 						<div class="mla-chip-row" id="mlaMonthChips" aria-label="Selected months"></div>
 						<div class="mla-chip-row" id="mlaSeasonPresets" style="margin-top:7px">
-							<button class="mla-btn mla-btn-small" type="button" data-season="jjas">JJAS</button>
-							<button class="mla-btn mla-btn-small" type="button" data-season="mam">MAM</button>
-							<button class="mla-btn mla-btn-small" type="button" data-season="ond">OND</button>
-							<button class="mla-btn mla-btn-small" type="button" data-season="djf">DJF</button>
-							<button class="mla-btn mla-btn-small" type="button" data-season="all">All</button>
+							<button class="mla-chip" type="button" data-season="jjas" aria-pressed="true">JJAS</button>
+							<button class="mla-chip" type="button" data-season="mam" aria-pressed="false">MAM</button>
+							<button class="mla-chip" type="button" data-season="ond" aria-pressed="false">OND</button>
+							<button class="mla-chip" type="button" data-season="djf" aria-pressed="false">DJF</button>
+							<button class="mla-chip" type="button" data-season="all" aria-pressed="false">All</button>
 						</div>
 					</div>
 					<div class="mla-filter-group">
@@ -576,7 +588,7 @@
 							</select>
 							<label class="mla-sr-only" for="mlaMapScope">Map scope</label>
 							<select class="mla-select" id="mlaMapScope">
-								<option value="southasia">South Asia</option>
+								<option value="southasia">Indian monsoon core</option>
 								<option value="full">Full catalogue domain</option>
 							</select>
 							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button>
@@ -678,7 +690,7 @@
 			<div class="mla-method-grid">
 				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.3.1 fixed-core</strong> contains 620,292 hourly linked positions grouped into 2,918 system identities. Of these, 442,479 are observed detector fixes and 177,813 are gap-posterior positions.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions and intensity diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
 				<section class="mla-card mla-prose"><h3>Fixed-core continuity</h3><p>Identities pass the frozen fixed-core observed-position strength and support rule. Posterior rows are retained to preserve temporal continuity but never count as observations and carry no detector physics.</p><h4>Support screen</h4><p>Strong, mixed and low support combine observed-position occupancy, the longest missing run and maximum linked speed. This is a review aid rather than proof of meteorological validity.</p><h4>Map convention</h4><p>Observed portions of a selected trajectory are solid; gap-posterior portions are dashed.</p></section>
-				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> the catalogue's centre diagnostic.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm.</li><li><strong>Percentiles:</strong> fixed across all 2,918 v5.3.1 system identities; filters do not rescale them.</li></ul><h4>Unavailable fields</h4><p>RH850 is null throughout this release and is omitted. External best-track associations and coincident state rainfall have not yet been recomputed for v5.3.1, so v5.2 values are not mixed into this atlas.</p></section>
+				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> the catalogue's centre diagnostic.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm.</li><li><strong>Percentiles:</strong> fixed across all 2,918 v5.3.1 system identities; filters do not rescale them.</li></ul><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed LPS fixes only and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>Unavailable fields</h4><p>RH850 is null throughout this release and is omitted. Coincident state rainfall has not yet been recomputed for v5.3.1, so v5.2 values are not mixed into this atlas.</p></section>
 				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include stable v5.3.1 track IDs, units, filter state and continuity diagnostics. Selected-track downloads label each row as observed or gap-posterior and leave unavailable physics blank.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaReleaseSummary" target="_blank" rel="noopener">LPS v5.3.1 materialisation summary and checksums</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
 			</div>
 		</section>
@@ -687,9 +699,9 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.a4a8346c0073.json.gz","detail":"assets/atlas-detail.f70667357eee.json.gz"}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.4e4e3e99a0ca.json.gz","detail":"assets/atlas-detail.f70667357eee.json.gz"}</script>
 
-<script src="assets/atlas-app.56f2bf28645e.js"></script>
+<script src="assets/atlas-app.189d19477aa7.js"></script>
 
 </body>
 </html>
