@@ -185,6 +185,24 @@ def posterior_runs(observed: np.ndarray) -> list[list[int]]:
     return runs
 
 
+def value_runs(values: np.ndarray) -> list[list[int]]:
+    """Run-length encode a small integer value as [start, end, value]."""
+    if not len(values):
+        return []
+    runs: list[list[int]] = []
+    start = 0
+    current = int(values[0])
+    for index in range(1, len(values)):
+        value = int(values[index])
+        if value == current:
+            continue
+        runs.append([start, index - 1, current])
+        start = index
+        current = value
+    runs.append([start, len(values) - 1, current])
+    return runs
+
+
 def dump_hashed(payload: dict, stem: str, output_dir: Path) -> tuple[str, int, int]:
     raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     compressed = gzip.compress(raw, compresslevel=9, mtime=0)
@@ -300,6 +318,7 @@ def main() -> None:
                 "max_speed_ms": float(np.nanmax(group["track_speed_ms"].to_numpy(dtype=float))),
                 "breaks": breaks,
                 "posterior_runs": posterior_runs(group["candidate_diagnostics_available"].to_numpy(dtype=bool)),
+                "month_runs": value_runs(group["month"].to_numpy(dtype=np.int8)),
             }
         )
 
@@ -318,6 +337,7 @@ def main() -> None:
     bounds = []
     peak_months = []
     posterior = []
+    point_months = []
     detail_series = []
 
     for index, cached in enumerate(group_cache):
@@ -417,6 +437,7 @@ def main() -> None:
             ]
         )
         posterior.append(cached["posterior_runs"])
+        point_months.append(cached["month_runs"])
 
         hours = ((group["time"] - start).dt.total_seconds() / 3600).round().astype(int).tolist()
         detail_series.append(
@@ -469,7 +490,7 @@ def main() -> None:
             "source_dataset": "ERA5-derived LPS v5.3.1 fixed-core enriched catalogue",
             "catalogue_version": "v5.3.1",
             "schema": release["schema"],
-            "atlas_version": "3.1.0",
+            "atlas_version": "3.2.0",
             "built_utc": built_utc,
             "catalogue_completed_utc": release["completed_at_utc"],
             "default_complete_end_year": 2025,
@@ -502,6 +523,7 @@ def main() -> None:
         "qc": qc,
         "breaks": breaks,
         "posterior_runs": posterior,
+        "point_month_runs": point_months,
         "bounds": bounds,
         "peak_month_fields": ["rain", "vort", "wind", "mslp", "deficit"],
         "peak_months": peak_months,

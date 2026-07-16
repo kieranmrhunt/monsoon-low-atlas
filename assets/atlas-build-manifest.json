@@ -1,10 +1,10 @@
 {
-  "built_utc": "2026-07-16T08:53:02.055584+00:00",
+  "built_utc": "2026-07-16T09:39:29.113378+00:00",
   "catalogue_version": "v5.3.1",
-  "core": "atlas-core.4e4e3e99a0ca.json.gz",
+  "core": "atlas-core.5aea0dde7066.json.gz",
   "detail": "atlas-detail.f70667357eee.json.gz",
-  "core_uncompressed_bytes": 5426956,
-  "core_compressed_bytes": 2545529,
+  "core_uncompressed_bytes": 5472231,
+  "core_compressed_bytes": 2555675,
   "detail_uncompressed_bytes": 25631817,
   "detail_compressed_bytes": 4142425,
   "qa": {

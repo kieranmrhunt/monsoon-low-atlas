@@ -24,6 +24,7 @@
 	let paths;
 	let segmentIndex;
 	let densityCells;
+	let densityMonthCache = new Map();
 	let catalogueBounds;
 	let fallbackLabels = [];
 	let nearStateCache = new Map();
@@ -33,6 +34,7 @@
 	let pendingPointer = null;
 	let suppressUrl = false;
 	let pinnedA = null;
+	let lastAutoFitSignature = '';
 
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
@@ -46,8 +48,11 @@
 
 	const state = {
 		tab: 'explore',
+		timeMode: 'years',
 		yearMin: 1940,
 		yearMax: 2025,
+		dateMin: '1940-05-09',
+		dateMax: '2025-12-31',
 		months: new Set([6, 7, 8, 9]),
 		monthMode: 'active',
 		classes: new Set([1, 2, 3, 4, 5, 6]),
@@ -59,8 +64,9 @@
 		stateMin: 0,
 		search: '',
 		mapLayer: 'auto',
-		mapColour: 'class',
+		mapColour: 'single',
 		mapScope: 'full',
+		mapPath: 'months',
 		mapZoom: 1,
 		mapCenterLon: 82,
 		mapCenterLat: 20,
@@ -74,7 +80,8 @@
 		extremeMetric: 'duration',
 		extremeEligibility: 'recommended',
 		compareMetric: 'deficit',
-		compareAlign: 'life'
+		compareAlign: 'life',
+		evolutionMetric: 'deficit'
 	};
 
 	function css(name, fallback) {
@@ -96,6 +103,14 @@
 
 	function date(ms) {
 		return new Date(ms).toISOString().slice(0, 10);
+	}
+
+	function periodYearMin() {
+		return state.timeMode === 'dates' ? Number(state.dateMin.slice(0, 4)) : state.yearMin;
+	}
+
+	function periodYearMax() {
+		return state.timeMode === 'dates' ? Number(state.dateMax.slice(0, 4)) : state.yearMax;
 	}
 
 	function durationText(hours) {
@@ -215,9 +230,11 @@
 		const latitude = new Float32Array(total);
 		const longitude = new Float32Array(total);
 		const breakBefore = new Uint8Array(total);
+		const month = new Uint8Array(total);
 		let cursor = 0;
 		decoded.forEach((points, track) => {
 			offsets[track] = cursor;
+			const trackOffset = cursor;
 			const breaks = new Set((CORE.breaks[track] || []).map(item => Number(item[0])));
 			points.forEach((point, pointIndex) => {
 				latitude[cursor] = point[0];
@@ -225,9 +242,12 @@
 				if (breaks.has(pointIndex)) breakBefore[cursor] = 1;
 				cursor++;
 			});
+			for (const run of (CORE.point_month_runs && CORE.point_month_runs[track]) || []) {
+				month.fill(Number(run[2]), trackOffset + Number(run[0]), trackOffset + Number(run[1]) + 1);
+			}
 		});
 		offsets[decoded.length] = cursor;
-		paths = {decoded, offsets, latitude, longitude, breakBefore};
+		paths = {decoded, offsets, latitude, longitude, breakBefore, month};
 		catalogueBounds = {
 			lonMin: Math.floor(Number(CORE.meta.lon_min)) - 2,
 			lonMax: Math.ceil(Number(CORE.meta.lon_max)) + 2,
@@ -243,9 +263,10 @@
 			bounds: {minLon: catalogueBounds.lonMin, maxLon: catalogueBounds.lonMax, minLat: catalogueBounds.latMin, maxLat: catalogueBounds.latMax}
 		});
 		densityCells = buildDensityCells(.5, catalogueBounds);
+		densityMonthCache.clear();
 	}
 
-	function buildDensityCells(cellSize, bounds) {
+	function buildDensityCells(cellSize, bounds, months) {
 		const minLon = bounds.lonMin;
 		const minLat = bounds.latMin;
 		const columns = Math.ceil((bounds.lonMax - minLon) / cellSize);
@@ -256,11 +277,14 @@
 			const points = paths.decoded[track];
 			const breaks = new Set((CORE.breaks[track] || []).map(item => Number(item[0])));
 			for (let index = 0; index < points.length; index++) {
+				const visible = !months || months.has(paths.month[paths.offsets[track] + index]);
+				if (!visible) continue;
 				const point = points[index];
 				const col = clamp(Math.floor((point[1] - minLon) / cellSize), 0, columns - 1);
 				const row = clamp(Math.floor((point[0] - minLat) / cellSize), 0, rows - 1);
 				cells.add(row * columns + col);
-				if (!index || breaks.has(index)) continue;
+				const previousVisible = index && (!months || months.has(paths.month[paths.offsets[track] + index - 1]));
+				if (!previousVisible || breaks.has(index)) continue;
 				const previous = points[index - 1];
 				const steps = Math.ceil(Math.max(Math.abs(point[0] - previous[0]), Math.abs(point[1] - previous[1])) / cellSize);
 				for (let step = 1; step < steps; step++) {
@@ -275,6 +299,13 @@
 			perTrack.push(Uint16Array.from(cells));
 		}
 		return {cellSize, minLon, minLat, columns, rows, perTrack};
+	}
+
+	function currentDensityCells() {
+		if (state.mapPath === 'full') return densityCells;
+		const key = [...state.months].sort((a, b) => a - b).join(',');
+		if (!densityMonthCache.has(key)) densityMonthCache.set(key, buildDensityCells(.5, catalogueBounds, state.months));
+		return densityMonthCache.get(key);
 	}
 
 	function pointSegmentDistanceSquared(px, py, x1, y1, x2, y2) {
@@ -303,6 +334,7 @@
 			const x2 = [];
 			const y2 = [];
 			const owner = [];
+			const pointIndex = [];
 			for (let track = 0; track < options.offsets.length - 1; track++) {
 				for (let point = options.offsets[track] + 1; point < options.offsets[track + 1]; point++) {
 					if (options.breakBefore[point]) continue;
@@ -312,6 +344,7 @@
 					x2.push(options.lon[point]);
 					y2.push(options.lat[point]);
 					owner.push(track);
+					pointIndex.push(point - options.offsets[track]);
 					const a = this.cellCoordinates(Math.min(x1[segment], x2[segment]), Math.min(y1[segment], y2[segment]));
 					const b = this.cellCoordinates(Math.max(x1[segment], x2[segment]), Math.max(y1[segment], y2[segment]));
 					for (let row = a.row; row <= b.row; row++) {
@@ -324,6 +357,7 @@
 			this.x2 = Float32Array.from(x2);
 			this.y2 = Float32Array.from(y2);
 			this.owner = Uint32Array.from(owner);
+			this.pointIndex = Uint32Array.from(pointIndex);
 			this.seen = new Uint32Array(owner.length);
 			this.stamp = 0;
 		}
@@ -350,6 +384,7 @@
 						this.seen[segment] = this.stamp;
 						const track = this.owner[segment];
 						if (!options.active[track]) continue;
+						if (options.segmentVisible && !options.segmentVisible(track, this.pointIndex[segment])) continue;
 						const first = options.project(this.y1[segment], this.x1[segment]);
 						const second = options.project(this.y2[segment], this.x2[segment]);
 						const distance = pointSegmentDistanceSquared(options.x, options.y, first[0], first[1], second[0], second[1]);
@@ -535,7 +570,7 @@
 	}
 
 	function filterSignature() {
-		return [state.yearMin, state.yearMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, state.metricMin, state.match, state.qc, state.stateIndex, state.stateMin, state.search].join('|');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, state.metricMin, state.match, state.qc, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
 	function applyFilters(options) {
@@ -544,9 +579,13 @@
 		const bits = new Uint8Array(CORE.tracks.length);
 		const query = state.search.trim().toLowerCase();
 		const exactTrackId = /^\d+$/.test(query) ? Number(query) : null;
+		const minimumGenesis = state.timeMode === 'dates' ? Date.parse(`${state.dateMin}T00:00:00Z`) : NaN;
+		const maximumGenesis = state.timeMode === 'dates' ? Date.parse(`${state.dateMax}T23:59:59.999Z`) : NaN;
 		for (let index = 0; index < CORE.tracks.length; index++) {
 			const row = track(index);
-			if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) continue;
+			if (state.timeMode === 'dates') {
+				if (row[T.start_ms] < minimumGenesis || row[T.start_ms] > maximumGenesis) continue;
+			} else if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) continue;
 			if (!monthPass(index)) continue;
 			if (!state.classes.has(row[T.category])) continue;
 			if (percentileMetric(index) < state.metricMin) continue;
@@ -562,6 +601,14 @@
 		updateFilterReadout();
 		mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 		renderCurrentPanel();
+		const autoFitKey = filterSignature();
+		const narrowTime = state.timeMode === 'dates'
+			? Date.parse(state.dateMax) - Date.parse(state.dateMin) <= 3 * 366 * 86400000
+			: state.yearMax - state.yearMin <= 3;
+		if (!(options && options.noAutoFit) && !state.selected && active.length > 0 && active.length <= 80 && narrowTime && lastAutoFitSignature !== autoFitKey) {
+			lastAutoFitSignature = autoFitKey;
+			requestAnimationFrame(() => fitCohort({quiet: true}));
+		}
 		if (!(options && options.noUrl)) writeUrl('replace');
 	}
 
@@ -580,7 +627,8 @@
 		$('#mlaMetricMinValue').textContent = `${state.metricMin}%`;
 		$('#mlaStateMinValue').textContent = `${state.stateMin}%`;
 		const filters = [];
-		if (state.yearMin !== 1940 || state.yearMax !== 2025) filters.push(`${state.yearMin}–${state.yearMax}`);
+		if (state.timeMode === 'dates') filters.push(`Genesis ${state.dateMin} to ${state.dateMax}`);
+		else if (state.yearMin !== 1940 || state.yearMax !== 2025) filters.push(`${state.yearMin}–${state.yearMax}`);
 		if (state.months.size !== 12) filters.push(`${[...state.months].sort((a, b) => a - b).map(month => MONTHS[month - 1]).join(', ')} · ${state.monthMode}`);
 		if (state.classes.size !== 6) filters.push(`${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(', ')} class`);
 		if (state.metricMin) filters.push(`P${state.metricMin} ${physicalThreshold()}`);
@@ -613,8 +661,14 @@
 	}
 
 	function syncControls() {
+		$('#mlaYearFields').hidden = state.timeMode !== 'years';
+		$('#mlaDateFields').hidden = state.timeMode !== 'dates';
+		$('#mlaTimeModeYears').setAttribute('aria-pressed', String(state.timeMode === 'years'));
+		$('#mlaTimeModeDates').setAttribute('aria-pressed', String(state.timeMode === 'dates'));
 		$('#mlaYearMin').value = state.yearMin;
 		$('#mlaYearMax').value = state.yearMax;
+		$('#mlaDateMin').value = state.dateMin;
+		$('#mlaDateMax').value = state.dateMax;
 		$('#mlaMonthMode').value = state.monthMode;
 		$('#mlaMetric').value = state.metric;
 		$('#mlaMetricMin').value = state.metricMin;
@@ -626,12 +680,14 @@
 		$('#mlaMapLayer').value = state.mapLayer;
 		$('#mlaMapColour').value = state.mapColour;
 		$('#mlaMapScope').value = state.mapScope;
+		$('#mlaMapPath').value = state.mapPath;
 		$('#mlaPageSize').value = String(state.pageSize);
 		$('#mlaSystemSort').value = state.sort;
 		$('#mlaExtremeMetric').value = state.extremeMetric;
 		$('#mlaExtremeEligibility').value = state.extremeEligibility;
 		$('#mlaCompareMetric').value = state.compareMetric;
 		$('#mlaCompareAlign').value = state.compareAlign;
+		$('#mlaEvolutionMetric').value = state.evolutionMetric;
 		$$('[data-month]').forEach(button => button.setAttribute('aria-pressed', String(state.months.has(Number(button.dataset.month)))));
 		$$('[data-class]').forEach(button => button.setAttribute('aria-pressed', String(state.classes.has(Number(button.dataset.class)))));
 		$$('[data-season]').forEach(button => {
@@ -662,8 +718,11 @@
 	}
 
 	function resetFilters() {
+		state.timeMode = 'years';
 		state.yearMin = 1940;
 		state.yearMax = 2025;
+		state.dateMin = '1940-05-09';
+		state.dateMax = '2025-12-31';
 		state.months = new Set([6, 7, 8, 9]);
 		state.monthMode = 'active';
 		state.classes = new Set([1, 2, 3, 4, 5, 6]);
@@ -682,8 +741,24 @@
 
 	const debouncedFilter = debounce(() => applyFilters(), 90);
 
+	function setTimeMode(mode) {
+		if (mode === state.timeMode) return;
+		if (mode === 'dates') {
+			state.dateMin = state.yearMin === 1940 ? '1940-05-09' : `${state.yearMin}-01-01`;
+			state.dateMax = `${state.yearMax}-12-31`;
+		} else {
+			state.yearMin = Number(state.dateMin.slice(0, 4));
+			state.yearMax = Number(state.dateMax.slice(0, 4));
+		}
+		state.timeMode = mode;
+		syncControls();
+		applyFilters();
+	}
+
 	function bindControls() {
 		$('#mlaSearch').addEventListener('input', event => { state.search = event.target.value.trim(); debouncedFilter(); });
+		$('#mlaTimeModeYears').addEventListener('click', () => setTimeMode('years'));
+		$('#mlaTimeModeDates').addEventListener('click', () => setTimeMode('dates'));
 		$('#mlaYearMin').addEventListener('change', event => {
 			state.yearMin = clamp(Number(event.target.value) || 1940, 1940, state.yearMax);
 			syncControls();
@@ -691,6 +766,18 @@
 		});
 		$('#mlaYearMax').addEventListener('change', event => {
 			state.yearMax = clamp(Number(event.target.value) || 2025, state.yearMin, 2025);
+			syncControls();
+			applyFilters();
+		});
+		$('#mlaDateMin').addEventListener('change', event => {
+			state.dateMin = event.target.value || '1940-05-09';
+			if (state.dateMin > state.dateMax) state.dateMax = state.dateMin;
+			syncControls();
+			applyFilters();
+		});
+		$('#mlaDateMax').addEventListener('change', event => {
+			state.dateMax = event.target.value || '2025-12-31';
+			if (state.dateMax < state.dateMin) state.dateMin = state.dateMax;
 			syncControls();
 			applyFilters();
 		});
@@ -742,6 +829,14 @@
 		$('#mlaMapLayer').addEventListener('change', event => { state.mapLayer = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY); writeUrl('replace'); });
 		$('#mlaMapColour').addEventListener('change', event => { state.mapColour = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA); writeUrl('replace'); });
 		$('#mlaMapScope').addEventListener('change', event => { state.mapScope = event.target.value; resetMapView(); writeUrl('replace'); });
+		$('#mlaMapPath').addEventListener('change', event => {
+			state.mapPath = event.target.value;
+			renderDossier();
+			if (state.active.length && state.active.length <= 80) fitCohort({quiet: true});
+			else mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+			writeUrl('replace');
+		});
+		$('#mlaFitCohort').addEventListener('click', () => fitCohort());
 		$('#mlaSystemSort').addEventListener('change', event => { state.sort = event.target.value; state.page = 1; renderSystems(); writeUrl('replace'); });
 		$('#mlaPageSize').addEventListener('change', event => { state.pageSize = Number(event.target.value); state.page = 1; renderSystems(); });
 		$('#mlaPrevPage').addEventListener('click', () => { state.page = Math.max(1, state.page - 1); renderSystems(); });
@@ -750,6 +845,7 @@
 		$('#mlaExtremeEligibility').addEventListener('change', event => { state.extremeEligibility = event.target.value; renderExtremes(); });
 		$('#mlaCompareMetric').addEventListener('change', event => { state.compareMetric = event.target.value; renderCompare(); });
 		$('#mlaCompareAlign').addEventListener('change', event => { state.compareAlign = event.target.value; renderCompare(); });
+		$('#mlaEvolutionMetric').addEventListener('change', event => { state.evolutionMetric = event.target.value; renderLifeCharts(); writeUrl('replace'); });
 		$('#mlaLoadProfile').addEventListener('click', () => ensureDetail('Opening detailed cohort series…').then(renderLifeCharts).catch(showFatal));
 		$('#mlaCopyLink').addEventListener('click', copyViewLink);
 		$('#mlaQuickExport').addEventListener('click', downloadSummaries);
@@ -801,7 +897,8 @@
 	function currentUrlParameters() {
 		const parameters = new URLSearchParams();
 		if (state.tab !== 'explore') parameters.set('tab', state.tab);
-		if (state.yearMin !== 1940 || state.yearMax !== 2025) parameters.set('years', `${state.yearMin}-${state.yearMax}`);
+		if (state.timeMode === 'dates') parameters.set('dates', `${state.dateMin},${state.dateMax}`);
+		else if (state.yearMin !== 1940 || state.yearMax !== 2025) parameters.set('years', `${state.yearMin}-${state.yearMax}`);
 		const months = [...state.months].sort((a, b) => a - b);
 		if (months.join(',') !== '6,7,8,9') parameters.set('months', months.join(','));
 		if (state.monthMode !== 'active') parameters.set('month', state.monthMode);
@@ -813,8 +910,10 @@
 		if (state.qc !== 'any') parameters.set('qc', state.qc);
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
-		if (state.mapColour !== 'class') parameters.set('colour', state.mapColour);
+		if (state.mapColour !== 'single') parameters.set('colour', state.mapColour);
 		if (state.mapScope !== 'full') parameters.set('scope', state.mapScope);
+		if (state.mapPath !== 'months') parameters.set('path', state.mapPath);
+		if (state.evolutionMetric !== 'deficit') parameters.set('evolve', state.evolutionMetric);
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
 		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'full') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
@@ -838,6 +937,12 @@
 			state.yearMin = clamp(first, 1940, 2025);
 			state.yearMax = clamp(last, state.yearMin, 2025);
 		}
+		const dates = (parameters.get('dates') || '').split(',');
+		if (dates.length === 2 && dates.every(value => /^\d{4}-\d{2}-\d{2}$/.test(value)) && dates[0] <= dates[1]) {
+			state.timeMode = 'dates';
+			state.dateMin = dates[0];
+			state.dateMax = dates[1];
+		}
 		const months = (parameters.get('months') || '').split(',').map(Number).filter(value => value >= 1 && value <= 12);
 		if (months.length) state.months = new Set(months);
 		if (['active', 'genesis', 'peak'].includes(parameters.get('month'))) state.monthMode = parameters.get('month');
@@ -849,8 +954,10 @@
 		if (['any', 'good', 'usable', 'flagged'].includes(parameters.get('qc'))) state.qc = parameters.get('qc');
 		state.search = parameters.get('q') || '';
 		if (['auto', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
-		if (['class', 'metric', 'year', 'qc'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
+		if (['single', 'class', 'metric', 'year', 'qc'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
+		if (['months', 'full'].includes(parameters.get('path'))) state.mapPath = parameters.get('path');
+		if (METRICS[parameters.get('evolve')] && parameters.get('evolve') !== 'rain') state.evolutionMetric = parameters.get('evolve');
 		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 16);
 		const centre = (parameters.get('centre') || '').split(',').map(Number);
 		if (centre.length === 2 && centre.every(Number.isFinite)) {
@@ -1091,6 +1198,7 @@
 	}
 
 	function trackColour(index) {
+		if (state.mapColour === 'single') return css('--mla-atlas-blue', '#3978a8');
 		if (state.mapColour === 'class') return CLASS_COLOURS[track(index)[T.category]];
 		if (state.mapColour === 'metric') return ramp(percentileMetric(index) / 100);
 		if (state.mapColour === 'year') return ramp((track(index)[T.start_year] - 1940) / (2025 - 1940));
@@ -1100,29 +1208,63 @@
 		return item.ib.confidence === 'high' ? '#08736f' : item.ib.confidence === 'medium' ? '#c3931d' : '#aa3d2d';
 	}
 
+	function pointVisible(trackIndex, pointIndex) {
+		return state.mapPath === 'full' || state.months.has(paths.month[paths.offsets[trackIndex] + pointIndex]);
+	}
+
+	function visiblePointCount(indexes) {
+		if (state.mapPath === 'full') return indexes.reduce((sum, index) => sum + paths.decoded[index].length, 0);
+		let total = 0;
+		for (const index of indexes) {
+			for (const run of CORE.point_month_runs[index] || []) {
+				if (state.months.has(Number(run[2]))) total += Number(run[1]) - Number(run[0]) + 1;
+			}
+		}
+		return total;
+	}
+
+	function visibleTrackBounds(indexes) {
+		let lonMin = Infinity;
+		let lonMax = -Infinity;
+		let latMin = Infinity;
+		let latMax = -Infinity;
+		for (const trackIndex of indexes) {
+			const points = paths.decoded[trackIndex];
+			for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
+				if (!pointVisible(trackIndex, pointIndex)) continue;
+				latMin = Math.min(latMin, points[pointIndex][0]);
+				latMax = Math.max(latMax, points[pointIndex][0]);
+				lonMin = Math.min(lonMin, points[pointIndex][1]);
+				lonMax = Math.max(lonMax, points[pointIndex][1]);
+			}
+		}
+		return Number.isFinite(lonMin) ? [lonMin, latMin, lonMax, latMax] : null;
+	}
+
 	function effectiveLayer() {
 		if (state.mapLayer !== 'auto') return state.mapLayer;
 		return state.active.length > 650 && state.mapZoom < 2.5 ? 'density' : 'tracks';
 	}
 
 	function drawDensity(context, projection) {
-		const counts = new Uint16Array(densityCells.columns * densityCells.rows);
+		const cellsData = currentDensityCells();
+		const counts = new Uint16Array(cellsData.columns * cellsData.rows);
 		let maximum = 0;
 		for (const trackIndex of state.active) {
-			for (const cell of densityCells.perTrack[trackIndex]) {
+			for (const cell of cellsData.perTrack[trackIndex]) {
 				counts[cell]++;
 				if (counts[cell] > maximum) maximum = counts[cell];
 			}
 		}
 		for (let cell = 0; cell < counts.length; cell++) {
 			if (!counts[cell]) continue;
-			const row = Math.floor(cell / densityCells.columns);
-			const col = cell % densityCells.columns;
-			const lon = densityCells.minLon + col * densityCells.cellSize;
-			const lat = densityCells.minLat + row * densityCells.cellSize;
-			if (lon > projection.viewBounds.lonMax || lon + densityCells.cellSize < projection.viewBounds.lonMin || lat > projection.viewBounds.latMax || lat + densityCells.cellSize < projection.viewBounds.latMin) continue;
-			const topLeft = projection.project(lat + densityCells.cellSize, lon);
-			const bottomRight = projection.project(lat, lon + densityCells.cellSize);
+			const row = Math.floor(cell / cellsData.columns);
+			const col = cell % cellsData.columns;
+			const lon = cellsData.minLon + col * cellsData.cellSize;
+			const lat = cellsData.minLat + row * cellsData.cellSize;
+			if (lon > projection.viewBounds.lonMax || lon + cellsData.cellSize < projection.viewBounds.lonMin || lat > projection.viewBounds.latMax || lat + cellsData.cellSize < projection.viewBounds.latMin) continue;
+			const topLeft = projection.project(lat + cellsData.cellSize, lon);
+			const bottomRight = projection.project(lat, lon + cellsData.cellSize);
 			const fraction = Math.sqrt(counts[cell] / Math.max(1, maximum));
 			context.fillStyle = rgba(ramp(fraction), .82);
 			context.fillRect(topLeft[0], topLeft[1], Math.max(1, bottomRight[0] - topLeft[0] + .6), Math.max(1, bottomRight[1] - topLeft[1] + .6));
@@ -1137,6 +1279,7 @@
 		let breakSince = false;
 		for (let index = 0; index < points.length; index++) {
 			if (breaks.has(index)) breakSince = true;
+			if (!pointVisible(trackIndex, index)) { started = false; breakSince = false; continue; }
 			if (index !== points.length - 1 && index % step) continue;
 			const point = projection.project(points[index][0], points[index][1]);
 			if (!started || (breakSince && !includeBreaks)) context.moveTo(point[0], point[1]);
@@ -1155,7 +1298,7 @@
 		}
 		let started = false;
 		for (let index = 0; index < points.length; index++) {
-			if (posterior[index]) { started = false; continue; }
+			if (posterior[index] || !pointVisible(trackIndex, index)) { started = false; continue; }
 			const point = projection.project(points[index][0], points[index][1]);
 			if (!started || breaks.has(index)) context.moveTo(point[0], point[1]);
 			else context.lineTo(point[0], point[1]);
@@ -1204,6 +1347,10 @@
 			node.innerHTML = [1, 2, 3, 4, 5, 6].map(value => `<span class="mla-legend-item"><span class="mla-swatch" style="background:${CLASS_COLOURS[value]}"></span>${CLASS_SHORT[value]}</span>`).join('');
 			return;
 		}
+		if (state.mapColour === 'single') {
+			node.innerHTML = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${trackColour(0)}"></span>v5.3.1 track</span>`;
+			return;
+		}
 		if (state.mapColour === 'qc') {
 			node.innerHTML = QC_LABELS.map((value, index) => `<span class="mla-legend-item"><span class="mla-swatch" style="background:${[css('--mla-good', '#2f7152'), css('--mla-review', '#a06912'), css('--mla-flag', '#a23d34')][index]}"></span>${value}</span>`).join('');
 			return;
@@ -1218,7 +1365,8 @@
 		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection);
 		else if (layer === 'tracks') drawTrackLayer(drawing.context, drawing.projection);
 		else drawPointLayer(drawing.context, drawing.projection, layer);
-		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} systems · ${layer === 'density' ? 'unique-track density' : layer} · zoom ${fmt(state.mapZoom, 1)}×`;
+		const pathLabel = state.mapPath === 'months' ? `${fmt(visiblePointCount(state.active))} selected-month positions` : 'whole lifecycles';
+		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} systems · ${layer === 'density' ? 'unique-track density' : layer} · ${pathLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		mapLegend(layer, maximum);
 	}
 
@@ -1288,9 +1436,12 @@
 			drawing.context.restore();
 		}
 		const selectedPoints = paths.decoded[state.selected];
-		if (selectedPoints.length) {
-			const genesis = drawing.projection.project(selectedPoints[0][0], selectedPoints[0][1]);
-			const lysis = drawing.projection.project(selectedPoints[selectedPoints.length - 1][0], selectedPoints[selectedPoints.length - 1][1]);
+		const visibleIndexes = selectedPoints.map((unused, index) => index).filter(index => pointVisible(state.selected, index));
+		if (visibleIndexes.length) {
+			const firstIndex = visibleIndexes[0];
+			const lastIndex = visibleIndexes[visibleIndexes.length - 1];
+			const genesis = drawing.projection.project(selectedPoints[firstIndex][0], selectedPoints[firstIndex][1]);
+			const lysis = drawing.projection.project(selectedPoints[lastIndex][0], selectedPoints[lastIndex][1]);
 			drawing.context.fillStyle = css('--mla-madder', '#aa3d2d'); drawing.context.beginPath(); drawing.context.arc(genesis[0], genesis[1], 5, 0, Math.PI * 2); drawing.context.fill();
 			drawing.context.fillStyle = css('--mla-peacock', '#08736f'); drawing.context.beginPath(); drawing.context.arc(lysis[0], lysis[1], 5, 0, Math.PI * 2); drawing.context.fill();
 		}
@@ -1340,7 +1491,8 @@
 			radiusLon: radiusPx / projection.scale,
 			radiusLat: radiusPx / projection.scale,
 			project: projection.project,
-			active: state.activeBit
+			active: state.activeBit,
+			segmentVisible: (trackIndex, pointIndex) => pointVisible(trackIndex, pointIndex - 1) && pointVisible(trackIndex, pointIndex)
 		});
 	}
 
@@ -1359,9 +1511,8 @@
 		tip.dataset.visible = 'true';
 	}
 
-	function fitSelected() {
-		if (state.selected == null) return;
-		const bounds = CORE.bounds[state.selected];
+	function fitMapToBounds(bounds) {
+		if (!bounds) return false;
 		const focus = mapBounds();
 		const full = bounds[2] > focus.lonMax || bounds[0] < focus.lonMin || bounds[3] > focus.latMax || bounds[1] < focus.latMin;
 		if (full) state.mapScope = 'full';
@@ -1377,6 +1528,17 @@
 		syncControls();
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
 		writeUrl('replace');
+		return true;
+	}
+
+	function fitSelected() {
+		if (state.selected == null) return;
+		fitMapToBounds(visibleTrackBounds([state.selected]) || CORE.bounds[state.selected]);
+	}
+
+	function fitCohort(options) {
+		if (!state.active.length) return;
+		if (fitMapToBounds(visibleTrackBounds(state.active)) && !(options && options.quiet)) toast(`Fitted ${fmt(state.active.length)} systems`);
 	}
 
 	function bindMap() {
@@ -1500,7 +1662,23 @@
 	function renderDossier() {
 		const node = $('#mlaDossier');
 		if (state.selected == null) {
-			node.innerHTML = '<p class="mla-dossier-empty">Select a track on the map or from a table to open its dossier.</p>';
+			if (!state.active.length) {
+				node.innerHTML = '<div class="mla-dossier-head"><div><h3>No matching systems</h3><p class="mla-dossier-sub">Adjust or reset the active filters.</p></div></div>';
+				return;
+			}
+			const durations = state.active.map(index => Number(track(index)[T.duration_hours]));
+			const support = state.active.map(index => Number(CORE.qc[index][2]));
+			const named = state.active.filter(index => Boolean(officialName(index))).length;
+			const strong = state.active.filter(index => Number(CORE.qc[index][4]) === 0).length;
+			const facts = [
+				['Systems', fmt(state.active.length)],
+				['Median duration', durationText(median(durations))],
+				['Median observed support', `${fmt(median(support), 1)}%`],
+				['Strong continuity support', `${fmt(strong / state.active.length * 100, 1)}%`],
+				['Named cyclone matches', fmt(named)],
+				['Displayed fixes', fmt(visiblePointCount(state.active))]
+			];
+			node.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current cohort</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">${state.mapPath === 'months' ? 'Selected-month fixes' : 'Whole lifecycles'} on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, continuity diagnostics and downloads.</p>`;
 			return;
 		}
 		const index = state.selected;
@@ -1711,6 +1889,139 @@
 		context.restore();
 	}
 
+	function drawEvolutionPlot(trackIndex, metricKey) {
+		const drawing = setupChart('mlaLifeChart');
+		if (!drawing) return null;
+		const definition = METRICS[metricKey];
+		const lineSeries = seriesValues(trackIndex, metricKey);
+		const rainSeries = seriesValues(trackIndex, 'rain');
+		const hours = lineSeries.hours;
+		if (!hours.length) { emptyChart('mlaLifeChart'); return null; }
+		const posterior = new Uint8Array(hours.length);
+		for (const range of CORE.posterior_runs[trackIndex] || []) posterior.fill(1, Number(range[0]), Number(range[1]) + 1);
+		const breakPrefix = new Uint16Array(hours.length + 1);
+		const breakSet = new Set((CORE.breaks[trackIndex] || []).map(item => Number(item[0])));
+		for (let index = 0; index < hours.length; index++) breakPrefix[index + 1] = breakPrefix[index] + (breakSet.has(index) ? 1 : 0);
+		const linePoints = hours.map((hour, index) => ({hour, value: lineSeries.values[index], index})).filter(point => Number.isFinite(point.value));
+		const rainPoints = hours.map((hour, index) => ({hour, value: rainSeries.values[index], index})).filter(point => Number.isFinite(point.value));
+		if (!linePoints.length && !rainPoints.length) { emptyChart('mlaLifeChart'); return null; }
+
+		const {canvas, context, width, height} = drawing;
+		const padding = {left: 58, right: 56, top: 42, bottom: 58};
+		const plotBottom = height - padding.bottom;
+		const plotWidth = width - padding.left - padding.right;
+		const plotHeight = plotBottom - padding.top;
+		const xMin = Number(hours[0]);
+		const xMax = Number(hours[hours.length - 1]);
+		let yMin = Math.min(...linePoints.map(point => point.value));
+		let yMax = Math.max(...linePoints.map(point => point.value));
+		if (['deficit', 'wind'].includes(metricKey)) yMin = Math.min(0, yMin);
+		if (yMin === yMax) { yMin -= 1; yMax += 1; }
+		const yPad = (yMax - yMin) * .08;
+		yMax += yPad;
+		if (yMin !== 0) yMin -= yPad;
+		const rainMax = Math.max(1, ...rainPoints.map(point => point.value)) * 1.08;
+		const X = value => padding.left + (value - xMin) / ((xMax - xMin) || 1) * plotWidth;
+		const Y = value => plotBottom - (value - yMin) / ((yMax - yMin) || 1) * plotHeight;
+		const R = value => plotBottom - value / rainMax * plotHeight;
+		const timeLabel = value => xMax >= 96 ? `${fmt(value / 24, 1)} d` : `${fmt(value)} h`;
+
+		context.save();
+		context.font = '11px ui-monospace, Consolas, monospace';
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		context.strokeStyle = 'rgba(70, 60, 45, .16)';
+		for (let tick = 0; tick <= 4; tick++) {
+			const y = padding.top + tick * plotHeight / 4;
+			const leftValue = yMax - tick * (yMax - yMin) / 4;
+			const rightValue = rainMax * (4 - tick) / 4;
+			context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+			context.textAlign = 'left'; context.fillText(fmt(leftValue, 1), 6, y + 4);
+			context.textAlign = 'right'; context.fillText(fmt(rightValue, 0), width - 6, y + 4);
+		}
+		for (let tick = 0; tick <= 4; tick++) {
+			const value = xMin + tick * (xMax - xMin) / 4;
+			context.textAlign = tick === 0 ? 'left' : tick === 4 ? 'right' : 'center';
+			context.fillText(timeLabel(value), X(value), height - 12);
+		}
+		context.textAlign = 'left';
+		context.font = '12px Aptos, Segoe UI, sans-serif';
+		context.fillStyle = definition.colour;
+		context.fillRect(padding.left, 16, 18, 3);
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.fillText(`${definition.title} (${definition.unit})`, padding.left + 24, 21);
+		const rainLegendX = Math.min(width - 126, padding.left + 215);
+		context.fillStyle = rgba(METRICS.rain.colour, .52);
+		context.fillRect(rainLegendX, 13, 10, 10);
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.fillText('24 h rain (mm)', rainLegendX + 16, 21);
+
+		const estimatedStep = hours.length > 1 ? median(hours.slice(1).map((value, index) => value - hours[index]).filter(value => value > 0)) : 1;
+		const barWidth = clamp(plotWidth * Math.max(.6, estimatedStep) / Math.max(1, xMax - xMin), .8, 7);
+		for (const point of rainPoints) {
+			const x = X(point.hour) - barWidth / 2;
+			context.fillStyle = rgba(METRICS.rain.colour, .32);
+			context.fillRect(x, R(point.value), barWidth, Math.max(0, plotBottom - R(point.value)));
+		}
+
+		context.beginPath();
+		let previous = null;
+		for (const point of linePoints) {
+			const hasStructuralBreak = previous && breakPrefix[point.index + 1] > breakPrefix[previous.index + 1];
+			const shortBridge = previous && point.hour - previous.hour <= 6 && !hasStructuralBreak;
+			if (!shortBridge) context.moveTo(X(point.hour), Y(point.value));
+			else context.lineTo(X(point.hour), Y(point.value));
+			previous = point;
+		}
+		context.strokeStyle = definition.colour;
+		context.lineWidth = 2.35;
+		context.lineJoin = 'round';
+		context.lineCap = 'round';
+		context.stroke();
+		if (linePoints.length <= 160) {
+			context.fillStyle = definition.colour;
+			for (const point of linePoints) { context.beginPath(); context.arc(X(point.hour), Y(point.value), 1.7, 0, Math.PI * 2); context.fill(); }
+		}
+
+		const coverageY = plotBottom + 10;
+		const coverageHeight = 7;
+		for (let index = 0; index < hours.length; index++) {
+			const leftHour = index ? (hours[index - 1] + hours[index]) / 2 : hours[index];
+			const rightHour = index + 1 < hours.length ? (hours[index] + hours[index + 1]) / 2 : hours[index];
+			context.fillStyle = posterior[index] ? 'rgba(104, 92, 77, .28)' : rgba(css('--mla-good', '#2f7152'), .72);
+			context.fillRect(X(leftHour), coverageY, Math.max(1, X(rightHour) - X(leftHour) + .4), coverageHeight);
+		}
+		context.font = '10px Aptos, Segoe UI, sans-serif';
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		context.fillText('coverage', 6, coverageY + 7);
+		context.restore();
+
+		const observedCount = hours.length - posterior.reduce((sum, value) => sum + value, 0);
+		const summary = `${fmt(observedCount)} of ${fmt(hours.length)} linked positions have detector meteorology (${fmt(observedCount / hours.length * 100, 1)}%); grey intervals are inferred continuity positions.`;
+		const readout = $('#mlaLifeReadout');
+		readout.textContent = summary;
+		function showPoint(event) {
+			const rectangle = canvas.getBoundingClientRect();
+			const targetHour = xMin + clamp((event.clientX - rectangle.left - padding.left) / Math.max(1, rectangle.width - padding.left - padding.right), 0, 1) * (xMax - xMin);
+			let low = 0;
+			let high = hours.length - 1;
+			while (low < high) {
+				const middle = Math.floor((low + high) / 2);
+				if (hours[middle] < targetHour) low = middle + 1; else high = middle;
+			}
+			const index = low > 0 && Math.abs(hours[low - 1] - targetHour) < Math.abs(hours[low] - targetHour) ? low - 1 : low;
+			if (posterior[index]) {
+				readout.textContent = `${timeLabel(hours[index])} from genesis · inferred continuity position · detector meteorology unavailable.`;
+				return;
+			}
+			readout.textContent = `${timeLabel(hours[index])} from genesis · ${definition.title} ${fmt(lineSeries.values[index], 1)} ${definition.unit} · 24 h rain ${fmt(rainSeries.values[index], 1)} mm.`;
+		}
+		canvas.onpointermove = showPoint;
+		canvas.onpointerdown = showPoint;
+		canvas.onpointerleave = () => { readout.textContent = summary; };
+		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars and observed-position coverage for ${systemLabel(trackIndex)}`);
+		return {hours, lineValues: lineSeries.values, rainValues: rainSeries.values, posterior, summary};
+	}
+
 	function drawBars(id, items, options) {
 		const drawing = setupChart(id);
 		if (!drawing) return;
@@ -1821,12 +2132,12 @@
 			annual.set(year, (annual.get(year) || 0) + 1);
 		}
 		const annualPoints = [];
-		for (let year = state.yearMin; year <= state.yearMax; year++) {
+		for (let year = periodYearMin(); year <= periodYearMax(); year++) {
 			if (!completeYear(year)) continue;
 			annualPoints.push({x: year, y: annual.get(year) || 0});
 		}
 		drawLinePlot('mlaAnnualChart', [{name: 'Systems', colour: css('--mla-indigo', '#233f78'), points: annualPoints}], {zero: true, xFormat: value => String(Math.round(value)), yFormat: value => fmt(value)});
-		$('#mlaAnnualData').innerHTML = accessibleTable(['Year', 'Systems'], annualPoints.map(point => [point.x, point.y]), state.yearMax > COMPLETE_END_YEAR ? '2026 is partial and excluded.' : '');
+		$('#mlaAnnualData').innerHTML = accessibleTable(['Year', 'Systems'], annualPoints.map(point => [point.x, point.y]), periodYearMax() > COMPLETE_END_YEAR ? '2026 is partial and excluded.' : '');
 
 		const monthly = Array(12).fill(0);
 		for (const index of state.active) {
@@ -1840,13 +2151,13 @@
 		drawBars('mlaMonthChart', MONTHS.map((label, index) => ({label, value: monthly[index], colour: index >= 5 && index <= 8 ? css('--mla-peacock', '#08736f') : css('--mla-saffron', '#c9631b')})));
 		$('#mlaMonthData').innerHTML = accessibleTable(['Month', state.monthMode === 'active' ? 'Event-months' : 'Systems'], MONTHS.map((month, index) => [month, monthly[index]]));
 
-		const decadeStart = Math.floor(state.yearMin / 10) * 10;
+		const decadeStart = Math.floor(periodYearMin() / 10) * 10;
 		const decades = [];
-		for (let value = decadeStart; value <= Math.min(state.yearMax, COMPLETE_END_YEAR); value += 10) decades.push(value);
+		for (let value = decadeStart; value <= Math.min(periodYearMax(), COMPLETE_END_YEAR); value += 10) decades.push(value);
 		const classMatrix = decades.map(() => Array(6).fill(0));
 		const exposure = decades.map(decade => {
 			let years = 0;
-			for (let year = Math.max(decade, state.yearMin); year <= Math.min(decade + 9, state.yearMax); year++) if (completeYear(year)) years++;
+			for (let year = Math.max(decade, periodYearMin()); year <= Math.min(decade + 9, periodYearMax()); year++) if (completeYear(year)) years++;
 			return Math.max(1, years);
 		});
 		for (const index of state.active) {
@@ -1881,17 +2192,25 @@
 		if (state.selected == null) {
 			emptyChart('mlaLifeChart', 'Select a system to view raw meteorology');
 			$('#mlaLifeData').innerHTML = '';
+			$('#mlaLifeReadout').textContent = 'Select a system to inspect observed weather values and inferred continuity intervals.';
 		} else if (!DETAIL) {
 			emptyChart('mlaLifeChart', 'Loading selected-system detail…');
+			$('#mlaLifeReadout').textContent = 'Loading hourly detector meteorology…';
 			ensureDetail().then(renderLifeCharts).catch(showFatal);
 		} else {
-			const definition = metric();
-			const series = seriesValues(state.selected, state.metric);
-			const breaks = new Set((CORE.breaks[state.selected] || []).map(item => Number(item[0])));
-			const points = series.hours.map((hour, index) => ({x: hour, y: series.values[index], breakBefore: breaks.has(index)}));
-			drawLinePlot('mlaLifeChart', [{name: `${definition.title} (${definition.unit})`, colour: definition.colour, points}], {zero: definition.direction > 0 && state.metric !== 'vort', xFormat: value => `+${fmt(value)}h`, yFormat: value => fmt(value, 1)});
-			const stride = Math.max(1, Math.ceil(points.length / 80));
-			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', `${definition.title} (${definition.unit})`], points.filter((unused, index) => index % stride === 0 || index === points.length - 1).map(point => [point.x, fmt(point.y, 2)]));
+			const definition = METRICS[state.evolutionMetric];
+			const evolution = drawEvolutionPlot(state.selected, state.evolutionMetric);
+			const stride = Math.max(1, Math.ceil(evolution.hours.length / 160));
+			const rows = evolution.hours.map((hour, index) => ({hour, index})).filter((item, index) => {
+				const transition = index && evolution.posterior[index] !== evolution.posterior[index - 1];
+				return index % stride === 0 || transition || index === evolution.hours.length - 1;
+			}).map(item => [
+				item.hour,
+				evolution.posterior[item.index] ? 'Inferred continuity' : 'Observed detector fix',
+				fmt(evolution.lineValues[item.index], 2),
+				fmt(evolution.rainValues[item.index], 2)
+			]);
+			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', 'Position source', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Lines bridge observed fixes only when they are no more than six hours apart; longer and structural gaps remain broken.');
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
@@ -1941,7 +2260,8 @@
 
 	function cohortDescription() {
 		const months = [...state.months].sort((a, b) => a - b).map(value => MONTHS[value - 1]).join('/');
-		return `${state.yearMin}–${state.yearMax}; ${months}; ${state.monthMode}; ${state.metricMin ? `P${state.metricMin}+ ${metric().title}` : 'all intensities'}; ${fmt(state.active.length)} systems`;
+		const period = state.timeMode === 'dates' ? `${state.dateMin} to ${state.dateMax}` : `${state.yearMin}–${state.yearMax}`;
+		return `${period}; ${months}; ${state.monthMode}; ${state.metricMin ? `P${state.metricMin}+ ${metric().title}` : 'all intensities'}; ${fmt(state.active.length)} systems`;
 	}
 
 	function pinCurrentA() {
@@ -2182,8 +2502,11 @@
 			catalogue_coverage: {start: CORE.meta.coverage_start, end: CORE.meta.coverage_end},
 			source_sha256: CORE.meta.core_catalogue_sha256,
 			filters: {
-				year_min: state.yearMin,
-				year_max: state.yearMax,
+				genesis_time_mode: state.timeMode,
+				year_min: state.timeMode === 'years' ? state.yearMin : null,
+				year_max: state.timeMode === 'years' ? state.yearMax : null,
+				date_min: state.timeMode === 'dates' ? state.dateMin : null,
+				date_max: state.timeMode === 'dates' ? state.dateMax : null,
 				months: [...state.months].sort((a, b) => a - b),
 				month_definition: state.monthMode,
 				atlas_peak_classes: [...state.classes].sort((a, b) => a - b),
@@ -2192,6 +2515,7 @@
 				continuity_screen: state.qc,
 				search: state.search || null
 			},
+			view: {map_layer: state.mapLayer, map_colour: state.mapColour, map_track_period: state.mapPath, map_scope: state.mapScope, evolution_metric: state.evolutionMetric},
 			selected_atlas_track_id: state.selected == null ? null : atlasId(state.selected),
 			matching_atlas_track_ids: state.active.map(atlasId),
 			url: window.location.href,

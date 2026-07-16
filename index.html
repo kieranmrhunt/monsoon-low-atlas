@@ -21,6 +21,7 @@
 	--mla-line-strong: color-mix(in srgb, var(--mla-ink) 34%, var(--mla-paper) 66%);
 	--mla-indigo: #233f78;
 	--mla-indigo-deep: #17294f;
+	--mla-atlas-blue: #3978a8;
 	--mla-peacock: #08736f;
 	--mla-peacock-dark: #065a57;
 	--mla-madder: #aa3d2d;
@@ -140,17 +141,23 @@
 .mla-btn-icon { width: 40px; padding: 7px; display: inline-grid; place-items: center; }
 .mla-chip { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 .mla-chip[aria-pressed="true"],
-.mla-btn[aria-pressed="true"],
-.mla-tab[aria-selected="true"] {
-	background: #17294f;
-	border-color: #17294f;
-	color: #fffdf6 !important;
+.mla-btn[aria-pressed="true"] {
+	background: #d9ebe4;
+	border-color: #08736f;
+	color: #064744 !important;
 	font-weight: 650;
-	box-shadow: inset 0 0 0 1px rgba(255, 253, 246, .24);
+	box-shadow: inset 0 0 0 1px rgba(8, 115, 111, .14);
+}
+.mla-tab[aria-selected="true"] {
+	background: #e3e8f2;
+	border-color: #233f78;
+	color: #17294f !important;
+	font-weight: 650;
+	box-shadow: inset 0 -3px 0 #233f78;
 }
 .mla-chip[aria-pressed="true"]:hover,
-.mla-btn[aria-pressed="true"]:hover,
-.mla-tab[aria-selected="true"]:hover { background: #0f203f; border-color: #0f203f; }
+.mla-btn[aria-pressed="true"]:hover { background: #c9e3da; border-color: #065a57; }
+.mla-tab[aria-selected="true"]:hover { background: #d5ddec; border-color: #17294f; }
 .mla-btn:disabled { cursor: not-allowed; opacity: .58; transform: none; }
 
 .mla-status-pill,
@@ -205,7 +212,7 @@
 	margin-bottom: 14px;
 	overflow: clip;
 }
-.mla-filter-primary { display: grid; grid-template-columns: minmax(210px, 1.4fr) minmax(190px, .8fr) minmax(170px, .7fr) minmax(220px, 1fr); gap: 10px; padding: 12px; align-items: end; }
+.mla-filter-primary { display: grid; grid-template-columns: minmax(210px, 1.3fr) minmax(280px, 1fr) minmax(170px, .7fr) minmax(220px, 1fr); gap: 10px; padding: 12px; align-items: end; }
 .mla-field { display: grid; gap: 5px; min-width: 0; }
 .mla-label { font-size: 12px; font-weight: 500; color: var(--mla-muted); }
 .mla-control,
@@ -220,6 +227,12 @@
 .mla-range { width: 100%; accent-color: var(--mla-peacock); }
 .mla-year-fields { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; }
 .mla-year-fields input { min-width: 0; }
+.mla-period-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mla-period-toggle { display: inline-flex; gap: 4px; }
+.mla-period-toggle .mla-btn { min-height: 28px; padding: 3px 9px; font-size: 12px; }
+.mla-date-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px; align-items: end; }
+.mla-date-fields label { display: grid; gap: 2px; min-width: 0; color: var(--mla-muted); font-size: 10px; }
+.mla-date-fields input { min-width: 0; padding-inline: 6px; font-size: 12px; }
 .mla-filter-more { border-top: 1px solid var(--mla-line); }
 .mla-filter-more > summary { cursor: pointer; list-style: none; padding: 10px 13px; font-weight: 500; color: var(--mla-muted); }
 .mla-filter-more > summary::-webkit-details-marker { display: none; }
@@ -248,6 +261,8 @@
 .mla-map-head h3 { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 500; margin: 0; }
 .mla-map-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .mla-map-tools .mla-select { width: auto; min-height: 36px; padding: 6px 8px; font-size: 13px; }
+.mla-map-control { display: grid; gap: 2px; color: var(--mla-muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.mla-map-control .mla-select { color: var(--mla-ink); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .mla-map-stack { position: relative; height: 610px; overflow: hidden; background: var(--mla-sea); }
 .mla-map-layer { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
 #mlaMapOverlay { cursor: grab; touch-action: none; }
@@ -312,6 +327,9 @@
 .mla-chart-card { padding: 13px; }
 .mla-chart-card h3 { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 500; margin: 0 0 3px; }
 .mla-chart-card p { margin: 0 0 8px; color: var(--mla-muted); font-size: 13px; }
+.mla-chart-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 3px; }
+.mla-chart-head .mla-field { width: min(230px, 48%); }
+.mla-chart-readout { min-height: 22px; margin: 7px 2px 0 !important; color: var(--mla-ink) !important; font-variant-numeric: tabular-nums; }
 .mla-chart { display: block; width: 100%; height: 300px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card-strong); }
 .mla-chart-wide { grid-column: 1 / -1; }
 .mla-chart-wide .mla-chart { height: 340px; }
@@ -404,6 +422,9 @@
 	.mla-map-stack { height: 320px; }
 	.mla-map-tools .mla-select { width: 100%; }
 	.mla-map-tools { width: 100%; }
+	.mla-map-control { width: 100%; }
+	.mla-chart-head { display: block; }
+	.mla-chart-head .mla-field { width: 100%; margin-top: 8px; }
 	.mla-btn,
 	.mla-tab { min-height: 44px; }
 }
@@ -433,8 +454,8 @@
 			<dl class="mla-release-strip" aria-label="Catalogue coverage">
 				<div><dt>Systems</dt><dd>2,918</dd></div>
 				<div><dt>Linked positions</dt><dd>620,292</dd></div>
-				<div><dt>Observed fixes</dt><dd>442,479</dd></div>
-				<div><dt>Gap posterior</dt><dd>177,813</dd></div>
+				<div><dt>Observed meteorology</dt><dd>442,479 · 71.3%</dd></div>
+				<div><dt>Inferred continuity</dt><dd>177,813 · 28.7%</dd></div>
 			</dl>
 		</div>
 	</header>
@@ -460,16 +481,21 @@
 			<div class="mla-filter-primary">
 				<label class="mla-field" for="mlaSearch">
 					<span class="mla-label">Find a system</span>
-					<input class="mla-control" id="mlaSearch" type="search" placeholder="Track ID or date">
+					<input class="mla-control" id="mlaSearch" type="search" placeholder="Cyclone name, DD 1986 03, track ID or date">
 				</label>
 				<div class="mla-field">
-					<span class="mla-label">Genesis years</span>
-					<div class="mla-year-fields">
+					<div class="mla-period-head"><span class="mla-label">Genesis period</span><div class="mla-period-toggle" role="group" aria-label="Filter genesis by years or dates"><button class="mla-btn mla-btn-small" id="mlaTimeModeYears" type="button" aria-pressed="true">Years</button><button class="mla-btn mla-btn-small" id="mlaTimeModeDates" type="button" aria-pressed="false">Dates</button></div></div>
+					<div class="mla-year-fields" id="mlaYearFields">
 						<label class="mla-sr-only" for="mlaYearMin">First genesis year</label>
 						<input class="mla-control" id="mlaYearMin" type="number" min="1940" max="2025" value="1940">
 						<span aria-hidden="true">–</span>
 						<label class="mla-sr-only" for="mlaYearMax">Last genesis year</label>
 						<input class="mla-control" id="mlaYearMax" type="number" min="1940" max="2025" value="2025">
+					</div>
+					<div class="mla-date-fields" id="mlaDateFields" hidden>
+						<label for="mlaDateMin"><span>From (YYYY-MM-DD)</span><input class="mla-control" id="mlaDateMin" type="date" min="1940-05-09" max="2025-12-31" value="1940-05-09"></label>
+						<span aria-hidden="true">–</span>
+						<label for="mlaDateMax"><span>To (YYYY-MM-DD)</span><input class="mla-control" id="mlaDateMax" type="date" min="1940-05-09" max="2025-12-31" value="2025-12-31"></label>
 					</div>
 				</div>
 				<label class="mla-field" for="mlaMonthMode">
@@ -571,28 +597,13 @@
 					<div class="mla-map-head">
 						<h3 id="mlaMapHeading">Tracks and density</h3>
 						<div class="mla-map-tools">
-							<label class="mla-sr-only" for="mlaMapLayer">Map layer</label>
-							<select class="mla-select" id="mlaMapLayer">
-								<option value="auto">Auto: density then tracks</option>
-								<option value="density">Unique-track density</option>
-								<option value="tracks">Individual tracks</option>
-								<option value="genesis">Genesis locations</option>
-								<option value="lysis">Lysis locations</option>
-							</select>
-							<label class="mla-sr-only" for="mlaMapColour">Track colour</label>
-							<select class="mla-select" id="mlaMapColour">
-								<option value="class">Atlas class</option>
-								<option value="metric">Selected percentile</option>
-								<option value="year">Genesis year</option>
-								<option value="qc">Continuity screen</option>
-							</select>
-							<label class="mla-sr-only" for="mlaMapScope">Map scope</label>
-							<select class="mla-select" id="mlaMapScope">
-								<option value="southasia">Indian monsoon core</option>
-								<option value="full">Full catalogue domain</option>
-							</select>
+							<label class="mla-map-control" for="mlaMapLayer"><span>Layer</span><select class="mla-select" id="mlaMapLayer"><option value="auto">Auto: density then tracks</option><option value="density">Unique-track density</option><option value="tracks">Individual tracks</option><option value="genesis">Genesis locations</option><option value="lysis">Lysis locations</option></select></label>
+							<label class="mla-map-control" for="mlaMapColour"><span>Colour</span><select class="mla-select" id="mlaMapColour"><option value="single">Single atlas blue</option><option value="class">Atlas class</option><option value="metric">Selected percentile</option><option value="year">Genesis year</option><option value="qc">Continuity screen</option></select></label>
+							<label class="mla-map-control" for="mlaMapPath"><span>Track period</span><select class="mla-select" id="mlaMapPath"><option value="months">Selected months only</option><option value="full">Whole system lifecycle</option></select></label>
+							<label class="mla-map-control" for="mlaMapScope"><span>Geography</span><select class="mla-select" id="mlaMapScope"><option value="southasia">Indian monsoon core</option><option value="full">Full catalogue domain</option></select></label>
 							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button>
 							<button class="mla-btn mla-btn-small" id="mlaZoomReset" type="button">Reset view</button>
+							<button class="mla-btn mla-btn-small" id="mlaFitCohort" type="button">Fit cohort</button>
 							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomIn" type="button" aria-label="Zoom in">+</button>
 						</div>
 					</div>
@@ -614,7 +625,7 @@
 				</aside>
 			</div>
 			<div class="mla-chart-grid" style="margin-top:14px">
-				<section class="mla-card mla-chart-card"><h3>Selected-system weather</h3><p>Raw physical values for the selected filter metric; posterior positions remain blank.</p><canvas class="mla-chart" id="mlaLifeChart" role="img" aria-label="Meteorological time series for the selected atlas system"></canvas><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
+				<section class="mla-card mla-chart-card"><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Maximum wind (m s⁻¹)</option><option value="vort">Smoothed vorticity</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Line: observed detector values, bridged across at most 6 h. Bars: 24 h rainfall. Coverage strip: observed (green) or inferred continuity without meteorology (grey).</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
 				<section class="mla-card mla-chart-card"><h3>Cohort evolution</h3><p>Median and interquartile range in physical units; each system contributes once per life-fraction bin.</p><button class="mla-btn mla-btn-small" id="mlaLoadProfile" type="button">Load detailed cohort profile</button><canvas class="mla-chart" id="mlaProfileChart" role="img" aria-label="Median lifecycle evolution for the filtered cohort"></canvas><details class="mla-a11y-data"><summary>Accessible cohort summary</summary><div id="mlaProfileData"></div></details></section>
 			</div>
 			<section class="mla-card mla-section-card">
@@ -699,9 +710,9 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.4e4e3e99a0ca.json.gz","detail":"assets/atlas-detail.f70667357eee.json.gz"}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.5aea0dde7066.json.gz","detail":"assets/atlas-detail.f70667357eee.json.gz"}</script>
 
-<script src="assets/atlas-app.cd235bd4e413.js"></script>
+<script src="assets/atlas-app.0485d4435774.js"></script>
 
 </body>
 </html>

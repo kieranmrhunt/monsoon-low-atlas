@@ -8,6 +8,8 @@ Notes:
 
 - Peak classes are ERA5-derived IMD-equivalent classes, not official IMD classifications.
 - Gap-posterior rows preserve linked-track continuity, carry no detector physics and never count as observations.
+- The default map draws only fixes in the selected months; whole-system lifecycles remain available from the Track period control.
+- Selected-system evolution joins observed values across gaps of at most six hours, breaks longer gaps, shows exact observed/posterior coverage, and overlays 24-hour rainfall bars.
 - Cyclone names come from a v5.3.1-specific match to NOAA IBTrACS v04r01 NI and WP best tracks. Low-confidence matches remain unnamed.
 - State-rainfall diagnostics are intentionally not mixed into the v5.3.1 build; they need to be recomputed against the new identities.
 - The split build loads compressed catalogue payloads from `assets/*.json.gz` and decompresses them in modern browsers.
