@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Match LPS v5.3.1 identities to IBTrACS tracks using observed fixes only."""
+"""Match LPS v5.4 identities to IBTrACS tracks using observed support only."""
 
 from __future__ import annotations
 
@@ -229,9 +229,19 @@ def main() -> None:
     args = parse_args()
     table = pq.read_table(
         args.parquet,
-        columns=["track_id", "time", "lat", "lon", "candidate_diagnostics_available"],
+        columns=[
+            "track_id",
+            "time",
+            "lat_smooth_global_v54",
+            "lon_smooth_global_v54",
+            "candidate_diagnostics_available",
+        ],
     )
     catalogue = table.to_pandas()
+    catalogue.rename(
+        columns={"lat_smooth_global_v54": "lat", "lon_smooth_global_v54": "lon"},
+        inplace=True,
+    )
     catalogue["time"] = pd.to_datetime(catalogue["time"], utc=True)
     catalogue = catalogue.loc[catalogue["candidate_diagnostics_available"].astype(bool)].copy()
     catalogue.sort_values(["track_id", "time"], kind="mergesort", inplace=True)
@@ -319,10 +329,10 @@ def main() -> None:
         ),
     }
     payload = {
-        "schema": "lps-v5.3.1-ibtracs-v04r01-crosswalk-v1",
+        "schema": "lps-v5.4-ibtracs-v04r01-crosswalk-v1",
         "source": "NOAA NCEI IBTrACS v04r01 NI and WP basin CSVs",
         "method": {
-            "positions": "Observed LPS detector fixes only; gap-posterior positions are excluded.",
+            "positions": "Published v5.4 centres at observed-support times only; interpolated positions are excluded.",
             "maximum_time_delta_hours": MAX_TIME_DELTA_HOURS,
             "maximum_median_separation_km": MAX_MEDIAN_KM,
             "maximum_p90_separation_km": MAX_P90_KM,
