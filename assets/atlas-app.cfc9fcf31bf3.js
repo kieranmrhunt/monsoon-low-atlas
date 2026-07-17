@@ -45,6 +45,8 @@
 		rh: {label: 'RH850', title: 'RH850', series: 'rh850_x10', divisor: 10, unit: '%', colour: '#477a4a', direction: 1}
 	};
 	const FILTER_METRIC_KEYS = ['deficit', 'vort', 'wind', 'mslp', 'rain'];
+	const PROFILE_METRIC_KEYS = ['deficit', 'wind', 'vort', 'rain', 'mslp', 'q', 'rh'];
+	const DEFAULT_PROFILE_METRICS = ['deficit', 'wind', 'rain'];
 
 	const state = {
 		tab: 'explore',
@@ -80,7 +82,8 @@
 		sort: 'metric-desc',
 		extremeMetric: 'duration',
 		extremeEligibility: 'all',
-		evolutionMetric: 'deficit'
+		evolutionMetric: 'deficit',
+		profileMetrics: new Set(DEFAULT_PROFILE_METRICS)
 	};
 
 	function css(name, fallback) {
@@ -650,6 +653,7 @@
 	function buildFilterControls() {
 		$('#mlaMonthChips').innerHTML = MONTHS.map((name, index) => `<button class="mla-chip" type="button" data-month="${index + 1}" aria-pressed="${state.months.has(index + 1)}">${name}</button>`).join('');
 		$('#mlaClassChips').innerHTML = [1, 2, 3, 4, 5, 6].map(value => `<button class="mla-chip" type="button" data-class="${value}" aria-pressed="true">${esc(CLASS_SHORT[value])}</button>`).join('');
+		$('#mlaProfileMetrics').innerHTML = PROFILE_METRIC_KEYS.map(key => `<button class="mla-chip" type="button" data-profile-metric="${key}" aria-pressed="${state.profileMetrics.has(key)}">${esc(METRICS[key].title)}</button>`).join('');
 		const stateSelect = $('#mlaState');
 		CORE.states.forEach((name, index) => {
 			const option = document.createElement('option');
@@ -703,6 +707,7 @@
 		$('#mlaEvolutionMetric').value = state.evolutionMetric;
 		$$('[data-month]').forEach(button => button.setAttribute('aria-pressed', String(state.months.has(Number(button.dataset.month)))));
 		$$('[data-class]').forEach(button => button.setAttribute('aria-pressed', String(state.classes.has(Number(button.dataset.class)))));
+		$$('[data-profile-metric]').forEach(button => button.setAttribute('aria-pressed', String(state.profileMetrics.has(button.dataset.profileMetric))));
 		$$('[data-season]').forEach(button => {
 			const preset = SEASON_MONTHS[button.dataset.season] || [];
 			const selected = state.months.size === preset.length && preset.every(month => state.months.has(month));
@@ -728,6 +733,15 @@
 		else state.classes.add(category);
 		syncControls();
 		applyFilters();
+	}
+
+	function toggleProfileMetric(key) {
+		if (!PROFILE_METRIC_KEYS.includes(key)) return;
+		if (state.profileMetrics.has(key) && state.profileMetrics.size > 1) state.profileMetrics.delete(key);
+		else state.profileMetrics.add(key);
+		syncControls();
+		renderLifeCharts();
+		writeUrl('replace');
 	}
 
 	function resetFilters() {
@@ -835,6 +849,10 @@
 			const button = event.target.closest('[data-class]');
 			if (button) toggleClass(Number(button.dataset.class));
 		});
+		$('#mlaProfileMetrics').addEventListener('click', event => {
+			const button = event.target.closest('[data-profile-metric]');
+			if (button) toggleProfileMetric(button.dataset.profileMetric);
+		});
 		$('#mlaSeasonPresets').addEventListener('click', event => {
 			const button = event.target.closest('[data-season]');
 			if (!button) return;
@@ -937,6 +955,8 @@
 		if (state.mapScope !== 'full') parameters.set('scope', state.mapScope);
 		if (state.mapPath !== 'months') parameters.set('path', state.mapPath);
 		if (state.evolutionMetric !== 'deficit') parameters.set('evolve', state.evolutionMetric);
+		const profileMetrics = PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key));
+		if (profileMetrics.join(',') !== DEFAULT_PROFILE_METRICS.join(',')) parameters.set('profiles', profileMetrics.join(','));
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
 		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'full') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
@@ -986,6 +1006,8 @@
 		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
 		if (['months', 'full'].includes(parameters.get('path'))) state.mapPath = parameters.get('path');
 		if (METRICS[parameters.get('evolve')] && parameters.get('evolve') !== 'rain') state.evolutionMetric = parameters.get('evolve');
+		const profileMetrics = (parameters.get('profiles') || '').split(',').filter(key => PROFILE_METRIC_KEYS.includes(key));
+		if (profileMetrics.length) state.profileMetrics = new Set(profileMetrics);
 		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 16);
 		const centre = (parameters.get('centre') || '').split(',').map(Number);
 		if (centre.length === 2 && centre.every(Number.isFinite)) {
@@ -2235,14 +2257,41 @@
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
-			emptyChart('mlaProfileChart', 'Load the detailed cohort profile when needed');
+			$('#mlaProfileStack').innerHTML = '<canvas class="mla-chart mla-profile-chart" id="mlaProfilePlaceholder" role="img" aria-label="Cohort profiles are ready to load"></canvas>';
+			emptyChart('mlaProfilePlaceholder', 'Load the cohort variables when needed');
 			$('#mlaProfileData').innerHTML = '';
 			return;
 		}
 		profileButton.hidden = true;
-		const profile = cohortProfile(state.active, state.metric, 'life');
-		drawLinePlot('mlaProfileChart', [{name: `${metric().title} median`, colour: metric().colour, points: profile.points}], {zero: state.metric !== 'mslp' && state.metric !== 'vort', xMin: 0, xMax: 100, xFormat: value => `${fmt(value)}%`, yFormat: value => fmt(value, 1)});
-		$('#mlaProfileData').innerHTML = accessibleTable(['Life fraction', 'Median', 'Q1', 'Q3', 'Systems'], profile.points.map(point => [`${fmt(point.x)}%`, fmt(point.y, 2), fmt(point.low, 2), fmt(point.high, 2), point.n]));
+		const profileMetrics = PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key));
+		const stack = $('#mlaProfileStack');
+		stack.innerHTML = profileMetrics.map(key => {
+			const definition = METRICS[key];
+			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title} median and interquartile range over the filtered cohort lifecycle`)}"></canvas></div>`;
+		}).join('');
+		const accessibleProfiles = [];
+		for (const key of profileMetrics) {
+			const definition = METRICS[key];
+			const profile = cohortProfile(state.active, key, 'life');
+			const maximumN = Math.max(0, ...profile.points.map(point => point.n));
+			$(`#mlaProfileMeta-${key}`).textContent = `${definition.unit} · max n ${fmt(maximumN)}`;
+			drawLinePlot(`mlaProfileChart-${key}`, [{
+				name: 'Median + IQR',
+				colour: definition.colour,
+				points: profile.points
+			}], {
+				zero: !['mslp', 'vort', 'q', 'rh'].includes(key),
+				xMin: 0,
+				xMax: 100,
+				xFormat: value => `${fmt(value)}%`,
+				yFormat: value => fmt(value, key === 'mslp' ? 0 : 1)
+			});
+			accessibleProfiles.push(`<h4>${esc(`${definition.title} (${definition.unit})`)}</h4>${accessibleTable(
+				['Life fraction', 'Median', 'Q1', 'Q3', 'Systems'],
+				profile.points.map(point => [`${fmt(point.x)}%`, fmt(point.y, 2), fmt(point.low, 2), fmt(point.high, 2), point.n])
+			)}`);
+		}
+		$('#mlaProfileData').innerHTML = accessibleProfiles.join('');
 	}
 
 	function cohortProfile(indexes, metricKey, alignment) {
@@ -2471,7 +2520,7 @@
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
 				search: state.search || null
 			},
-			view: {map_layer: state.mapLayer, map_colour: state.mapColour, state_fill: state.stateFill, map_track_period: state.mapPath, map_scope: state.mapScope, evolution_metric: state.evolutionMetric},
+			view: {map_layer: state.mapLayer, map_colour: state.mapColour, state_fill: state.stateFill, map_track_period: state.mapPath, map_scope: state.mapScope, evolution_metric: state.evolutionMetric, cohort_profile_metrics: PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key))},
 			selected_parent_event_id: state.selected == null ? null : atlasId(state.selected),
 			matching_parent_event_ids: state.active.map(atlasId),
 			url: window.location.href,

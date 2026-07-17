@@ -331,6 +331,14 @@
 .mla-chart-head .mla-field { width: min(230px, 48%); }
 .mla-chart-readout { min-height: 22px; margin: 7px 2px 0 !important; color: var(--mla-ink) !important; font-variant-numeric: tabular-nums; }
 .mla-chart { display: block; width: 100%; height: 300px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card-strong); }
+.mla-evolution-card { align-self: start; }
+.mla-profile-controls { margin: 10px 0; padding: 9px 0; border-top: 1px solid var(--mla-line); border-bottom: 1px solid var(--mla-line); }
+.mla-profile-controls .mla-label { display: block; margin-bottom: 6px; }
+.mla-profile-stack { display: grid; gap: 8px; }
+.mla-profile-slab { min-width: 0; }
+.mla-profile-slab-head { display: flex; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; padding: 1px 3px 5px; color: var(--mla-muted); font-size: 12px; }
+.mla-profile-slab-head strong { color: var(--mla-ink); font-size: 13px; font-weight: 650; }
+.mla-profile-chart { height: 190px; }
 .mla-chart-wide { grid-column: 1 / -1; }
 .mla-chart-wide .mla-chart { height: 340px; }
 .mla-a11y-data { margin-top: 8px; font-size: 13px; }
@@ -625,8 +633,8 @@
 				</aside>
 			</div>
 			<div class="mla-chart-grid" style="margin-top:14px">
-				<section class="mla-card mla-chart-card"><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Maximum wind (m s⁻¹)</option><option value="vort">Smoothed vorticity (10⁻⁵ s⁻¹)</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Line: v5.4.1 final-centre ERA5 physics. Bars: 24 h rainfall. Hard breaks mark unsupported plotting stitches.</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
-				<section class="mla-card mla-chart-card"><h3>Cohort evolution</h3><p>Median and interquartile range in physical units; each system contributes once per life-fraction bin.</p><button class="mla-btn mla-btn-small" id="mlaLoadProfile" type="button">Load detailed cohort profile</button><canvas class="mla-chart" id="mlaProfileChart" role="img" aria-label="Median lifecycle evolution for the filtered cohort"></canvas><details class="mla-a11y-data"><summary>Accessible cohort summary</summary><div id="mlaProfileData"></div></details></section>
+				<section class="mla-card mla-chart-card mla-evolution-card"><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Maximum wind (m s⁻¹)</option><option value="vort">Smoothed vorticity (10⁻⁵ s⁻¹)</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Line: v5.4.1 final-centre ERA5 physics. Bars: 24 h rainfall. Hard breaks mark unsupported plotting stitches.</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
+				<section class="mla-card mla-chart-card mla-evolution-card"><h3>Cohort evolution</h3><p>Median and interquartile range in physical units; each system contributes once per life-fraction bin.</p><div class="mla-profile-controls"><span class="mla-label">Variables</span><div class="mla-chip-row" id="mlaProfileMetrics" aria-label="Cohort evolution variables"></div></div><button class="mla-btn mla-btn-small" id="mlaLoadProfile" type="button">Load cohort variables</button><div class="mla-profile-stack" id="mlaProfileStack"></div><details class="mla-a11y-data"><summary>Accessible cohort summary</summary><div id="mlaProfileData"></div></details></section>
 			</div>
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
@@ -699,7 +707,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.eb36a1891068.json.gz","detail":"assets/atlas-detail.2b20775d90ac.json.gz"}</script>
 
-<script src="assets/atlas-app.534d987b7546.js"></script>
+<script src="assets/atlas-app.cfc9fcf31bf3.js"></script>
 
 </body>
 </html>
