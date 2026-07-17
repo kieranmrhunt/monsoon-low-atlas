@@ -1,0 +1,91 @@
+{
+  "catalogue": {
+    "association_families": 2509,
+    "events": 2980,
+    "expected_hourly_rows": 368925,
+    "maximum_hourly_speed_ms": 19.96025464460854,
+    "maximum_observed_centre_residual_km": 124.89599533285852,
+    "observed_rows": 300348,
+    "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/tracks/lps_v5.4.2-era5-1940-2025-core-release-candidate.parquet",
+    "posterior_rows": 68577,
+    "required_physics_null_counts": {
+      "land_fraction": 0,
+      "max_vort_smoothed": 0,
+      "max_wind": 0,
+      "mean_vort_deep": 0,
+      "orography_m": 0,
+      "precip_1hr": 0,
+      "precip_24hr": 0,
+      "precip_24hr_valid_hours": 0,
+      "pressure_deficit_hpa": 0,
+      "q500_mean_gkg": 0,
+      "q700_mean_gkg": 0,
+      "q850_mean_gkg": 0,
+      "q_deep_mean_gkg": 0,
+      "rh500_mean_pct": 0,
+      "rh700_mean_pct": 0,
+      "rh850_mean_pct": 0,
+      "rh_deep_mean_pct": 0,
+      "t500_mean_k": 0,
+      "t700_mean_k": 0,
+      "t850_mean_k": 0
+    },
+    "rows": 368925,
+    "sha256": "e5f3a3c8a6ea1c662c21383aa97de957dfd1d7a9cf07e4b3c962d5e52994401e"
+  },
+  "checks": {
+    "all_gap_rows_are_in_supported_blocks": true,
+    "all_gap_rows_have_audit_ids": true,
+    "all_gap_rows_use_frozen_support_method": true,
+    "all_positions_present": true,
+    "all_required_physics_present": true,
+    "all_rows_have_complete_reanalysis": true,
+    "all_rows_have_final_centre_physics_provenance": true,
+    "all_short_interpolations_respect_motion_cap": true,
+    "catalogue_hash_matches_final_qa": true,
+    "catalogue_hash_matches_intensity_summary": true,
+    "event_identity_matches_track_identity": true,
+    "every_event_contains_observed_centres": true,
+    "every_event_has_complete_hourly_axis": true,
+    "every_final_event_passes_strength_filter": true,
+    "maximum_hourly_speed_within_20_ms": true,
+    "maximum_observed_centre_residual_within_125_km": true,
+    "observed_candidate_uids_present_and_unique": true,
+    "one_row_per_event_time": true,
+    "upstream_final_release_qa_passed": true,
+    "upstream_gap_validator_passed": true,
+    "upstream_intensity_finalizer_passed": true,
+    "upstream_strength_filter_passed": true
+  },
+  "completed_at_utc": "2026-07-17T21:28:01.771761+00:00",
+  "evidence": {
+    "final_qa": {
+      "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/production/v5.4.2/final_qa/final_release_qa.json",
+      "sha256": "324f8f35b4504363c8b7bcfb56392ce3303700ab8362f54dc6ac6308a9b32841"
+    },
+    "gap_summary": {
+      "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/production/v5.4.2/physics_gap_summary.json",
+      "sha256": "dd3e26e48a6ce077c7acee8c33a6b89414db241627734e4409a5a94ac374a1b5"
+    },
+    "intensity_summary": {
+      "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/tracks/lps_v5.4.2-era5-1940-2025-core-release-candidate-summary.json",
+      "sha256": "65f5fb1a7e153c6e9e8a65a3b3c2f8965a1b4e21ab5e1bbc549060712bb6dda1"
+    },
+    "strength_summary": {
+      "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/production/v5.4.2/physical_segment_strength_summary.json",
+      "sha256": "78f67b049a726482eeff99378f49bcc8ee910eab8b31039edf28e8cb4cad5dfe"
+    },
+    "strength_table": {
+      "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/production/v5.4.2/physical_segment_strength.parquet",
+      "sha256": "5445f4bed1e88bebf434f7fdd591e06290d456bdb6a2a97580e65665f14d89ff"
+    }
+  },
+  "gap_contract": {
+    "audited_gap_blocks": 21653,
+    "gap_rows": 68577,
+    "non_hourly_steps": 0,
+    "unsupported_gap_rows_present": 0
+  },
+  "schema": "lps-v5.4.2-release-completion-audit-v1",
+  "status": "pass"
+}

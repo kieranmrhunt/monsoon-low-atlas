@@ -1,0 +1,79 @@
+{
+  "catalogue": "lps_v5.4.2-era5-1940-2025-core.parquet",
+  "description": "ERA5 South Asian low-pressure-system v5.4.2 recall-first core catalogue with hourly-complete physical-event identities and final-centre reanalysis diagnostics",
+  "format": "Apache Parquet",
+  "gap_contract": {
+    "audited_gap_blocks_in_release": 21653,
+    "maximum_short_endpoint_speed_ms": 20.0,
+    "retained_posterior_rows": 68577,
+    "support_method": "bounded_short_endpoint_interpolation_or_nearby_reanalysis_extremum_v4",
+    "unsupported_gap_rows_present": 0
+  },
+  "geometry": {
+    "maximum_hourly_speed_ms": 19.96025464460854,
+    "maximum_observed_centre_residual_km": 124.89599533285852,
+    "method": "minimum_l2_speed_and_detection_residual_projection_v1",
+    "outside_buffer_fraction": 4.336924849224097e-05
+  },
+  "identity": {
+    "association_family_id": "liberal linker-family provenance only; it can contain several distinct physical events and must not be used as a storm identity",
+    "continuity_parent_track_id": "same physical-event identity as track_id in v5.4.2",
+    "event_id": "same physical-event identity as track_id in v5.4.2",
+    "track_id": "hourly-complete, strength-qualified physical event; use for plotting, event counts, matching, and climatology"
+  },
+  "physics": {
+    "complete_rows": 368925,
+    "fields_include": [
+      "vorticity",
+      "precipitation",
+      "wind",
+      "mean-sea-level pressure and pressure deficit",
+      "specific humidity and relative humidity at 850, 700 and 500 hPa",
+      "temperature at 850, 700 and 500 hPa",
+      "orography",
+      "land fraction"
+    ],
+    "required_field_null_count": 0,
+    "source": "era5_resampled_at_published_centre"
+  },
+  "qa": {
+    "all_release_gates_passed": true,
+    "checks_passed": 25,
+    "checks_total": 25,
+    "completion_audit_checks_passed": 22,
+    "completion_audit_checks_total": 22,
+    "duplicate_observed_candidate_uids": 0,
+    "duplicate_track_times": 0,
+    "hourly_step_violations": 0,
+    "isolated_hourly_precipitation_collapses": 0,
+    "isolated_24hour_precipitation_collapses": 0,
+    "required_physics_null_count": 0
+  },
+  "rows": {
+    "observed": 300348,
+    "posterior": 68577,
+    "posterior_fraction": 0.1858816012575049,
+    "total": 368925
+  },
+  "schema_columns": 319,
+  "sha256": "e5f3a3c8a6ea1c662c21383aa97de957dfd1d7a9cf07e4b3c962d5e52994401e",
+  "strength_filter": {
+    "minimum_duration_hours": 30,
+    "minimum_observed_positions": 12,
+    "minimum_qualifying_positions": 3,
+    "rejected_physical_events": 5025,
+    "selected_physical_events": 2980,
+    "source": "final-centre reanalysis physics"
+  },
+  "time_coverage": {
+    "end": "2025-12-03 10:00:00",
+    "end_year": 2025,
+    "start": "1940-05-17 01:00:00",
+    "start_year": 1940
+  },
+  "tracks": {
+    "liberal_association_families_represented": 2509,
+    "physical_events": 2980
+  },
+  "version": "5.4.2"
+}

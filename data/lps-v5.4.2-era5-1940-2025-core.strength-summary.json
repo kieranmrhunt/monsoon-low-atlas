@@ -1,0 +1,58 @@
+{
+  "checks": {
+    "event_identity_is_coherent_segment_identity": true,
+    "every_output_track_passes_strength_filter": true,
+    "no_new_track_identity": true
+  },
+  "completed_at_utc": "2026-07-17T21:19:48.388964+00:00",
+  "date_slice": {
+    "end_exclusive": null,
+    "start_inclusive": null
+  },
+  "definition": "Unchanged v5.4 strength thresholds applied after unsupported-stitch segmentation; track_id/event_id is the published event identity and association_family_id is provenance only.",
+  "input": {
+    "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/tracks/lps_v5.4.2-era5-1940-2025-core-physics-gap-validated.parquet",
+    "sha256": "9544f058c1e455ed6591ce74ace943bf8db03cc8eca68a1d78deb4801121b0b2"
+  },
+  "output": {
+    "association_families": 2509,
+    "observed_rows": 300348,
+    "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/tracks/lps_v5.4.2-era5-1940-2025-core-physics-filtered.parquet",
+    "rows": 368925,
+    "sha256": "2d8e5a27e0d5a93018cfc6c96694adf5910ca0e80b6f2ba0513f36eac97d4948",
+    "tracks": 2980
+  },
+  "schema": "lps-v5.4.2-coherent-segment-core-v1",
+  "statistics": {
+    "input_association_families": 2689,
+    "input_segments": 8005,
+    "rejected_rows": 98969,
+    "rejected_segments": 5025,
+    "selected_association_families": 2509,
+    "selected_rows_before_date_slice": 368925,
+    "selected_segments": 2980
+  },
+  "status": "pass",
+  "strength_source": "final_physics",
+  "thresholds": {
+    "max_point_heat_low_score": 0.544212,
+    "min_duration_hours": 30.0,
+    "min_observed_positions": 12,
+    "min_point_candidate_quality": 5.832555,
+    "min_point_category": 1.0,
+    "min_point_centre_score": 6.446782,
+    "min_point_pressure_deficit": 3.495224,
+    "min_point_vorticity": 7.036606,
+    "min_qualifying_positions": 3,
+    "point_domain": [
+      65.0,
+      100.0,
+      0.0,
+      32.0
+    ]
+  },
+  "track_summary": {
+    "path": "/gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/lps-v5.3-continuity-framework/production/v5.4.2/physical_segment_strength.parquet",
+    "sha256": "5445f4bed1e88bebf434f7fdd591e06290d456bdb6a2a97580e65665f14d89ff"
+  }
+}

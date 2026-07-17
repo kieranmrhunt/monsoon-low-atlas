@@ -1,0 +1,53 @@
+{
+  "amended_at_utc": "2026-07-17T21:24:54Z",
+  "change_class": "named_case_physical_segment_disposition_qa",
+  "failed_job_ids": [
+    "40227416"
+  ],
+  "new_protocol_sha256": "6786739f558ef304ed0c70fa28d9a91becdd25f3783ba053bf524e5443ab7510",
+  "old_protocol_sha256": "db335ec1d0d1879950a6b8d5940d57af865d346833d7d04a067adffd00f37b51",
+  "reason": "The original named-case QA required every observed candidate from legacy track 21864 to survive the final strength filter. Retrospective physics correctly split that legacy association family into five physical events, and the unchanged post-link strength definition correctly rejected four short precursor fragments. The legacy-retention assertion therefore contradicted the v5.4.2 rule that unfillable bridges become distinct events and that weak linked events are filtered after linking.",
+  "named_case_evidence": {
+    "legacy_observed_candidates": 142,
+    "observed_candidates_accounted_for_before_strength_filter": 142,
+    "selected_main_event_observed_candidates": 107,
+    "rejected_fragment_observed_candidates": 35,
+    "physical_events": 5,
+    "selected_physical_events": 1,
+    "rejected_physical_events": 4,
+    "rejected_fragment_observed_counts": [
+      3,
+      10,
+      3,
+      19
+    ],
+    "rejected_fragment_qualifying_strength_points": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "selected_main_event_duration_hours": 185,
+    "selected_main_event_qualifying_strength_points": 45
+  },
+  "records_updated": {
+    "release_validator": {
+      "path": "production/v5.4/validate_final.py",
+      "sha256": "888e1dd91c56e888eab1e25016924e8f45cddd348a506a6f33d987452c036173"
+    },
+    "stage_runner": {
+      "path": "production/v5.4.2/run_pipeline_stage.py",
+      "sha256": "f371f45e65840501924df9cf340bef8f8ffe1b40ffd498388f15a8a4a9d0a8c6"
+    }
+  },
+  "resolution": "The final validator now audits observed-candidate disposition against the pre-filter physical-event catalogue and the segment-strength decision table. For legacy case 21864 it requires all observations to be accounted for before filtering, at least one selected coherent physical successor, and every unpublished observation to belong to an explicitly rejected weak physical event.",
+  "scientific_change": false,
+  "catalogue_changed": false,
+  "qa": {
+    "command": "python production/v5.4.2/run_pipeline_stage.py qa",
+    "result": "pass",
+    "report_path": "production/v5.4.2/final_qa/final_release_qa.json",
+    "report_sha256": "324f8f35b4504363c8b7bcfb56392ce3303700ab8362f54dc6ac6308a9b32841"
+  },
+  "failed_attempt_archive": "production/v5.4.2/attempts/r7_legacy_retention_gate/final_qa"
+}

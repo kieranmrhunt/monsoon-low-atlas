@@ -1,0 +1,124 @@
+{
+  "schema": "lps-v5.4.2-release-manifest-v1",
+  "status": "promoted_to_incompass_gws",
+  "catalogue": {
+    "path": "tracks/lps_v5.4.2-era5-1940-2025-core-release-candidate.parquet",
+    "sha256": "e5f3a3c8a6ea1c662c21383aa97de957dfd1d7a9cf07e4b3c962d5e52994401e",
+    "coverage": "1940-2025",
+    "rows": 368925,
+    "observed_rows": 300348,
+    "posterior_rows": 68577,
+    "physical_events": 2980,
+    "association_families_represented": 2509,
+    "schema_columns": 319
+  },
+  "identity_semantics": {
+    "track_id": "hourly-complete strength-qualified physical event; use for plotting, event counts, matching, and climatology",
+    "event_id": "identical to track_id",
+    "continuity_parent_track_id": "identical to track_id",
+    "association_family_id": "liberal linker-family provenance only; never use as a storm identity"
+  },
+  "continuity": {
+    "summary_path": "production/v5.4.2/physics_gap_summary.json",
+    "summary_sha256": "dd3e26e48a6ce077c7acee8c33a6b89414db241627734e4409a5a94ac374a1b5",
+    "candidate_gap_blocks_audited": 32574,
+    "gap_blocks_retained": 29399,
+    "gap_blocks_split": 3175,
+    "unsupported_posterior_rows_removed": 52341,
+    "release_gap_blocks": 21653,
+    "release_posterior_rows": 68577,
+    "complete_hourly_spans": true,
+    "non_hourly_steps": 0,
+    "duplicate_track_times": 0,
+    "unsupported_gap_rows_present": 0
+  },
+  "strength": {
+    "summary_path": "production/v5.4.2/physical_segment_strength_summary.json",
+    "summary_sha256": "78f67b049a726482eeff99378f49bcc8ee910eab8b31039edf28e8cb4cad5dfe",
+    "input_physical_events": 8005,
+    "selected_physical_events": 2980,
+    "rejected_physical_events": 5025,
+    "strength_source": "final-centre reanalysis physics"
+  },
+  "physics": {
+    "summary_path": "tracks/lps_v5.4.2-era5-1940-2025-core-physics-initial-summary.json",
+    "summary_sha256": "597bd6050e94228961a69b4dda07fc0d3d1bb46626e366d192d1f90825d99f07",
+    "status": "pass",
+    "complete_rows_before_gap_and_strength_filter": 520235,
+    "required_field_nulls": 0,
+    "invalid_provenance_rows": 0
+  },
+  "intensity": {
+    "summary_path": "tracks/lps_v5.4.2-era5-1940-2025-core-release-candidate-summary.json",
+    "summary_sha256": "65f5fb1a7e153c6e9e8a65a3b3c2f8965a1b4e21ab5e1bbc549060712bb6dda1",
+    "persistence_hours": 6,
+    "status": "pass"
+  },
+  "qa": {
+    "path": "production/v5.4.2/final_qa/final_release_qa.json",
+    "sha256": "324f8f35b4504363c8b7bcfb56392ce3303700ab8362f54dc6ac6308a9b32841",
+    "status": "pass",
+    "checks_passed": 25,
+    "checks_total": 25,
+    "initial_slurm_job_id": "40227416",
+    "initial_result": "failed obsolete legacy-retention assertion; catalogue unchanged",
+    "passing_rerun": "local deterministic validator rerun after protocol amendment 5"
+  },
+  "completion_audit": {
+    "path": "production/v5.4.2/completion_audit.json",
+    "sha256": "f0d96a185f7b9ff5c5b100ab4268297f86baef4b97bfa96e590471adc20e487b",
+    "status": "pass",
+    "checks_passed": 22,
+    "checks_total": 22,
+    "script_path": "production/v5.4.2/audit_release_completion.py",
+    "script_sha256": "ede3beb5bccbcfd19c2422ec5d56301e4646c6486016c6b0ffa78cc36203576d"
+  },
+  "protocol": {
+    "path": "production/v5.4.2/protocol.json",
+    "sha256": "6786739f558ef304ed0c70fa28d9a91becdd25f3783ba053bf524e5443ab7510",
+    "amendments": [
+      {
+        "path": "production/v5.4.2/protocol_amendment.json",
+        "sha256": "fefa598bd2c2262cabb03b6868e77c4e0312ec579418471e3503fc284cf2d304"
+      },
+      {
+        "path": "production/v5.4.2/protocol_amendment_2.json",
+        "sha256": "fa75a1f93f6199de96a549229cc82cc88e68496b810f8e5abe537996f20ead5b"
+      },
+      {
+        "path": "production/v5.4.2/protocol_amendment_3.json",
+        "sha256": "a3051257ff5a74c432c6f5ad90117f78a364e891a17bf8854d46e0a5f0171a78"
+      },
+      {
+        "path": "production/v5.4.2/protocol_amendment_4.json",
+        "sha256": "129960038ca5e03cecd28d0aae5732aab3bd1774e0dc2706f8fee2a40a7907d4"
+      },
+      {
+        "path": "production/v5.4.2/protocol_amendment_5.json",
+        "sha256": "9f5a7bcfa1f6270c9e1ea4c22713b5155e2744a6997916cb63cfaca14a22aed8"
+      }
+    ]
+  },
+  "report": {
+    "path": "production/v5.4.2/FULL_RUN_QUALITY_REPORT.md",
+    "sha256": "7b7523c2169522ad5a3522123b35137495aad503db57ce939f0d3b3045707a1f"
+  },
+  "metadata": {
+    "path": "tracks/lps_v5.4.2-era5-1940-2025-core.metadata.json",
+    "sha256": "9f8f70fe153de42b68afe883455076979a3cb61a2eb0e2e08c489f3229965a3f"
+  },
+  "publication": {
+    "published_on": "2026-07-17",
+    "catalogue_path": "/gws/ssde/j25a/incompass/public/kieran/track_data/LPS/lps_v5.4.2-era5-1940-2025-core.parquet",
+    "catalogue_sha256": "e5f3a3c8a6ea1c662c21383aa97de957dfd1d7a9cf07e4b3c962d5e52994401e",
+    "previous_releases_preserved": true
+  },
+  "production_jobs": {
+    "physics_array": "40227411",
+    "finalize": "40227412",
+    "physical_gap_validation": "40227413",
+    "strength_filter": "40227414",
+    "intensity": "40227415",
+    "qa_initial": "40227416"
+  }
+}
