@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Match LPS v5.4 identities to IBTrACS tracks using observed support only."""
+"""Match v5.4.1 parent-event identities to IBTrACS using observed fixes."""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def read_ibtracs(paths: list[Path]) -> list[Storm]:
             & frame["LON"].notna()
             & frame["ISO_TIME"].dt.year.between(1940, 2025)
             & frame["LAT"].between(-15, 55)
-            & frame["LON"].between(35, 135)
+            & frame["LON"].between(35, 155)
         ]
         frames.append(frame)
 
@@ -230,21 +230,17 @@ def main() -> None:
     table = pq.read_table(
         args.parquet,
         columns=[
-            "track_id",
+            "continuity_parent_track_id",
             "time",
-            "lat_smooth_global_v54",
-            "lon_smooth_global_v54",
+            "lat",
+            "lon",
             "candidate_diagnostics_available",
         ],
     )
     catalogue = table.to_pandas()
-    catalogue.rename(
-        columns={"lat_smooth_global_v54": "lat", "lon_smooth_global_v54": "lon"},
-        inplace=True,
-    )
     catalogue["time"] = pd.to_datetime(catalogue["time"], utc=True)
     catalogue = catalogue.loc[catalogue["candidate_diagnostics_available"].astype(bool)].copy()
-    catalogue.sort_values(["track_id", "time"], kind="mergesort", inplace=True)
+    catalogue.sort_values(["continuity_parent_track_id", "time"], kind="mergesort", inplace=True)
 
     storms = read_ibtracs(args.ibtracs)
     storms_by_year: dict[int, set[int]] = defaultdict(set)
@@ -256,7 +252,7 @@ def main() -> None:
 
     matches: dict[str, dict] = {}
     track_start: dict[str, int] = {}
-    for track_id, group in catalogue.groupby("track_id", sort=False):
+    for track_id, group in catalogue.groupby("continuity_parent_track_id", sort=False):
         times_ns = group["time"].to_numpy(dtype="datetime64[ns]").astype("int64")
         latitudes = group["lat"].to_numpy(dtype=float)
         longitudes = group["lon"].to_numpy(dtype=float)
@@ -300,8 +296,8 @@ def main() -> None:
     for sid, track_ids in by_sid.items():
         track_ids.sort(key=lambda value: (track_start.get(value, 0), int(value)))
         for index, track_id in enumerate(track_ids, start=1):
-            matches[track_id]["segment_index"] = index
-            matches[track_id]["segment_count"] = len(track_ids)
+            matches[track_id]["catalogue_part_index"] = index
+            matches[track_id]["catalogue_part_count"] = len(track_ids)
 
     matched_sids = {match["sid"] for match in matches.values()}
     storm_payload = {}
@@ -317,7 +313,7 @@ def main() -> None:
         }
 
     qa = {
-        "catalogue_tracks": int(catalogue["track_id"].nunique()),
+        "catalogue_parent_events": int(catalogue["continuity_parent_track_id"].nunique()),
         "ibtracs_storms_considered": len(storms),
         "matched_tracks": len(matches),
         "high_confidence": sum(match["confidence"] == "high" for match in matches.values()),
@@ -329,10 +325,10 @@ def main() -> None:
         ),
     }
     payload = {
-        "schema": "lps-v5.4-ibtracs-v04r01-crosswalk-v1",
+        "schema": "lps-v5.4.1-ibtracs-v04r01-parent-crosswalk-v1",
         "source": "NOAA NCEI IBTrACS v04r01 NI and WP basin CSVs",
         "method": {
-            "positions": "Published v5.4 centres at observed-support times only; interpolated positions are excluded.",
+            "positions": "Observed LPS detector fixes only, grouped by continuity_parent_track_id; interpolated positions are excluded.",
             "maximum_time_delta_hours": MAX_TIME_DELTA_HOURS,
             "maximum_median_separation_km": MAX_MEDIAN_KM,
             "maximum_p90_separation_km": MAX_P90_KM,

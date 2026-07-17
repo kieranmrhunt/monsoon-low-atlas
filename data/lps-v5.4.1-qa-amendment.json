@@ -1,0 +1,25 @@
+{
+  "schema": "lps-v5.4.1-protocol-amendment-v1",
+  "status": "applied_after-initial-qa-failure",
+  "reason": "The frozen v5.4 validator treated publication segment IDs as meteorological event IDs. It therefore misclassified DD 1968 08 as incompletely retained despite all 142 observed centres surviving in one parent event across two publication segments. It also compared the absolute count of low-path-efficiency publication segments against unsplit v5.3.1 tracks. The amended validator evaluates named-system retention and low-path-efficiency count at continuity_parent_track_id grain while retaining the publication-segment rate guardrail.",
+  "scientific_change_to_catalogue": false,
+  "catalogue": {
+    "path": "tracks/lps_v5.4.1-era5-1940-2025-core-release-candidate.parquet",
+    "sha256": "ef24b1614155102547b1a5fa3abe803cc8f679c50ee00e64936187bcd4391737"
+  },
+  "frozen_protocol": {
+    "path": "production/v5.4.1/protocol.json",
+    "sha256": "0c0a5adf0d7527a884450b7b94b000fcf8864da99c3a3d1d0a352f16531e63e5",
+    "release_validator_sha256": "301929c3c73e389783a2af2405b9cdbdf7489db8ac2f52f6f27e7f619263d3b2"
+  },
+  "amended_validator": {
+    "path": "production/v5.4/validate_final.py",
+    "sha256": "e70329fdfa770e459ee084aab91999a68e2650620b0ab65fc4a2986a02eca8e4"
+  },
+  "qa": {
+    "job_id": "40081501",
+    "status": "pass",
+    "path": "production/v5.4.1/final_qa/final_release_qa.json",
+    "sha256": "f7d095e3933a29892e5fa9a782f6d0e34623ad50335d98599583dbd4fb7659f0"
+  }
+}

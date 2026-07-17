@@ -1,0 +1,63 @@
+{
+  "schema": "lps-v5.4.1-release-candidate-manifest-v1",
+  "status": "promoted_to_incompass_gws",
+  "catalogue": {
+    "path": "tracks/lps_v5.4.1-era5-1940-2025-core-release-candidate.parquet",
+    "sha256": "ef24b1614155102547b1a5fa3abe803cc8f679c50ee00e64936187bcd4391737",
+    "coverage": "1940-2025",
+    "rows": 525579,
+    "observed_rows": 374398,
+    "posterior_rows": 151181,
+    "parent_events": 2750,
+    "publication_segments": 4626
+  },
+  "identity_semantics": {
+    "continuity_parent_track_id": "linked meteorological event; use for event counts, matching, POD, and climatology",
+    "track_id": "complete publication segment; use for plotting without crossing unsupported stitches"
+  },
+  "continuity": {
+    "summary_path": "production/v5.4.1/continuity_summary.json",
+    "summary_sha256": "ba4fd06927822623cf2db9d704211accc3846c837373ecbc2ed95cc05db8eb86",
+    "publication_splits": 1876,
+    "posterior_rows_removed_at_unsupported_stitches": 36185,
+    "complete_hourly_spans": true,
+    "duplicate_track_times": 0
+  },
+  "physics": {
+    "summary_path": "tracks/lps_v5.4.1-era5-1940-2025-core-physics-summary.json",
+    "summary_sha256": "8dd30c613c2259b060491c214a21e47a38a7b0a95539aa500bc173a9742330bb",
+    "status": "pass",
+    "complete_rows": 525579,
+    "required_field_nulls": 0,
+    "invalid_provenance_rows": 0
+  },
+  "intensity": {
+    "summary_path": "tracks/lps_v5.4.1-era5-1940-2025-core-release-candidate-summary.json",
+    "summary_sha256": "b4f7edd04dd5e5c6c72ee508003dc56d6e977f418c61206fb6a7f488f4b06e12",
+    "persistence_hours": 6
+  },
+  "qa": {
+    "path": "production/v5.4.1/final_qa/final_release_qa.json",
+    "sha256": "f7d095e3933a29892e5fa9a782f6d0e34623ad50335d98599583dbd4fb7659f0",
+    "status": "pass",
+    "checks_passed": 17,
+    "checks_total": 17,
+    "job_id": "40081501"
+  },
+  "protocol": {
+    "path": "production/v5.4.1/protocol.json",
+    "sha256": "0c0a5adf0d7527a884450b7b94b000fcf8864da99c3a3d1d0a352f16531e63e5",
+    "amendment_path": "production/v5.4.1/protocol-amendment-parent-aware-qa.json",
+    "amendment_sha256": "59e44877c2595cdd74878946c2e99498ea1fbe8c342d6e44d335db49661dffeb"
+  },
+  "publication": {
+    "published_on": "2026-07-17",
+    "catalogue_path": "/gws/ssde/j25a/incompass/public/kieran/track_data/LPS/lps_v5.4.1-era5-1940-2025-core.parquet",
+    "catalogue_sha256": "ef24b1614155102547b1a5fa3abe803cc8f679c50ee00e64936187bcd4391737",
+    "previous_v5.4_preserved": true
+  },
+  "report": {
+    "path": "production/v5.4.1/FULL_RUN_QUALITY_REPORT.md",
+    "sha256": "6123e607a0fc186ed7236545e9388c739cf264baa16e62114c14a6ee02040651"
+  }
+}
