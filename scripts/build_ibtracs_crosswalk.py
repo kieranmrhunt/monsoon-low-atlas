@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Match v5.4.1 parent-event identities to IBTrACS using observed fixes."""
+"""Match LPS physical-event identities to IBTrACS using observed fixes."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,7 +55,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parquet", required=True, type=Path)
     parser.add_argument("--ibtracs", required=True, action="append", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--catalogue-version")
     return parser.parse_args()
+
+
+def catalogue_version(path: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit if explicit.startswith("v") else f"v{explicit}"
+    match = re.search(r"lps_(v\d+(?:\.\d+)+)", path.name)
+    if not match:
+        raise ValueError("Cannot infer catalogue version; pass --catalogue-version")
+    return match.group(1)
 
 
 def encode_polyline(latitudes: np.ndarray, longitudes: np.ndarray) -> str:
@@ -227,6 +238,7 @@ def confidence(best: dict, margin: float) -> str:
 
 def main() -> None:
     args = parse_args()
+    version = catalogue_version(args.parquet, args.catalogue_version)
     table = pq.read_table(
         args.parquet,
         columns=[
@@ -325,7 +337,8 @@ def main() -> None:
         ),
     }
     payload = {
-        "schema": "lps-v5.4.1-ibtracs-v04r01-parent-crosswalk-v1",
+        "schema": "lps-ibtracs-v04r01-crosswalk-v1",
+        "catalogue_version": version,
         "source": "NOAA NCEI IBTrACS v04r01 NI and WP basin CSVs",
         "method": {
             "positions": "Observed LPS detector fixes only, grouped by continuity_parent_track_id; interpolated positions are excluded.",
