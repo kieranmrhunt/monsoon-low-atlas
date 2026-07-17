@@ -76,8 +76,6 @@
 		hovered: null,
 		active: [],
 		activeBit: null,
-		page: 1,
-		pageSize: 50,
 		sort: 'metric-desc',
 		extremeMetric: 'duration',
 		extremeEligibility: 'all',
@@ -566,38 +564,47 @@
 		const query = state.search.trim().toLowerCase();
 		const number = Number(query);
 		const exactYear = /^\d{4}$/.test(query) && number >= 1940 && number <= 2025 ? number : null;
+		const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(query) ? Date.parse(`${query}T00:00:00Z`) : NaN;
+		const exactDate = Number.isFinite(parsedDate) && new Date(parsedDate).toISOString().slice(0, 10) === query ? query : null;
 		const explicitId = query.match(/^(?:id|parent(?:\s+event)?|event)\s*#?\s*(\d+)$/);
 		const exactTrackId = explicitId ? Number(explicitId[1]) : (exactYear == null && /^\d+$/.test(query) ? number : null);
-		return {query, exactYear, exactTrackId};
+		return {
+			query,
+			exactYear,
+			exactDate,
+			exactDateStart: exactDate ? Date.parse(`${exactDate}T00:00:00Z`) : null,
+			exactDateEnd: exactDate ? Date.parse(`${exactDate}T23:59:59.999Z`) : null,
+			exactTrackId
+		};
 	}
 
 	function applyFilters(options) {
 		if (!CORE) return;
 		const active = [];
 		const bits = new Uint8Array(CORE.tracks.length);
-		const {query, exactYear, exactTrackId} = parsedSearch();
-		const minimumGenesis = state.timeMode === 'dates' ? Date.parse(`${state.dateMin}T00:00:00Z`) : NaN;
-		const maximumGenesis = state.timeMode === 'dates' ? Date.parse(`${state.dateMax}T23:59:59.999Z`) : NaN;
+		const {query, exactYear, exactDateStart, exactDateEnd, exactTrackId} = parsedSearch();
+		const minimumActive = state.timeMode === 'dates' ? Date.parse(`${state.dateMin}T00:00:00Z`) : NaN;
+		const maximumActive = state.timeMode === 'dates' ? Date.parse(`${state.dateMax}T23:59:59.999Z`) : NaN;
 		for (let index = 0; index < CORE.tracks.length; index++) {
 			const row = track(index);
 			if (state.timeMode === 'dates') {
-				if (row[T.start_ms] < minimumGenesis || row[T.start_ms] > maximumGenesis) continue;
+				if (row[T.end_ms] < minimumActive || row[T.start_ms] > maximumActive) continue;
 			} else if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) continue;
 			if (!monthPass(index)) continue;
 			if (!state.classes.has(row[T.category])) continue;
 			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
 			if (!matchPass(index) || !qcPass(index) || !statePass(index)) continue;
 			if (query) {
-				if (exactYear != null && row[T.start_year] !== exactYear) continue;
-				if (exactYear == null && exactTrackId != null && atlasId(index) !== exactTrackId) continue;
-				if (exactYear == null && exactTrackId == null && !CORE.search[index].includes(query)) continue;
+				if (exactDateStart != null && (row[T.end_ms] < exactDateStart || row[T.start_ms] > exactDateEnd)) continue;
+				if (exactDateStart == null && exactYear != null && row[T.start_year] !== exactYear) continue;
+				if (exactDateStart == null && exactYear == null && exactTrackId != null && atlasId(index) !== exactTrackId) continue;
+				if (exactDateStart == null && exactYear == null && exactTrackId == null && !CORE.search[index].includes(query)) continue;
 			}
 			bits[index] = 1;
 			active.push(index);
 		}
 		state.active = active;
 		state.activeBit = bits;
-		state.page = options && options.keepPage ? state.page : 1;
 		if (state.selected != null && !bits[state.selected]) state.selected = null;
 		rainfallMapCache = null;
 		updateFilterReadout();
@@ -633,7 +640,7 @@
 		});
 		$('#mlaStateMinValue').textContent = `${state.stateMin}%`;
 		const filters = [];
-		if (state.timeMode === 'dates') filters.push(`Genesis ${state.dateMin} to ${state.dateMax}`);
+		if (state.timeMode === 'dates') filters.push(`Active ${state.dateMin} to ${state.dateMax}`);
 		else if (state.yearMin !== 1940 || state.yearMax !== 2025) filters.push(`${state.yearMin}–${state.yearMax}`);
 		if (state.months.size !== 12) filters.push(`${[...state.months].sort((a, b) => a - b).map(month => MONTHS[month - 1]).join(', ')} · ${state.monthMode}`);
 		if (state.classes.size !== 6) filters.push(`${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(', ')} class`);
@@ -644,7 +651,8 @@
 		if (state.stateIndex >= 0) filters.push(`Track crosses ${CORE.states[state.stateIndex]}`);
 		if (state.search) {
 			const search = parsedSearch();
-			filters.push(search.exactYear != null ? `Genesis year: ${search.exactYear}` : `Search: “${state.search}”`);
+			if (search.exactDate) filters.push(`Active on: ${search.exactDate}`);
+			else filters.push(search.exactYear != null ? `Genesis year: ${search.exactYear}` : `Search: “${state.search}”`);
 		}
 		$('#mlaActiveFilters').innerHTML = filters.length ? filters.map(value => `<span class="mla-active-filter">${esc(value)}</span>`).join('') : '<span class="mla-active-filter">Default JJAS cohort · complete through 2025</span>';
 	}
@@ -660,14 +668,6 @@
 			option.textContent = name;
 			stateSelect.appendChild(option);
 		});
-		const sort = $('#mlaSystemSort');
-		sort.innerHTML = [
-			['metric-desc', `${metric().title}: strongest percentile`],
-			['date-desc', 'Genesis date: newest'],
-			['date-asc', 'Genesis date: oldest'],
-			['duration-desc', 'Duration: longest'],
-			['distance-desc', 'Path length: longest']
-		].map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('');
 		const matchField = $('#mlaMatch').closest('.mla-field');
 		if (matchField) matchField.hidden = !CORE.crosswalk.some(Boolean);
 	}
@@ -675,6 +675,7 @@
 	function syncControls() {
 		$('#mlaYearFields').hidden = state.timeMode !== 'years';
 		$('#mlaDateFields').hidden = state.timeMode !== 'dates';
+		$('#mlaPeriodLabel').textContent = state.timeMode === 'dates' ? 'Track active dates' : 'Genesis years';
 		$('#mlaTimeModeYears').setAttribute('aria-pressed', String(state.timeMode === 'years'));
 		$('#mlaTimeModeDates').setAttribute('aria-pressed', String(state.timeMode === 'dates'));
 		$('#mlaYearMin').value = state.yearMin;
@@ -699,8 +700,6 @@
 		$('#mlaStateFill').value = state.stateFill;
 		$('#mlaMapScope').value = state.mapScope;
 		$('#mlaMapPath').value = state.mapPath;
-		$('#mlaPageSize').value = String(state.pageSize);
-		$('#mlaSystemSort').value = state.sort;
 		$('#mlaExtremeMetric').value = state.extremeMetric;
 		$('#mlaExtremeEligibility').value = state.extremeEligibility;
 		$('#mlaEvolutionMetric').value = state.evolutionMetric;
@@ -799,21 +798,24 @@
 		});
 		$('#mlaDateMin').addEventListener('change', event => {
 			state.dateMin = event.target.value || '1940-05-17';
-			if (state.dateMin > state.dateMax) state.dateMax = state.dateMin;
-			syncControls();
+			if (state.dateMin > state.dateMax) {
+				state.dateMax = state.dateMin;
+				$('#mlaDateMax').value = state.dateMax;
+			}
 			applyFilters();
 		});
 		$('#mlaDateMax').addEventListener('change', event => {
 			state.dateMax = event.target.value || '2025-12-31';
-			if (state.dateMax < state.dateMin) state.dateMin = state.dateMax;
-			syncControls();
+			if (state.dateMax < state.dateMin) {
+				state.dateMin = state.dateMax;
+				$('#mlaDateMin').value = state.dateMin;
+			}
 			applyFilters();
 		});
 		$('#mlaMonthMode').addEventListener('change', event => { state.monthMode = event.target.value; applyFilters(); });
 		$('#mlaMetric').addEventListener('change', event => {
 			state.metric = event.target.value;
 			state.sort = 'metric-desc';
-			$('#mlaSystemSort').options[0].textContent = `${metric().title}: strongest percentile`;
 			profileCache.clear();
 			syncControls();
 			applyFilters();
@@ -876,25 +878,17 @@
 			writeUrl('replace');
 		});
 		$('#mlaFitCohort').addEventListener('click', () => fitCohort());
-		$('#mlaSystemSort').addEventListener('change', event => { state.sort = event.target.value; state.page = 1; renderSystems(); writeUrl('replace'); });
-		$('#mlaPageSize').addEventListener('change', event => { state.pageSize = Number(event.target.value); state.page = 1; renderSystems(); });
-		$('#mlaPrevPage').addEventListener('click', () => { state.page = Math.max(1, state.page - 1); renderSystems(); });
-		$('#mlaNextPage').addEventListener('click', () => { state.page++; renderSystems(); });
 		$('#mlaExtremeMetric').addEventListener('change', event => { state.extremeMetric = event.target.value; renderExtremes(); });
 		$('#mlaExtremeEligibility').addEventListener('change', event => { state.extremeEligibility = event.target.value; renderExtremes(); });
 		$('#mlaEvolutionMetric').addEventListener('change', event => { state.evolutionMetric = event.target.value; renderLifeCharts(); writeUrl('replace'); });
 		$('#mlaLoadProfile').addEventListener('click', () => ensureDetail('Opening detailed cohort series…').then(renderLifeCharts).catch(showFatal));
 		$('#mlaCopyLink').addEventListener('click', copyViewLink);
 		$('#mlaQuickExport').addEventListener('click', downloadSummaries);
-		$('#mlaSystemsCsv').addEventListener('click', downloadSummaries);
-		$('#mlaSystemsGeojson').addEventListener('click', downloadGeojson);
 		$('#mlaDownloadSummaries').addEventListener('click', downloadSummaries);
 		$('#mlaDownloadGeojson').addEventListener('click', downloadGeojson);
 		$('#mlaDownloadQuery').addEventListener('click', downloadQuery);
 		$('#mlaDownloadFixes').addEventListener('click', downloadSelectedFixes);
 		root.addEventListener('click', event => {
-			const opener = event.target.closest('[data-open-tab]');
-			if (opener) activateTab(opener.dataset.openTab, true);
 			const selector = event.target.closest('[data-select-track]');
 			if (selector) selectTrack(Number(selector.dataset.selectTrack), {openExplore: selector.dataset.openExplore === 'true', fit: true});
 		});
@@ -971,7 +965,7 @@
 
 	function readUrl() {
 		const parameters = new URLSearchParams(window.location.search);
-		const validTabs = new Set(['explore', 'systems', 'climatology', 'extremes', 'data']);
+		const validTabs = new Set(['explore', 'climatology', 'extremes', 'data']);
 		if (validTabs.has(parameters.get('tab'))) state.tab = parameters.get('tab');
 		const years = parameters.get('years');
 		if (years && /^\d{4}-\d{4}$/.test(years)) {
@@ -1572,7 +1566,7 @@
 		state.hovered = index >= 0 ? index : null;
 		mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
 		const tip = $('#mlaMapTip');
-		if (index < 0) { tip.dataset.visible = 'false'; return; }
+		if (touch || index < 0) { tip.dataset.visible = 'false'; return; }
 		const rectangle = $('#mlaMapStack').getBoundingClientRect();
 		const row = track(index);
 		const item = credibleIb(index);
@@ -1596,7 +1590,7 @@
 		state.mapCenterLon = (bounds[0] + bounds[2]) / 2;
 		state.mapCenterLat = (bounds[1] + bounds[3]) / 2;
 		constrainMapView(rectangle.width, rectangle.height);
-		syncControls();
+		$('#mlaMapScope').value = state.mapScope;
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
 		writeUrl('replace');
 		return true;
@@ -1825,20 +1819,6 @@
 		const table = $('#mlaTopTable');
 		table.querySelector('thead').innerHTML = tableHead();
 		table.querySelector('tbody').innerHTML = sortedActive('metric-desc').slice(0, 12).map(index => tableRow(index, false)).join('') || '<tr><td colspan="5">No systems match the current filters.</td></tr>';
-	}
-
-	function renderSystems() {
-		if ($('#mlaPanelSystems').hidden) return;
-		const indexes = sortedActive(state.sort);
-		const pages = Math.max(1, Math.ceil(indexes.length / state.pageSize));
-		state.page = clamp(state.page, 1, pages);
-		const start = (state.page - 1) * state.pageSize;
-		const table = $('#mlaSystemsTable');
-		table.querySelector('thead').innerHTML = tableHead();
-		table.querySelector('tbody').innerHTML = indexes.slice(start, start + state.pageSize).map(index => tableRow(index, true)).join('') || '<tr><td colspan="5">No systems match the current filters.</td></tr>';
-		$('#mlaPageReadout').textContent = indexes.length ? `Rows ${fmt(start + 1)}–${fmt(Math.min(indexes.length, start + state.pageSize))} of ${fmt(indexes.length)} · page ${state.page} of ${pages}` : 'No matching systems';
-		$('#mlaPrevPage').disabled = state.page <= 1;
-		$('#mlaNextPage').disabled = state.page >= pages;
 	}
 
 	function setupChart(id) {
@@ -2500,7 +2480,8 @@
 			catalogue_coverage: {start: CORE.meta.coverage_start, end: CORE.meta.coverage_end},
 			source_sha256: CORE.meta.core_catalogue_sha256,
 			filters: {
-				genesis_time_mode: state.timeMode,
+				time_mode: state.timeMode,
+				time_filter_definition: state.timeMode === 'dates' ? 'track overlaps active-date interval' : 'genesis year within interval',
 				year_min: state.timeMode === 'years' ? state.yearMin : null,
 				year_max: state.timeMode === 'years' ? state.yearMax : null,
 				date_min: state.timeMode === 'dates' ? state.dateMin : null,
@@ -2585,7 +2566,6 @@
 	function renderCurrentPanel() {
 		if (!CORE) return;
 		if (state.tab === 'explore') renderExplore();
-		else if (state.tab === 'systems') renderSystems();
 		else if (state.tab === 'climatology') renderClimatology();
 		else if (state.tab === 'extremes') renderExtremes();
 		else if (state.tab === 'verification') renderVerification();

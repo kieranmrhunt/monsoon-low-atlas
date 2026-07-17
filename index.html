@@ -440,6 +440,10 @@
 	.mla-tab { min-height: 44px; }
 }
 
+@media (pointer: coarse), (max-width: 760px) {
+	.mla-map-tip { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
 	#monsoon-low-atlas *, #monsoon-low-atlas *::before, #monsoon-low-atlas *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
@@ -474,7 +478,6 @@
 	<div class="mla-nav-shell">
 		<nav class="mla-wrap mla-tabs" role="tablist" aria-label="Atlas sections">
 			<button class="mla-tab" role="tab" id="mlaTabExplore" aria-selected="true" aria-controls="mlaPanelExplore" data-tab="explore" type="button">Explore</button>
-			<button class="mla-tab" role="tab" id="mlaTabSystems" aria-selected="false" aria-controls="mlaPanelSystems" data-tab="systems" type="button">Systems</button>
 			<button class="mla-tab" role="tab" id="mlaTabClimatology" aria-selected="false" aria-controls="mlaPanelClimatology" data-tab="climatology" type="button">Climatology</button>
 			<button class="mla-tab" role="tab" id="mlaTabExtremes" aria-selected="false" aria-controls="mlaPanelExtremes" data-tab="extremes" type="button">Extremes</button>
 			<button class="mla-tab" role="tab" id="mlaTabData" aria-selected="false" aria-controls="mlaPanelData" data-tab="data" type="button">Data & methods</button>
@@ -491,10 +494,10 @@
 			<div class="mla-filter-primary">
 				<label class="mla-field" for="mlaSearch">
 					<span class="mla-label">Find a system</span>
-					<input class="mla-control" id="mlaSearch" type="search" placeholder="Cyclone name, DD 1986 03, 2016, ID 69674 or date">
+					<input class="mla-control" id="mlaSearch" type="search" placeholder="Cyclone name, DD 1986 03, 2016, ID 69674 or active date">
 				</label>
 				<div class="mla-field">
-					<div class="mla-period-head"><span class="mla-label">Genesis period</span><div class="mla-period-toggle" role="group" aria-label="Filter genesis by years or dates"><button class="mla-btn mla-btn-small" id="mlaTimeModeYears" type="button" aria-pressed="true">Years</button><button class="mla-btn mla-btn-small" id="mlaTimeModeDates" type="button" aria-pressed="false">Dates</button></div></div>
+					<div class="mla-period-head"><span class="mla-label" id="mlaPeriodLabel">Genesis years</span><div class="mla-period-toggle" role="group" aria-label="Filter by genesis years or active dates"><button class="mla-btn mla-btn-small" id="mlaTimeModeYears" type="button" aria-pressed="true">Years</button><button class="mla-btn mla-btn-small" id="mlaTimeModeDates" type="button" aria-pressed="false">Dates</button></div></div>
 					<div class="mla-year-fields" id="mlaYearFields">
 						<label class="mla-sr-only" for="mlaYearMin">First genesis year</label>
 						<input class="mla-control" id="mlaYearMin" type="number" min="1940" max="2025" value="1940">
@@ -639,27 +642,8 @@
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
 					<h3>Leading systems in this cohort</h3>
-					<button class="mla-btn mla-btn-small" type="button" data-open-tab="systems">Browse all systems</button>
 				</div>
 				<div class="mla-table-wrap"><table class="mla-table" id="mlaTopTable"><thead></thead><tbody></tbody></table></div>
-			</section>
-		</section>
-
-		<section class="mla-panel" id="mlaPanelSystems" role="tabpanel" aria-labelledby="mlaTabSystems" data-panel="systems" hidden>
-			<div class="mla-panel-heading">
-				<h2>Systems</h2>
-				<p>The accessible, sortable v5.4.2 catalogue with physical-event identifiers and complete diagnostics at every hourly centre.</p>
-			</div>
-			<section class="mla-card mla-section-card">
-				<div class="mla-toolbar">
-					<div class="mla-toolbar-group">
-						<label class="mla-field" for="mlaSystemSort"><span class="mla-label">Sort systems by</span><select class="mla-select" id="mlaSystemSort"></select></label>
-						<label class="mla-field" for="mlaPageSize"><span class="mla-label">Rows per page</span><select class="mla-select" id="mlaPageSize"><option>25</option><option selected>50</option><option>100</option></select></label>
-					</div>
-					<div class="mla-toolbar-group"><button class="mla-btn mla-btn-small" id="mlaSystemsCsv" type="button">Download summaries</button><button class="mla-btn mla-btn-small" id="mlaSystemsGeojson" type="button">Download GeoJSON</button></div>
-				</div>
-				<div class="mla-table-wrap"><table class="mla-table" id="mlaSystemsTable"><thead></thead><tbody></tbody></table></div>
-				<div class="mla-pagination"><span id="mlaPageReadout"></span><div class="mla-toolbar-group"><button class="mla-btn mla-btn-small" id="mlaPrevPage" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextPage" type="button">Next</button></div></div>
 			</section>
 		</section>
 
@@ -707,7 +691,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz"}</script>
 
-<script src="assets/atlas-app.314ac5129a60.js"></script>
+<script src="assets/atlas-app.069d42a2e869.js"></script>
 
 </body>
 </html>
