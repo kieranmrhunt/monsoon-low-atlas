@@ -560,12 +560,20 @@
 		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
+	function parsedSearch() {
+		const query = state.search.trim().toLowerCase();
+		const number = Number(query);
+		const exactYear = /^\d{4}$/.test(query) && number >= 1940 && number <= 2025 ? number : null;
+		const explicitId = query.match(/^(?:id|parent(?:\s+event)?|event)\s*#?\s*(\d+)$/);
+		const exactTrackId = explicitId ? Number(explicitId[1]) : (exactYear == null && /^\d+$/.test(query) ? number : null);
+		return {query, exactYear, exactTrackId};
+	}
+
 	function applyFilters(options) {
 		if (!CORE) return;
 		const active = [];
 		const bits = new Uint8Array(CORE.tracks.length);
-		const query = state.search.trim().toLowerCase();
-		const exactTrackId = /^\d+$/.test(query) ? Number(query) : null;
+		const {query, exactYear, exactTrackId} = parsedSearch();
 		const minimumGenesis = state.timeMode === 'dates' ? Date.parse(`${state.dateMin}T00:00:00Z`) : NaN;
 		const maximumGenesis = state.timeMode === 'dates' ? Date.parse(`${state.dateMax}T23:59:59.999Z`) : NaN;
 		for (let index = 0; index < CORE.tracks.length; index++) {
@@ -577,7 +585,11 @@
 			if (!state.classes.has(row[T.category])) continue;
 			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
 			if (!matchPass(index) || !qcPass(index) || !statePass(index)) continue;
-			if (query && (exactTrackId == null ? !CORE.search[index].includes(query) : atlasId(index) !== exactTrackId)) continue;
+			if (query) {
+				if (exactYear != null && row[T.start_year] !== exactYear) continue;
+				if (exactYear == null && exactTrackId != null && atlasId(index) !== exactTrackId) continue;
+				if (exactYear == null && exactTrackId == null && !CORE.search[index].includes(query)) continue;
+			}
 			bits[index] = 1;
 			active.push(index);
 		}
@@ -628,7 +640,10 @@
 			if (minimum) filters.push(`${METRICS[key].title} P${minimum} (${physicalThreshold(key)})`);
 		});
 		if (state.stateIndex >= 0) filters.push(`Track crosses ${CORE.states[state.stateIndex]}`);
-		if (state.search) filters.push(`Search: “${state.search}”`);
+		if (state.search) {
+			const search = parsedSearch();
+			filters.push(search.exactYear != null ? `Genesis year: ${search.exactYear}` : `Search: “${state.search}”`);
+		}
 		$('#mlaActiveFilters').innerHTML = filters.length ? filters.map(value => `<span class="mla-active-filter">${esc(value)}</span>`).join('') : '<span class="mla-active-filter">Default JJAS cohort · complete through 2025</span>';
 	}
 
@@ -2069,10 +2084,12 @@
 		const cellWidth = (width - padding.left - padding.right) / columns.length;
 		const cellHeight = (height - padding.top - padding.bottom) / rows.length;
 		const maximum = Math.max(1, ...matrix.flat().filter(Number.isFinite));
+		const labelColour = css('--mla-muted', '#685c4d');
 		context.font = '11px ui-monospace, Consolas, monospace';
-		context.fillStyle = css('--mla-muted', '#685c4d');
+		context.fillStyle = labelColour;
 		columns.forEach((label, index) => context.fillText(label, padding.left + index * cellWidth + 3, height - 15));
 		rows.forEach((label, row) => {
+			context.fillStyle = labelColour;
 			context.fillText(label, 7, padding.top + row * cellHeight + cellHeight * .64);
 			columns.forEach((unused, column) => {
 				const value = matrix[row][column];
