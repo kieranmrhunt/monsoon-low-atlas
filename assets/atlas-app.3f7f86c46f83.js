@@ -143,6 +143,11 @@
 		return quantile(values, .5);
 	}
 
+	function mean(values) {
+		const valid = values.filter(Number.isFinite);
+		return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : NaN;
+	}
+
 	function toast(message) {
 		const node = $('#mlaToast');
 		node.textContent = message;
@@ -1914,16 +1919,27 @@
 			context.lineWidth = item.width || 2.3;
 			context.lineJoin = 'round';
 			context.lineCap = 'round';
+			context.setLineDash(item.dash || []);
 			context.stroke();
+			context.setLineDash([]);
 		}
-		let legendX = padding.left;
+		const legendWidths = series.map(item => Math.min(150, 45 + item.name.length * 6.5));
+		const legendWidth = legendWidths.reduce((sum, value) => sum + value, 0);
+		let legendX = Math.max(8, Math.min(padding.left, width - legendWidth - 8));
 		for (const item of series) {
-			context.fillStyle = item.colour;
-			context.fillRect(legendX, 15, 18, 3);
+			context.beginPath();
+			context.moveTo(legendX, 17);
+			context.lineTo(legendX + 18, 17);
+			context.strokeStyle = item.colour;
+			context.lineWidth = item.width || 2.3;
+			context.lineCap = 'round';
+			context.setLineDash(item.dash || []);
+			context.stroke();
+			context.setLineDash([]);
 			context.fillStyle = css('--mla-ink', '#282119');
 			context.font = '12px Aptos, Segoe UI, sans-serif';
 			context.fillText(item.name, legendX + 24, 20);
-			legendX += Math.min(190, 45 + item.name.length * 7);
+			legendX += legendWidths[series.indexOf(item)];
 		}
 		context.restore();
 	}
@@ -2240,22 +2256,34 @@
 		}
 		profileButton.hidden = true;
 		const profileMetrics = PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key));
+		const allIndexes = CORE.tracks.map((unused, index) => index);
 		const stack = $('#mlaProfileStack');
 		stack.innerHTML = profileMetrics.map(key => {
 			const definition = METRICS[key];
-			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title} median and interquartile range over the filtered cohort lifecycle`)}"></canvas></div>`;
+			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title}: filtered-cohort median and interquartile range with all-LPS mean`)}"></canvas></div>`;
 		}).join('');
 		const accessibleProfiles = [];
 		for (const key of profileMetrics) {
 			const definition = METRICS[key];
 			const profile = cohortProfile(state.active, key, 'life');
+			const allProfile = cohortProfile(allIndexes, key, 'life');
 			const maximumN = Math.max(0, ...profile.points.map(point => point.n));
-			$(`#mlaProfileMeta-${key}`).textContent = `${definition.unit} · max n ${fmt(maximumN)}`;
-			drawLinePlot(`mlaProfileChart-${key}`, [{
-				name: 'Median + IQR',
-				colour: definition.colour,
-				points: profile.points
-			}], {
+			const allMaximumN = Math.max(0, ...allProfile.points.map(point => point.n));
+			$(`#mlaProfileMeta-${key}`).textContent = `${definition.unit} · cohort n ≤ ${fmt(maximumN)} · all LPS n ≤ ${fmt(allMaximumN)}`;
+			drawLinePlot(`mlaProfileChart-${key}`, [
+				{
+					name: 'Cohort median',
+					colour: definition.colour,
+					points: profile.points
+				},
+				{
+					name: 'All-LPS mean',
+					colour: css('--mla-muted', '#685c4d'),
+					width: 1.9,
+					dash: [1, 5],
+					points: allProfile.points.map(point => ({x: point.x, y: point.mean}))
+				}
+			], {
 				zero: !['mslp', 'vort', 'q', 'rh'].includes(key),
 				xMin: 0,
 				xMax: 100,
@@ -2263,15 +2291,16 @@
 				yFormat: value => fmt(value, key === 'mslp' ? 0 : 1)
 			});
 			accessibleProfiles.push(`<h4>${esc(`${definition.title} (${definition.unit})`)}</h4>${accessibleTable(
-				['Life fraction', 'Median', 'Q1', 'Q3', 'Systems'],
-				profile.points.map(point => [`${fmt(point.x)}%`, fmt(point.y, 2), fmt(point.low, 2), fmt(point.high, 2), point.n])
+				['Life fraction', 'Cohort median', 'Cohort Q1', 'Cohort Q3', 'Cohort systems', 'All-LPS mean', 'All-LPS systems'],
+				profile.points.map((point, index) => [`${fmt(point.x)}%`, fmt(point.y, 2), fmt(point.low, 2), fmt(point.high, 2), point.n, fmt(allProfile.points[index].mean, 2), allProfile.points[index].n])
 			)}`);
 		}
 		$('#mlaProfileData').innerHTML = accessibleProfiles.join('');
 	}
 
 	function cohortProfile(indexes, metricKey, alignment) {
-		const cacheKey = `${indexes.join(',')}|${metricKey}|${alignment}`;
+		const allSystems = indexes.length === CORE.tracks.length && indexes.every((value, index) => value === index);
+		const cacheKey = `${allSystems ? 'all' : indexes.join(',')}|${metricKey}|${alignment}`;
 		if (profileCache.has(cacheKey)) return profileCache.get(cacheKey);
 		const bins = alignment === 'peak' ? Array.from({length: 25}, (unused, index) => -72 + index * 6) : Array.from({length: 25}, (unused, index) => index * 100 / 24);
 		const values = bins.map(() => []);
@@ -2298,7 +2327,7 @@
 			});
 			perBin.forEach((items, bin) => { if (items.length) values[bin].push(items.reduce((sum, value) => sum + value, 0) / items.length); });
 		}
-		const points = bins.map((x, index) => ({x, y: median(values[index]), low: quantile(values[index], .25), high: quantile(values[index], .75), n: values[index].length}));
+		const points = bins.map((x, index) => ({x, y: median(values[index]), mean: mean(values[index]), low: quantile(values[index], .25), high: quantile(values[index], .75), n: values[index].length}));
 		const result = {points, bins};
 		profileCache.set(cacheKey, result);
 		return result;
