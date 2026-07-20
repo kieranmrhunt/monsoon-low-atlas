@@ -562,8 +562,18 @@
 						</label>
 					</div>
 					<div class="mla-filter-group">
-						<h3>Track location</h3>
+						<h3>Geography</h3>
 						<input id="mlaQc" type="hidden" value="any">
+						<label class="mla-field" for="mlaGenesisRegion" style="margin-top:7px">
+							<span class="mla-label">Genesis region</span>
+							<select class="mla-select" id="mlaGenesisRegion">
+								<option value="all">All genesis locations</option>
+								<option value="bob">Bay of Bengal</option>
+								<option value="india">Indian land</option>
+								<option value="arabian">Arabian Sea</option>
+								<option value="other">Other locations</option>
+							</select>
+						</label>
 						<label class="mla-field" for="mlaState" style="margin-top:7px">
 							<span class="mla-label">Track crosses state / UT</span>
 							<select class="mla-select" id="mlaState"><option value="">All tracks</option></select>
@@ -680,7 +690,7 @@
 			<div class="mla-method-grid">
 				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4.2 recall-first core</strong> contains 368,925 hourly positions grouped into 2,980 strength-qualified physical events. Every event is continuous at hourly resolution.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions, classifications and diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
 				<section class="mla-card mla-prose"><h3>Identity and physics</h3><p><code>track_id</code> identifies the physical event used for plotting, counts, matching and climatology. <code>event_id</code> and <code>continuity_parent_track_id</code> are identical aliases in v5.4.2.</p><h4>Map convention</h4><p>Each event is drawn as one uniform track. ERA5 physics is independently re-sampled at every observed or supported interpolated centre.</p></section>
-				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> centre diagnostic in 10⁻⁵ s⁻¹.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm; source rows retain their valid-history count.</li><li><strong>Percentiles:</strong> fixed across all 2,980 v5.4.2 physical events and independently combinable; filters do not rescale them.</li></ul><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed fixes at physical-event grain and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each event stores the area-mean daily rainfall averaged over UTC calendar days touched by its track; cohort maps weight events by active days.</p></section>
+				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> centre diagnostic in 10⁻⁵ s⁻¹.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm; source rows retain their valid-history count.</li><li><strong>Percentiles:</strong> fixed across all 2,980 v5.4.2 physical events and independently combinable; filters do not rescale them.</li></ul><h4>Genesis regions</h4><p>Indian land means the first published centre lies inside an atlas state/UT polygon. Bay of Bengal and Arabian Sea require a water genesis point in 0–30°N, 45–100°E, using the Natural Earth land mask; 77.5°E separates the two ocean bins. Other contains every remaining land or ocean location. These are transparent atlas analysis regions, not official genesis classifications.</p><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed fixes at physical-event grain and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each event stores the area-mean daily rainfall averaged over UTC calendar days touched by its track; cohort maps weight events by active days.</p></section>
 				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include v5.4.2 physical-event IDs, units, filter state, source provenance, state rainfall and complete published-centre physics.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaReleaseSummary" target="_blank" rel="noopener">LPS v5.4.2 release manifest and checksums</a> · <a href="data/lps-v5.4.2-era5-1940-2025-core.quality-report.md" target="_blank" rel="noopener">quality report</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
 			</div>
 		</section>
@@ -691,7 +701,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz"}</script>
 
-<script src="assets/atlas-app.3f7f86c46f83.js"></script>
+<script src="assets/atlas-app.68dfaa4a2b80.js"></script>
 
 </body>
 </html>

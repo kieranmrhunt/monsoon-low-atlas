@@ -27,6 +27,7 @@
 	let fallbackLabels = [];
 	let nearStateCache = new Map();
 	let profileCache = new Map();
+	let genesisRegions = [];
 	let toastTimer;
 	let pointerFrame = 0;
 	let pendingPointer = null;
@@ -46,6 +47,13 @@
 	const FILTER_METRIC_KEYS = ['deficit', 'vort', 'wind', 'mslp', 'rain'];
 	const PROFILE_METRIC_KEYS = ['deficit', 'wind', 'vort', 'rain', 'mslp', 'q', 'rh'];
 	const DEFAULT_PROFILE_METRICS = ['deficit', 'wind', 'rain'];
+	const GENESIS_REGION_LABELS = {
+		all: 'All genesis locations',
+		bob: 'Bay of Bengal',
+		india: 'Indian land',
+		arabian: 'Arabian Sea',
+		other: 'Other locations'
+	};
 
 	const state = {
 		tab: 'explore',
@@ -61,6 +69,7 @@
 		percentileMins: {deficit: 0, vort: 0, wind: 0, mslp: 0, rain: 0},
 		match: 'any',
 		qc: 'any',
+		genesisRegion: 'all',
 		stateIndex: -1,
 		stateMin: 0,
 		search: '',
@@ -531,6 +540,40 @@
 		return inside;
 	}
 
+	function pointOnIndianLand(lon, lat) {
+		for (const geometry of CORE.geo.states || []) {
+			const bbox = geometry.bbox;
+			if (!bbox || lon < bbox[0] || lon > bbox[2] || lat < bbox[1] || lat > bbox[3]) continue;
+			if (pointInState(lon, lat, geometry)) return true;
+		}
+		return false;
+	}
+
+	function pointOnAtlasLand(lon, lat) {
+		let inside = false;
+		for (const ring of CORE.geo.land || []) if (pointInRing(lon, lat, ring)) inside = !inside;
+		return inside;
+	}
+
+	function classifyGenesis(index) {
+		const row = track(index);
+		const lat = Number(row[T.gen_lat_x1000]) / 1000;
+		const lon = Number(row[T.gen_lon_x1000]) / 1000;
+		if (pointOnIndianLand(lon, lat)) return 'india';
+		const water = !pointOnAtlasLand(lon, lat);
+		if (water && lat >= 0 && lat <= 30 && lon >= 77.5 && lon <= 100) return 'bob';
+		if (water && lat >= 0 && lat <= 30 && lon >= 45 && lon < 77.5) return 'arabian';
+		return 'other';
+	}
+
+	function buildGenesisRegions() {
+		genesisRegions = CORE.tracks.map((unused, index) => classifyGenesis(index));
+	}
+
+	function genesisRegionPass(index) {
+		return state.genesisRegion === 'all' || genesisRegions[index] === state.genesisRegion;
+	}
+
 	function trackPassesState(trackIndex, stateIndex) {
 		const key = `${stateIndex}:passes`;
 		if (!nearStateCache.has(key)) nearStateCache.set(key, new Int8Array(CORE.tracks.length).fill(-1));
@@ -562,7 +605,7 @@
 
 	function filterSignature() {
 		const percentiles = FILTER_METRIC_KEYS.map(key => `${key}:${state.percentileMins[key]}`).join(',');
-		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.stateIndex, state.stateMin, state.search].join('|');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
 	function parsedSearch() {
@@ -598,7 +641,7 @@
 			if (!monthPass(index)) continue;
 			if (!state.classes.has(row[T.category])) continue;
 			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
-			if (!matchPass(index) || !qcPass(index) || !statePass(index)) continue;
+			if (!matchPass(index) || !qcPass(index) || !genesisRegionPass(index) || !statePass(index)) continue;
 			if (query) {
 				if (exactDateStart != null && (row[T.end_ms] < exactDateStart || row[T.start_ms] > exactDateEnd)) continue;
 				if (exactDateStart == null && exactYear != null && row[T.start_year] !== exactYear) continue;
@@ -653,6 +696,7 @@
 			const minimum = state.percentileMins[key];
 			if (minimum) filters.push(`${METRICS[key].title} P${minimum} (${physicalThreshold(key)})`);
 		});
+		if (state.genesisRegion !== 'all') filters.push(`Genesis: ${GENESIS_REGION_LABELS[state.genesisRegion]}`);
 		if (state.stateIndex >= 0) filters.push(`Track crosses ${CORE.states[state.stateIndex]}`);
 		if (state.search) {
 			const search = parsedSearch();
@@ -697,6 +741,7 @@
 		});
 		$('#mlaMatch').value = state.match;
 		$('#mlaQc').value = state.qc;
+		$('#mlaGenesisRegion').value = state.genesisRegion;
 		$('#mlaState').value = state.stateIndex < 0 ? '' : String(state.stateIndex);
 		$('#mlaStateMin').value = state.stateMin;
 		$('#mlaSearch').value = state.search;
@@ -760,6 +805,7 @@
 		state.percentileMins = {deficit: 0, vort: 0, wind: 0, mslp: 0, rain: 0};
 		state.match = 'any';
 		state.qc = 'any';
+		state.genesisRegion = 'all';
 		state.stateIndex = -1;
 		state.stateMin = 0;
 		state.search = '';
@@ -836,6 +882,7 @@
 		});
 		$('#mlaMatch').addEventListener('change', event => { state.match = event.target.value; applyFilters(); });
 		$('#mlaQc').addEventListener('change', event => { state.qc = event.target.value; applyFilters(); });
+		$('#mlaGenesisRegion').addEventListener('change', event => { state.genesisRegion = event.target.value; applyFilters(); });
 		$('#mlaState').addEventListener('change', event => {
 			state.stateIndex = event.target.value === '' ? -1 : Number(event.target.value);
 			nearStateCache.clear();
@@ -945,6 +992,7 @@
 			if (state.percentileMins[key]) parameters.set(`p${key}`, String(state.percentileMins[key]));
 		});
 		if (state.match !== 'any') parameters.set('match', state.match);
+		if (state.genesisRegion !== 'all') parameters.set('genesis', state.genesisRegion);
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
@@ -995,6 +1043,7 @@
 		});
 		if (parameters.has('pmin') && !parameters.has(`p${state.metric}`)) state.percentileMins[state.metric] = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
 		if (['any', 'unmatched', 'high', 'credible', 'named'].includes(parameters.get('match'))) state.match = parameters.get('match');
+		state.genesisRegion = Object.hasOwn(GENESIS_REGION_LABELS, parameters.get('genesis')) ? parameters.get('genesis') : 'all';
 		const overIndex = CORE.state_slugs.indexOf(parameters.get('over'));
 		if (overIndex >= 0) state.stateIndex = overIndex;
 		state.search = parameters.get('q') || '';
@@ -2444,6 +2493,9 @@
 				start_utc: new Date(row[T.start_ms]).toISOString(),
 				end_utc: new Date(row[T.end_ms]).toISOString(),
 				duration_hours: row[T.duration_hours],
+				genesis_latitude: row[T.gen_lat_x1000] / 1000,
+				genesis_longitude: row[T.gen_lon_x1000] / 1000,
+				genesis_region: GENESIS_REGION_LABELS[genesisRegions[index]],
 				atlas_peak_class: CORE.cat_labels[String(row[T.category])],
 				peak_vorticity_1e_5_s_1: row[T.peak_vort_x10] / 10,
 				peak_precip_24h_mm: row[T.peak_precip_x10] / 10,
@@ -2521,6 +2573,7 @@
 				analysis_metric: state.metric,
 				minimum_fixed_catalogue_percentiles: {...state.percentileMins},
 				continuity_screen: state.qc,
+				genesis_region: state.genesisRegion === 'all' ? null : state.genesisRegion,
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
 				search: state.search || null
 			},
@@ -2619,6 +2672,7 @@
 		buildPathRuntime();
 		buildFallbackLabels();
 		buildSearchIndex();
+		buildGenesisRegions();
 		buildFilterControls();
 		readUrl();
 		if (state.stateFill !== 'none') await ensureDetail();

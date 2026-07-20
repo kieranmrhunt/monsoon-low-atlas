@@ -14,6 +14,7 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - Cyclone names come from a physical-event match to NOAA IBTrACS v04r01 NI and WP best tracks. Low-confidence matches remain unnamed.
 - State fills use IMD 0.25-degree daily gridded rainfall. Each event's value is the area-mean daily rainfall averaged over UTC dates touched by its track.
 - The state/UT filter requires at least one hourly published centre inside the selected administrative boundary.
+- Genesis-region filters use the first published centre. Indian land uses the atlas state/UT polygons; the two ocean bins require a Natural Earth water point in 0–30 degrees north and 45–100 degrees east, split at 77.5 degrees east. Remaining locations are labelled Other.
 - The default map draws only positions in the selected months; whole-event lifecycles remain available.
 - The split build loads compressed catalogue payloads from `assets/*.json.gz` and decompresses them in modern browsers.
 
