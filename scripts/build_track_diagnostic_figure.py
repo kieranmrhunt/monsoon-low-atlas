@@ -37,7 +37,7 @@ DEFAULT_DATA = (
     / "lps-v5.3-continuity-framework/production/v5.4.2/zenodo-release"
     / "lps_v5.4.2-era5-1940-2025-core.parquet"
 )
-DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.c6db29ed4192.json.gz"
+DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.14e01a61e44d.json.gz"
 DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.4.2-track-diagnostics.png"
 
 PAPER = "#fffaf0"

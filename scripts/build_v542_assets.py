@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build compact browser assets from the LPS v5.4.2 recall-first core catalogue."""
+"""Build compact browser assets from the LPS v5.4.2 catalogue."""
 
 from __future__ import annotations
 
@@ -672,7 +672,7 @@ def main() -> None:
     }
     core = {
         "meta": {
-            "title": "LPS v5.4.2 ERA5 recall-first core South Asian low-pressure-system catalogue",
+            "title": "LPS v5.4.2 ERA5 South Asian low-pressure-system catalogue",
             "rows": int(len(data)),
             "observed_rows": int(diagnostics.sum()),
             "posterior_rows": int((~diagnostics).sum()),
@@ -689,7 +689,7 @@ def main() -> None:
             "lat_max": round(float(data["lat"].max()), 4),
             "row_grain": "One row per hourly physical-event position/time: observed detector fix or supported interpolated centre.",
             "identity_grain": "track_id is one hourly-complete physical event; event_id and continuity_parent_track_id are identical aliases.",
-            "source_dataset": "ERA5-derived LPS v5.4.2 recall-first core catalogue",
+            "source_dataset": "ERA5-derived LPS v5.4.2 catalogue",
             "catalogue_version": "v5.4.2",
             "schema": release["schema"],
             "atlas_version": "3.5.0",

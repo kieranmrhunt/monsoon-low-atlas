@@ -4,7 +4,7 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="theme-color" content="#071a1c">
-	<meta name="description" content="An interactive atlas of ERA5-derived South Asian monsoon low-pressure systems from the LPS v5.4.2 recall-first core catalogue.">
+	<meta name="description" content="An interactive atlas of ERA5-derived South Asian monsoon low-pressure systems from the LPS v5 catalogue.">
 	<title>Monsoon Low-Pressure System Atlas</title>
 	<link rel="preconnect" href="https://use.typekit.net" crossorigin>
 	<link rel="preconnect" href="https://p.typekit.net" crossorigin>
@@ -222,19 +222,33 @@
 .mla-date-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px; align-items: end; }
 .mla-date-fields label { display: grid; gap: 2px; min-width: 0; color: var(--mla-muted); font-size: 10px; }
 .mla-date-fields input { min-width: 0; padding-inline: 6px; font-size: 12px; }
-.mla-filter-more { border-top: 1px solid var(--mla-line); }
+.mla-filter-disclosures { border-top: 1px solid var(--mla-line); }
+.mla-filter-disclosure + .mla-filter-disclosure { border-top: 1px solid var(--mla-line); }
+.mla-filter-disclosure > summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 13px;
+	cursor: pointer;
+	list-style: none;
+	color: var(--mla-ink);
+	font-size: 13px;
+	font-weight: 500;
+}
+.mla-filter-disclosure > summary::-webkit-details-marker { display: none; }
+.mla-filter-disclosure > summary::after { content: "+"; color: var(--mla-indigo); font-size: 20px; font-weight: 400; line-height: 1; }
+.mla-filter-disclosure[open] > summary { background: color-mix(in srgb, var(--mla-well) 55%, transparent); }
+.mla-filter-disclosure[open] > summary::after { content: "−"; }
 .mla-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 12px 13px 14px; }
 .mla-filter-group { min-width: 0; }
 .mla-filter-group h3 { margin: 0 0 7px; font-size: 14px; font-weight: 500; }
-.mla-percentile-group { grid-column: 1 / -1; border-top: 1px solid var(--mla-line); padding-top: 12px; }
-.mla-percentile-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px 16px; }
+.mla-percentile-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px 16px; padding: 12px 13px 14px; }
 .mla-percentile-filter { display: grid; gap: 5px; min-width: 0; }
 .mla-percentile-filter output { font-family: var(--mla-font); color: var(--mla-ink); }
 .mla-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-filter-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--mla-line); padding: 9px 13px; }
 .mla-result-count { font-family: var(--mla-font); font-size: 13px; }
-.mla-active-filters { display: flex; gap: 6px; flex-wrap: wrap; }
-.mla-active-filter { border-radius: 999px; background: var(--mla-well); padding: 4px 8px; font-size: 12px; color: var(--mla-muted); }
 .mla-caution { margin: 8px 0 0; color: var(--mla-muted); font-size: 12px; }
 
 .mla-panel { animation: mla-panel-in .18s ease both; }
@@ -287,8 +301,11 @@
 .mla-track-time-control span { color: var(--mla-faint); font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .mla-time-slider { width: 100%; min-width: 150px; accent-color: var(--mla-indigo-deep); cursor: pointer; }
 .mla-time-slider:disabled { cursor: not-allowed; opacity: .5; }
-.mla-vorticity-key { display: inline-flex; align-items: center; gap: 6px; color: var(--mla-muted); font-size: 11px; }
-.mla-vorticity-ramp { width: 110px; height: 9px; border-radius: 999px; background: linear-gradient(90deg, rgba(49, 54, 149, 0), #313695 8%, #4575b4 24%, #91bfdb 40%, #f7f7f7 55%, #d6604d 78%, #67001f); }
+.mla-weather-key { display: inline-flex; align-items: center; gap: 6px; color: var(--mla-muted); font-size: 11px; }
+.mla-weather-ramp { width: 110px; height: 9px; border-radius: 999px; }
+.mla-weather-ramp[data-field="vorticity"] { background: linear-gradient(90deg, rgba(49, 54, 149, 0), #313695 8%, #4575b4 24%, #91bfdb 40%, #f7f7f7 55%, #d6604d 78%, #67001f); }
+.mla-weather-ramp[data-field="precipitation"] { background: linear-gradient(90deg, rgba(247, 252, 253, 0), #ccece6 10%, #66c2a4 30%, #238b45 52%, #225ea8 75%, #54278f); }
+.mla-weather-ramp[data-field="rh500"] { background: linear-gradient(90deg, rgba(246, 239, 247, .7), #d4b9da 20%, #9e9ac8 45%, #6a51a3 70%, #3f007d); }
 .mla-map-foot { display: flex; gap: 10px 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 9px 12px; border-top: 1px solid var(--mla-line); color: var(--mla-muted); font-size: 12px; }
 .mla-legend { display: flex; gap: 7px 12px; align-items: center; flex-wrap: wrap; }
 .mla-legend-item { display: inline-flex; align-items: center; gap: 5px; }
@@ -299,7 +316,6 @@
 .mla-dossier-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .mla-dossier h3 { font-family: var(--mla-font); font-size: 27px; line-height: 1.05; font-weight: 500; margin: 6px 0; }
 .mla-dossier-sub { margin: 0; color: var(--mla-muted); }
-.mla-badge-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-fact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
 .mla-fact { border-top: 1px solid var(--mla-line); padding-top: 8px; min-width: 0; }
 .mla-fact span { display: block; color: var(--mla-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
@@ -471,7 +487,7 @@
 			<div class="mla-mast-row">
 				<div>
 					<h1 class="mla-title">Indian Monsoon Low Atlas</h1>
-					<div class="mla-eyebrow mla-eyebrow-below">ERA5-derived LPS v5.4.2 recall-first core catalogue · 1940–2025</div>
+					<div class="mla-eyebrow mla-eyebrow-below">ERA5-derived LPS v5 catalogue · 1940–2025</div>
 				</div>
 				<div class="mla-header-actions">
 					<a class="mla-btn mla-btn-small" id="mlaZenodoHeader" target="_blank" rel="noopener" hidden>Full dataset</a>
@@ -538,8 +554,10 @@
 				</label>
 			</div>
 
-			<div class="mla-filter-more" id="mlaAdvancedFilters">
-				<div class="mla-filter-grid">
+			<div class="mla-filter-disclosures" id="mlaAdvancedFilters">
+				<details class="mla-filter-disclosure">
+					<summary>Time, IBTrACS and geography</summary>
+					<div class="mla-filter-grid">
 					<div class="mla-filter-group">
 						<h3>Months</h3>
 						<div class="mla-chip-row" id="mlaMonthChips" aria-label="Selected months"></div>
@@ -590,23 +608,21 @@
 							<input class="mla-range" id="mlaStateMin" type="range" min="0" max="100" step="1" value="0">
 						</label>
 					</div>
-					<div class="mla-filter-group mla-percentile-group" id="mlaPercentileFilters">
-						<h3>Minimum catalogue percentiles</h3>
-						<div class="mla-percentile-grid">
+					</div>
+				</details>
+				<details class="mla-filter-disclosure" id="mlaPercentileFilters">
+					<summary>Catalogue percentiles</summary>
+					<div class="mla-percentile-grid">
 							<label class="mla-percentile-filter" for="mlaPercentileDeficit"><span class="mla-label">Pressure deficit: <output id="mlaPercentileDeficitValue">0%</output></span><input class="mla-range" id="mlaPercentileDeficit" data-percentile-filter="deficit" type="range" min="0" max="100" step="1" value="0"></label>
 							<label class="mla-percentile-filter" for="mlaPercentileVort"><span class="mla-label">Smoothed vorticity: <output id="mlaPercentileVortValue">0%</output></span><input class="mla-range" id="mlaPercentileVort" data-percentile-filter="vort" type="range" min="0" max="100" step="1" value="0"></label>
 							<label class="mla-percentile-filter" for="mlaPercentileWind"><span class="mla-label">Maximum wind: <output id="mlaPercentileWindValue">0%</output></span><input class="mla-range" id="mlaPercentileWind" data-percentile-filter="wind" type="range" min="0" max="100" step="1" value="0"></label>
 							<label class="mla-percentile-filter" for="mlaPercentileMslp"><span class="mla-label">Minimum MSLP depth: <output id="mlaPercentileMslpValue">0%</output></span><input class="mla-range" id="mlaPercentileMslp" data-percentile-filter="mslp" type="range" min="0" max="100" step="1" value="0"></label>
 							<label class="mla-percentile-filter" for="mlaPercentileRain"><span class="mla-label">24 h precipitation: <output id="mlaPercentileRainValue">0%</output></span><input class="mla-range" id="mlaPercentileRain" data-percentile-filter="rain" type="range" min="0" max="100" step="1" value="0"></label>
-						</div>
 					</div>
-				</div>
+				</details>
 			</div>
 			<div class="mla-filter-summary">
-				<div>
-					<strong class="mla-result-count" id="mlaResultCount">Preparing systems…</strong>
-					<div class="mla-active-filters" id="mlaActiveFilters" aria-label="Active filter summary"></div>
-				</div>
+				<strong class="mla-result-count" id="mlaResultCount">Preparing systems…</strong>
 				<div class="mla-toolbar-group">
 					<button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaResetFilters" type="button">Reset filters</button>
 				</div>
@@ -625,7 +641,7 @@
 							<label class="mla-map-control" for="mlaMapLayer"><span>Layer</span><select class="mla-select" id="mlaMapLayer"><option value="auto">Auto: density then tracks</option><option value="density">Unique-track density</option><option value="tracks">Individual tracks</option><option value="genesis">Genesis locations</option><option value="lysis">Lysis locations</option></select></label>
 							<label class="mla-map-control" for="mlaMapColour"><span>Colour</span><select class="mla-select" id="mlaMapColour"><option value="single">Single atlas blue</option><option value="class">Atlas class</option><option value="metric">Selected percentile</option><option value="year">Genesis year</option></select></label>
 							<label class="mla-map-control" for="mlaStateFill"><span>State fill</span><select class="mla-select" id="mlaStateFill"><option value="none">Outlines only</option><option value="selected">Mean rain: selected system</option><option value="cohort">Mean rain: filtered cohort</option></select></label>
-							<label class="mla-map-control" for="mlaWeatherLayer"><span>Weather</span><select class="mla-select" id="mlaWeatherLayer"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option></select></label>
+							<label class="mla-map-control" for="mlaWeatherLayer"><span>Weather</span><select class="mla-select" id="mlaWeatherLayer"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Hourly precipitation</option><option value="rh500">500-hPa relative humidity</option></select></label>
 							<label class="mla-map-control" for="mlaMapPath"><span>Track period</span><select class="mla-select" id="mlaMapPath"><option value="months">Selected months only</option><option value="full">Whole system lifecycle</option></select></label>
 							<label class="mla-map-control" for="mlaMapScope"><span>Geography</span><select class="mla-select" id="mlaMapScope"><option value="southasia">Indian monsoon core</option><option value="full">Full catalogue domain</option></select></label>
 							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button>
@@ -646,7 +662,7 @@
 						<label class="mla-track-time-control" for="mlaTrackHour"><span>Track hour</span><input class="mla-time-slider" id="mlaTrackHour" type="range" min="0" max="0" value="0" step="1" aria-label="Selected track hour"></label>
 						<button class="mla-btn mla-btn-small" id="mlaNextHour" type="button" aria-label="Next track hour">+1 h</button>
 						<output id="mlaFocusTime" aria-live="polite"></output>
-						<span class="mla-vorticity-key"><span>0</span><span class="mla-vorticity-ramp" aria-hidden="true"></span><span>40 × 10⁻⁵ s⁻¹</span></span>
+						<span class="mla-weather-key" id="mlaWeatherKey" hidden><span id="mlaWeatherKeyMin">0</span><span class="mla-weather-ramp" id="mlaWeatherRamp" aria-hidden="true"></span><span id="mlaWeatherKeyMax"></span></span>
 					</div>
 					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered cohort. Density counts each track at most once per half-degree cell. Individual systems use a uniform track style throughout.</p>
 					<div class="mla-map-foot">
@@ -704,9 +720,9 @@
 			<div class="mla-panel-heading"><h2>Data, definitions and reproducibility</h2><p>Physical-event identity and complete v5.4.2 final-centre physics are kept explicit.</p></div>
 			<div class="mla-method-grid">
 				<a class="mla-card mla-diagnostic-card" href="figures/lps-v5.4.2-track-diagnostics.png?rev=4" target="_blank" rel="noopener"><img src="figures/lps-v5.4.2-track-diagnostics.png?rev=4" alt="Four-panel catalogue diagnostic showing unique-track density, seasonal peak classes, peak wind against pressure deficit, and a shared lifecycle plot with pressure-deficit, precipitation, relative-humidity and vorticity scales."></a>
-				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4.2 recall-first core</strong> contains 368,925 hourly positions grouped into 2,980 strength-qualified physical events. Every event is continuous at hourly resolution.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions, classifications and diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
+				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4.2</strong> contains 368,925 hourly positions grouped into 2,980 strength-qualified physical events. Every event is continuous at hourly resolution.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions, classifications and diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
 				<section class="mla-card mla-prose"><h3>Identity and physics</h3><p><code>track_id</code> identifies the physical event used for plotting, counts, matching and climatology. <code>event_id</code> and <code>continuity_parent_track_id</code> are identical aliases in v5.4.2.</p><h4>Map convention</h4><p>Each event is drawn as one uniform track. ERA5 physics is independently re-sampled at every observed or supported interpolated centre.</p></section>
-				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> centre diagnostic in 10⁻⁵ s⁻¹.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm; source rows retain their valid-history count.</li><li><strong>Percentiles:</strong> fixed across all 2,980 v5.4.2 physical events and independently combinable; filters do not rescale them.</li></ul><h4>Genesis regions</h4><p>Indian land means the first published centre lies inside an atlas state/UT polygon. Bay of Bengal and Arabian Sea require a water genesis point in 0–30°N, 45–100°E, using the Natural Earth land mask; 77.5°E separates the two ocean bins. Other contains every remaining land or ocean location. These are transparent atlas analysis regions, not official genesis classifications.</p><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed fixes at physical-event grain and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each event stores the area-mean daily rainfall averaged over UTC calendar days touched by its track; cohort maps weight events by active days.</p></section>
+				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> centre diagnostic in 10⁻⁵ s⁻¹.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm; source rows retain their valid-history count.</li><li><strong>Percentiles:</strong> fixed across all 2,980 v5.4.2 physical events and independently combinable; filters do not rescale them.</li></ul><h4>Weather fields</h4><p>The map offers positive ERA5 850-hPa vorticity at 0.25°, hourly precipitation at 1°, and 500-hPa relative humidity at 1°. RH500 is derived from 3-hourly ERA5 temperature and specific humidity using mixed-phase saturation vapour pressure, then interpolated to the hourly slider.</p><h4>Genesis regions</h4><p>Indian land means the first published centre lies inside an atlas state/UT polygon. Bay of Bengal and Arabian Sea require a water genesis point in 0–30°N, 45–100°E, using the Natural Earth land mask; 77.5°E separates the two ocean bins. Other contains every remaining land or ocean location. These are transparent atlas analysis regions, not official genesis classifications.</p><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed fixes at physical-event grain and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each event stores the area-mean daily rainfall averaged over UTC calendar days touched by its track; cohort maps weight events by active days.</p></section>
 				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include v5.4.2 physical-event IDs, units, filter state, source provenance, state rainfall and complete published-centre physics.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaZenodoRecord" target="_blank" rel="noopener" hidden>Full dataset on Zenodo</a><span id="mlaZenodoSeparator" hidden> · </span><a id="mlaReleaseSummary" target="_blank" rel="noopener">release manifest and checksums</a> · <a href="data/lps-v5.4.2-era5-1940-2025-core.quality-report.md" target="_blank" rel="noopener">quality report</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
 			</div>
 		</section>
@@ -715,9 +731,9 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r2","weatherFormat":"webm","weatherFps":6,"weatherBounds":[49.875,-5.875,109.875,40.125]}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.14e01a61e44d.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r2","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.3ee965ef5bf1.js"></script>
+<script src="assets/atlas-app.9d6102151d5f.js"></script>
 
 </body>
 </html>

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Build compact monthly 0.25-degree 850-hPa vorticity videos for the atlas.
+"""Build compact monthly ERA5 weather videos for the atlas.
 
 Each ERA5 hour is encoded as one video frame.  The atlas uses a fixed frame
 rate to map UTC hours to video time, which lets the track-hour slider seek to
 individual fields without publishing hundreds of thousands of images.
+
+Vorticity remains at 0.25 degrees. Precipitation and locally derived RH500 are
+coarsened to 1 degree; the 3-hourly pressure-level inputs used for RH500 are
+linearly interpolated to hourly values, with the final analysis held to 23 UTC.
 """
 
 from __future__ import annotations
@@ -23,26 +27,69 @@ import pyarrow.parquet as pq
 import xarray as xr
 
 
-DEFAULT_SOURCE_DIR = Path("/home/users/kieran/ncas/data/era5-incompass/hourly_vorts_SA")
 DEFAULT_BOUNDS = (50.0, -6.0, 110.0, 40.0)  # west, south, east, north
 DEFAULT_FPS = 6
-GRID_DEGREES = 0.25
-COARSEN_FACTOR = 1
-EXPECTED_DIMENSIONS = (240, 184)
 RASTER_BOUNDS = (49.875, -5.875, 109.875, 40.125)
-COLOUR_STOPS = (
-	(0.0, (49, 54, 149)),
-	(4.0, (69, 117, 180)),
-	(8.0, (145, 191, 219)),
-	(12.0, (247, 247, 247)),
-	(18.0, (214, 96, 77)),
-	(30.0, (103, 0, 31)),
-)
+FIELD_SPECS = {
+	"vorticity": {
+		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/hourly_vorts_SA"),
+		"schema": "monsoon-low-atlas-vorticity-video-v3",
+		"source_label": "ERA5 hourly_vorts_SA",
+		"field_label": "ERA5 850-hPa relative vorticity",
+		"units": "1e-5 s-1",
+		"grid_degrees": 0.25,
+		"coarsen_factor": 1,
+		"dimensions": (240, 184),
+		"positive_only": True,
+		"colour_stops": (
+			(0.0, (49, 54, 149)), (4.0, (69, 117, 180)),
+			(8.0, (145, 191, 219)), (12.0, (247, 247, 247)),
+			(18.0, (214, 96, 77)), (30.0, (103, 0, 31)),
+		),
+		"alpha_full": 6.0,
+	},
+	"precipitation": {
+		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/hourly_precip_SA"),
+		"schema": "monsoon-low-atlas-precipitation-video-v1",
+		"source_label": "ERA5 hourly_precip_SA",
+		"field_label": "ERA5 mean total precipitation rate",
+		"units": "mm h-1",
+		"grid_degrees": 1.0,
+		"coarsen_factor": 4,
+		"dimensions": (60, 46),
+		"positive_only": True,
+		"colour_stops": (
+			(0.0, (247, 252, 253)), (0.1, (204, 236, 230)),
+			(0.5, (102, 194, 164)), (2.0, (35, 139, 69)),
+			(5.0, (34, 94, 168)), (10.0, (84, 39, 143)),
+			(20.0, (62, 0, 92)),
+		),
+		"alpha_full": 0.8,
+		"alpha_threshold": 0.02,
+	},
+	"rh500": {
+		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/3hourly_pl_SA"),
+		"schema": "monsoon-low-atlas-rh500-video-v1",
+		"source_label": "ERA5 3hourly_pl_SA",
+		"field_label": "ERA5 500-hPa relative humidity derived from temperature and specific humidity",
+		"units": "%",
+		"grid_degrees": 1.0,
+		"coarsen_factor": 4,
+		"dimensions": (60, 46),
+		"positive_only": False,
+		"colour_stops": (
+			(0.0, (246, 239, 247)), (20.0, (212, 185, 218)),
+			(40.0, (158, 154, 200)), (60.0, (106, 81, 163)),
+			(80.0, (84, 39, 143)), (100.0, (63, 0, 125)),
+		),
+	},
+}
 
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
+	parser.add_argument("--field", choices=tuple(FIELD_SPECS), default="vorticity")
+	parser.add_argument("--source-dir", type=Path)
 	parser.add_argument("--output-dir", type=Path, required=True)
 	parser.add_argument("--month", help="Month to render as YYYYMM")
 	parser.add_argument("--month-manifest", type=Path)
@@ -113,9 +160,73 @@ def select_850_vorticity(dataset: xr.Dataset) -> xr.DataArray:
 	return field
 
 
-def atlas_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, float, float]]:
+def select_precipitation(dataset: xr.Dataset) -> xr.DataArray:
+	for name in ("mtpr", "avg_tprate", "total_precipitation_rate", "tp"):
+		if name in dataset:
+			field = dataset[name]
+			break
+	else:
+		raise KeyError(f"No precipitation variable in {list(dataset.data_vars)}")
+	units = str(field.attrs.get("units", "")).lower()
+	if "kg" in units and "s" in units:
+		field = field * np.float32(3600.0)
+	elif units.strip() in {"m", "metre", "meter"}:
+		field = field * np.float32(1000.0)
+	return field.clip(min=0)
+
+
+def select_rh500(dataset: xr.Dataset) -> xr.DataArray:
+	if "q" not in dataset or "t" not in dataset:
+		raise KeyError(f"RH500 requires q and t; found {list(dataset.data_vars)}")
+	coordinate = next((name for name in ("level", "pressure_level", "isobaricInhPa") if name in dataset.coords or name in dataset.dims), None)
+	if coordinate is None:
+		raise KeyError(f"No pressure coordinate in {list(dataset.coords)}")
+	q = dataset["q"].sel({coordinate: 500}, method="nearest")
+	temperature = dataset["t"].sel({coordinate: 500}, method="nearest")
+	# Vapour pressure from specific humidity, then an IFS-style mixed-phase
+	# saturation pressure (water above 0 C, ice below -23 C, quadratic blend).
+	epsilon = np.float32(0.622)
+	vapour_pressure = q * np.float32(50000.0) / (epsilon + (np.float32(1.0) - epsilon) * q)
+	tc = temperature - np.float32(273.15)
+	es_water = np.float32(611.21) * np.exp((np.float32(18.678) - tc / np.float32(234.5)) * (tc / (np.float32(257.14) + tc)))
+	es_ice = np.float32(611.15) * np.exp((np.float32(23.036) - tc / np.float32(333.7)) * (tc / (np.float32(279.82) + tc)))
+	weight = ((temperature - np.float32(250.16)) / np.float32(23.0)).clip(min=0, max=1) ** 2
+	saturation_pressure = weight * es_water + (np.float32(1.0) - weight) * es_ice
+	return (np.float32(100.0) * vapour_pressure / saturation_pressure).clip(min=0, max=100).rename("rh500")
+
+
+def select_weather_field(dataset: xr.Dataset, field_name: str) -> xr.DataArray:
+	if field_name == "vorticity":
+		field = select_850_vorticity(dataset)
+	elif field_name == "precipitation":
+		field = select_precipitation(dataset)
+	else:
+		field = select_rh500(dataset)
+	if "time" not in field.coords and "time" not in field.dims:
+		for coordinate in ("valid_time", "forecast_time"):
+			if coordinate in field.coords or coordinate in field.dims:
+				field = field.rename({coordinate: "time"})
+				break
+	if "time" not in field.coords and "time" not in field.dims:
+		raise KeyError(f"No time coordinate in {field_name} field: {list(field.coords)}")
+	return field
+
+
+def interpolate_hourly(field: xr.DataArray, month: str) -> xr.DataArray:
+	start = pd.Timestamp(year=int(month[:4]), month=int(month[4:]), day=1)
+	end = start + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)
+	target = pd.date_range(start, end, freq="h").to_numpy(dtype="datetime64[ns]")
+	last_time = pd.Timestamp(field.time.values[-1])
+	if last_time < end:
+		tail = field.isel(time=-1).expand_dims(time=[end.to_datetime64()])
+		field = xr.concat((field, tail), dim="time")
+	return field.interp(time=target)
+
+
+def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray, tuple[float, float, float, float]]:
 	dataset = xr.open_dataset(source)
-	field = select_850_vorticity(dataset)
+	field = select_weather_field(dataset, field_name)
+	spec = FIELD_SPECS[field_name]
 	west, south, east, north = DEFAULT_BOUNDS
 	latitudes = np.asarray(field.latitude.values)
 	longitudes = np.asarray(field.longitude.values)
@@ -125,8 +236,9 @@ def atlas_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, float, 
 		dataset.close()
 		raise ValueError("Requested atlas bounds do not intersect the ERA5 grid")
 	field = field.isel(latitude=lat_index, longitude=lon_index)
-	if COARSEN_FACTOR > 1:
-		field = field.coarsen(latitude=COARSEN_FACTOR, longitude=COARSEN_FACTOR, boundary="trim").mean()
+	coarsen_factor = int(spec["coarsen_factor"])
+	if coarsen_factor > 1:
+		field = field.coarsen(latitude=coarsen_factor, longitude=coarsen_factor, boundary="trim").mean()
 	else:
 		# Drop the duplicated far edge of the inclusive source subset so video
 		# dimensions remain even for broadly supported YUV 4:2:0 decoding.
@@ -150,41 +262,52 @@ def atlas_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, float, 
 		float(longitude[-1] + lon_step / 2),
 		float(latitude[0] + lat_step / 2),
 	)
+	if field_name == "rh500":
+		field = interpolate_hourly(field, month).clip(min=0, max=100)
 	return field, raster_bounds
 
 
-def colourise(values: np.ndarray) -> np.ndarray:
+def colourise(values: np.ndarray, spec: dict) -> np.ndarray:
 	values = np.asarray(values, dtype=np.float32)
-	positive = np.isfinite(values) & (values > 0)
-	values = np.where(positive, values, 0)
-	stop_values = np.asarray([item[0] for item in COLOUR_STOPS], dtype=np.float32)
-	stop_colours = np.asarray([item[1] for item in COLOUR_STOPS], dtype=np.float32)
+	finite = np.isfinite(values)
+	threshold = float(spec.get("alpha_threshold", 0.0))
+	visible = finite & (values > threshold) if spec["positive_only"] else finite
+	values = np.where(finite, values, 0)
+	colour_stops = spec["colour_stops"]
+	stop_values = np.asarray([item[0] for item in colour_stops], dtype=np.float32)
+	stop_colours = np.asarray([item[1] for item in colour_stops], dtype=np.float32)
 	channels = [np.interp(values, stop_values, stop_colours[:, channel]) for channel in range(3)]
 	rgb = np.clip(np.stack(channels, axis=-1), 0, 255).astype(np.uint8)
-	alpha = np.where(positive, np.clip(values / 6.0, 0, 1) * 255, 0).astype(np.uint8)
+	if spec["positive_only"]:
+		alpha = np.where(visible, np.clip(values / float(spec["alpha_full"]), 0, 1) * 255, 0).astype(np.uint8)
+	else:
+		alpha = np.where(visible, 90 + np.clip(values / 100.0, 0, 1) * 145, 0).astype(np.uint8)
 	mask = np.repeat(alpha[..., None], 3, axis=-1)
 	return np.concatenate((rgb, mask), axis=1)
 
 
 def render_month(args: argparse.Namespace, month: str) -> None:
-	source = args.source_dir / f"{month}.nc"
+	spec = FIELD_SPECS[args.field]
+	source_dir = args.source_dir or spec["source_dir"]
+	source = source_dir / f"{month}.nc"
 	if not source.is_file():
 		raise FileNotFoundError(source)
-	destination = args.output_dir / "vorticity" / month[:4] / f"{month}.{args.container}"
+	destination = args.output_dir / args.field / month[:4] / f"{month}.{args.container}"
 	metadata_path = destination.with_suffix(".json")
 	if destination.is_file() and metadata_path.is_file() and not args.overwrite:
 		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 		if (
 			metadata.get("sha256") == sha256(destination)
-			and metadata.get("schema") == "monsoon-low-atlas-vorticity-video-v3"
-			and metadata.get("grid_degrees") == GRID_DEGREES
+			and metadata.get("schema") == spec["schema"]
+			and metadata.get("grid_degrees") == spec["grid_degrees"]
 			and metadata.get("mask_layout") == "right-half-luma"
 		):
 			print(f"{month}: already complete")
 			return
 	destination.parent.mkdir(parents=True, exist_ok=True)
 	temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
-	field, raster_bounds = atlas_field(source)
+	field, raster_bounds = atlas_field(source, args.field, month)
+	field.load()
 	times = pd.DatetimeIndex(field.time.values)
 	height = int(field.sizes["latitude"])
 	width = int(field.sizes["longitude"])
@@ -212,7 +335,7 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 	try:
 		assert process.stdin is not None
 		for index in range(len(times)):
-			frame = colourise(field.isel(time=index).values)
+			frame = colourise(field.isel(time=index).values, spec)
 			process.stdin.write(frame.tobytes(order="C"))
 		process.stdin.close()
 		return_code = process.wait()
@@ -232,16 +355,16 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 	finally:
 		field.close()
 	metadata = {
-		"schema": "monsoon-low-atlas-vorticity-video-v3",
+		"schema": spec["schema"],
 		"month": month,
-		"source": f"ERA5 hourly_vorts_SA/{source.name}",
+		"source": f"{spec['source_label']}/{source.name}",
 		"source_sha256": sha256(source),
-		"field": "ERA5 850-hPa relative vorticity",
-		"units": "1e-5 s-1",
-		"grid_degrees": GRID_DEGREES,
-		"positive_only": True,
+		"field": spec["field_label"],
+		"units": spec["units"],
+		"grid_degrees": spec["grid_degrees"],
+		"positive_only": spec["positive_only"],
 		"mask_layout": "right-half-luma",
-		"mask": "left half is the colour field; right-half luma is opacity, with values at or below zero transparent and positive values fully opaque by 6e-5 s-1",
+		"mask": "left half is the colour field; right-half luma is opacity",
 		"bounds_west_south_east_north": list(raster_bounds),
 		"width": width,
 		"height": height,
@@ -251,11 +374,14 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 		"frames": len(times),
 		"frames_per_second": args.fps,
 		"container": args.container,
-		"colour_stops": [{"value": value, "rgb": list(colour)} for value, colour in COLOUR_STOPS],
+		"colour_stops": [{"value": value, "rgb": list(colour)} for value, colour in spec["colour_stops"]],
 		"sha256": sha256(destination),
 		"bytes": destination.stat().st_size,
 		"built_utc": datetime.now(timezone.utc).isoformat(),
 	}
+	if args.field == "rh500":
+		metadata["temporal_processing"] = "3-hourly ERA5 analyses linearly interpolated to hourly values; the final 21 UTC analysis is held through 23 UTC"
+		metadata["derivation"] = "relative humidity derived from q and t at 500 hPa using mixed-phase saturation vapour pressure"
 	metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 	print(json.dumps(metadata, indent=2, sort_keys=True))
 
@@ -263,6 +389,7 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 def finalize_archive(args: argparse.Namespace) -> None:
 	if args.month_manifest is None:
 		raise ValueError("--month-manifest is required with --finalize")
+	spec = FIELD_SPECS[args.field]
 	month_table = pd.read_csv(args.month_manifest, dtype={"yyyymm": str})
 	months = [str(value) for value in month_table["yyyymm"]]
 	if not months or len(set(months)) != len(months):
@@ -271,7 +398,7 @@ def finalize_archive(args: argparse.Namespace) -> None:
 	checksum_lines = []
 	for month in months:
 		year, month_number = int(month[:4]), int(month[4:])
-		video = args.output_dir / "vorticity" / month[:4] / f"{month}.{args.container}"
+		video = args.output_dir / args.field / month[:4] / f"{month}.{args.container}"
 		metadata_path = video.with_suffix(".json")
 		if not video.is_file() or not metadata_path.is_file():
 			raise FileNotFoundError(f"Incomplete weather month {month}: expected {video} and {metadata_path}")
@@ -281,15 +408,15 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		expected_last = (pd.Timestamp(year=year, month=month_number, day=1, tz="UTC") + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)).isoformat().replace("+00:00", "Z")
 		actual_sha = sha256(video)
 		checks = {
-			"schema": metadata.get("schema") == "monsoon-low-atlas-vorticity-video-v3",
+			"schema": metadata.get("schema") == spec["schema"],
 			"month": metadata.get("month") == month,
 			"frames": metadata.get("frames") == expected_frames,
 			"fps": metadata.get("frames_per_second") == args.fps,
 			"container": metadata.get("container") == args.container,
-			"grid": metadata.get("grid_degrees") == GRID_DEGREES,
-			"dimensions": (metadata.get("width"), metadata.get("height")) == EXPECTED_DIMENSIONS,
-			"encoded_dimensions": (metadata.get("encoded_width"), metadata.get("height")) == (EXPECTED_DIMENSIONS[0] * 2, EXPECTED_DIMENSIONS[1]),
-			"positive_only": metadata.get("positive_only") is True,
+			"grid": metadata.get("grid_degrees") == spec["grid_degrees"],
+			"dimensions": (metadata.get("width"), metadata.get("height")) == spec["dimensions"],
+			"encoded_dimensions": (metadata.get("encoded_width"), metadata.get("height")) == (spec["dimensions"][0] * 2, spec["dimensions"][1]),
+			"positive_only": metadata.get("positive_only") is spec["positive_only"],
 			"mask": metadata.get("mask_layout") == "right-half-luma",
 			"bounds": metadata.get("bounds_west_south_east_north") == list(RASTER_BOUNDS),
 			"last_time": metadata.get("last_time_utc") == expected_last,
@@ -301,7 +428,7 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		failed = [name for name, passed in checks.items() if not passed]
 		if failed:
 			raise ValueError(f"Weather month {month} failed: {', '.join(failed)}")
-		metadata["source"] = f"ERA5 hourly_vorts_SA/{month}.nc"
+		metadata["source"] = f"{spec['source_label']}/{month}.nc"
 		metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 		relative_video = video.relative_to(args.output_dir).as_posix()
 		relative_metadata = metadata_path.relative_to(args.output_dir).as_posix()
@@ -321,13 +448,14 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		checksum_lines.append(f"{actual_sha}  {relative_video}")
 		checksum_lines.append(f"{metadata_sha}  {relative_metadata}")
 	manifest = {
-		"schema": "monsoon-low-atlas-weather-archive-v3",
-		"field": "ERA5 850-hPa relative vorticity",
-		"units": "1e-5 s-1",
-		"grid_degrees": GRID_DEGREES,
-		"positive_only": True,
+		"schema": "monsoon-low-atlas-weather-archive-v4",
+		"field_key": args.field,
+		"field": spec["field_label"],
+		"units": spec["units"],
+		"grid_degrees": spec["grid_degrees"],
+		"positive_only": spec["positive_only"],
 		"mask_layout": "right-half-luma",
-		"colour_stops": [{"value": value, "rgb": list(colour)} for value, colour in COLOUR_STOPS],
+		"colour_stops": [{"value": value, "rgb": list(colour)} for value, colour in spec["colour_stops"]],
 		"bounds_west_south_east_north": list(RASTER_BOUNDS),
 		"frames_per_second": args.fps,
 		"container": args.container,
@@ -337,8 +465,14 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		"built_utc": datetime.now(timezone.utc).isoformat(),
 		"months": entries,
 	}
-	(args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-	(args.output_dir / "checksums.sha256").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+	manifest_name = "manifest.json" if args.field == "vorticity" else f"{args.field}-manifest.json"
+	checksums_name = "checksums.sha256" if args.field == "vorticity" else f"{args.field}-checksums.sha256"
+	manifest_path = args.output_dir / manifest_name
+	checksums_path = args.output_dir / checksums_name
+	manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+	checksums_path.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+	manifest_path.chmod(0o644)
+	checksums_path.chmod(0o644)
 	print(json.dumps({key: value for key, value in manifest.items() if key != "months"}, indent=2, sort_keys=True))
 
 

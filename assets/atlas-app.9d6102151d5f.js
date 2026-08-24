@@ -15,6 +15,11 @@
 	const MAP_DIRTY = Object.freeze({BASE: 1, WEATHER: 2, DATA: 4, OVERLAY: 8, ALL: 15});
 	const HOUR_MS = 3600000;
 	const CANVAS_FONT = '"effra", Effra, Arial, sans-serif';
+	const WEATHER_FIELDS = Object.freeze({
+		vorticity: {label: '850-hPa vorticity', keyMin: '0', keyMax: '40 × 10⁻⁵ s⁻¹'},
+		precipitation: {label: 'hourly precipitation', keyMin: '0', keyMax: '20 mm h⁻¹'},
+		rh500: {label: '500-hPa relative humidity', keyMin: '0', keyMax: '100%'}
+	});
 
 	let CORE;
 	let DETAIL;
@@ -40,6 +45,7 @@
 	let atlasConfig = {};
 	let weatherVideo = null;
 	let weatherMonth = '';
+	let weatherField = '';
 	let weatherLoadSerial = 0;
 	let weatherError = '';
 	let weatherFrameCanvas = null;
@@ -709,7 +715,7 @@
 			state.focusTimeMs = search.exactTime;
 			state.focusPointIndex = state.selected != null && search.exactTime != null ? pointIndexAtTime(state.selected, search.exactTime) : null;
 			state.focusSource = 'search';
-			if (search.exactTime != null && state.weatherLayer === 'vorticity') syncWeatherToFocus();
+			if (search.exactTime != null && state.weatherLayer !== 'none') syncWeatherToFocus();
 		} else if (state.focusSource === 'search') {
 			clearTimeFocus({keepWeather: true});
 		}
@@ -729,16 +735,6 @@
 		if (!(options && options.noUrl)) writeUrl('replace');
 	}
 
-	function physicalThreshold(key) {
-		const minimum = state.percentileMins[key];
-		if (!minimum) return '';
-		const values = CORE.tracks.map((row, index) => ({pct: percentileMetric(index, key), raw: rawMetric(index, key)})).filter(item => item.pct >= minimum).map(item => item.raw);
-		if (!values.length) return '';
-		const definition = METRICS[key];
-		const threshold = definition.direction < 0 ? Math.max(...values) : Math.min(...values);
-		return `${definition.direction < 0 ? '≤' : '≥'} ${fmt(threshold, 1)} ${definition.unit}`;
-	}
-
 	function updateFilterReadout() {
 		$('#mlaResultCount').textContent = `${fmt(state.active.length)} of ${fmt(CORE.tracks.length)} systems`;
 		$$('[data-percentile-filter]').forEach(control => {
@@ -747,24 +743,6 @@
 			if (output) output.textContent = `${state.percentileMins[key]}%`;
 		});
 		$('#mlaStateMinValue').textContent = `${state.stateMin}%`;
-		const filters = [];
-		if (state.timeMode === 'dates') filters.push(`Active ${state.dateMin} to ${state.dateMax}`);
-		else if (state.yearMin !== 1940 || state.yearMax !== 2025) filters.push(`${state.yearMin}–${state.yearMax}`);
-		if (state.months.size !== 12) filters.push(`${[...state.months].sort((a, b) => a - b).map(month => MONTHS[month - 1]).join(', ')} · ${state.monthMode}`);
-		if (state.classes.size !== 6) filters.push(`${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(', ')} class`);
-		FILTER_METRIC_KEYS.forEach(key => {
-			const minimum = state.percentileMins[key];
-			if (minimum) filters.push(`${METRICS[key].title} P${minimum} (${physicalThreshold(key)})`);
-		});
-		if (state.genesisRegion !== 'all') filters.push(`Genesis: ${GENESIS_REGION_LABELS[state.genesisRegion]}`);
-		if (state.stateIndex >= 0) filters.push(`Track crosses ${CORE.states[state.stateIndex]}`);
-		if (state.search) {
-			const search = parsedSearch();
-			if (search.exactTime != null) filters.push(`Active at: ${dateTime(search.exactTime)}`);
-			else if (search.exactDate) filters.push(`Active on: ${search.exactDate}`);
-			else filters.push(search.exactYear != null ? `Genesis year: ${search.exactYear}` : `Search: “${state.search}”`);
-		}
-		$('#mlaActiveFilters').innerHTML = filters.length ? filters.map(value => `<span class="mla-active-filter">${esc(value)}</span>`).join('') : '<span class="mla-active-filter">Default JJAS cohort · complete through 2025</span>';
 	}
 
 	function buildFilterControls() {
@@ -987,7 +965,8 @@
 		});
 		$('#mlaWeatherLayer').addEventListener('change', event => {
 			state.weatherLayer = event.target.value;
-			if (state.weatherLayer === 'vorticity') syncWeatherToFocus();
+			weatherError = '';
+			if (state.weatherLayer !== 'none') syncWeatherToFocus();
 			updateTimeControls();
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
 			writeUrl('replace');
@@ -1129,7 +1108,7 @@
 		if (['none', 'selected', 'cohort'].includes(parameters.get('statefill'))) state.stateFill = parameters.get('statefill');
 		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
 		if (['months', 'full'].includes(parameters.get('path'))) state.mapPath = parameters.get('path');
-		if (['none', 'vorticity'].includes(parameters.get('weather'))) state.weatherLayer = parameters.get('weather');
+		if (['none', 'vorticity', 'precipitation', 'rh500'].includes(parameters.get('weather'))) state.weatherLayer = parameters.get('weather');
 		if (METRICS[parameters.get('evolve')] && parameters.get('evolve') !== 'rain') state.evolutionMetric = parameters.get('evolve');
 		const profileMetrics = (parameters.get('profiles') || '').split(',').filter(key => PROFILE_METRIC_KEYS.includes(key));
 		if (profileMetrics.length) state.profileMetrics = new Set(profileMetrics);
@@ -1181,11 +1160,15 @@
 		suppressUrl = false;
 	});
 
-	function weatherSettings() {
+	function weatherSettings(field) {
+		const configuredBounds = atlasConfig.weatherBounds;
+		const bounds = configuredBounds && !Array.isArray(configuredBounds)
+			? configuredBounds[field]
+			: configuredBounds;
 		return {
 			base: String(atlasConfig.weatherBase || '').replace(/\/$/, ''),
 			fps: Number(atlasConfig.weatherFps) || 6,
-			bounds: Array.isArray(atlasConfig.weatherBounds) ? atlasConfig.weatherBounds.map(Number) : [49.875, -5.875, 109.875, 40.125]
+			bounds: Array.isArray(bounds) ? bounds.map(Number) : [49.875, -5.875, 109.875, 40.125]
 		};
 	}
 
@@ -1207,31 +1190,34 @@
 		weatherVideo.preload = 'auto';
 		weatherVideo.addEventListener('seeked', () => mapScheduler.invalidate(MAP_DIRTY.WEATHER));
 		weatherVideo.addEventListener('error', () => {
-			weatherError = '850-hPa vorticity frame unavailable for this month';
+			const definition = WEATHER_FIELDS[weatherField];
+			weatherError = `${definition ? definition.label : 'Weather'} frame unavailable for this month`;
 			updateTimeControls();
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 		});
 		return weatherVideo;
 	}
 
-	function weatherUrl(month) {
-		const settings = weatherSettings();
+	function weatherUrl(month, field) {
+		const settings = weatherSettings(field);
 		const extension = atlasConfig.weatherFormat || 'webm';
-		return settings.base ? `${settings.base}/vorticity/${month.slice(0, 4)}/${month}.${extension}` : '';
+		return settings.base ? `${settings.base}/${field}/${month.slice(0, 4)}/${month}.${extension}` : '';
 	}
 
 	async function loadWeatherMonth(timeMs) {
 		const month = weatherMonthForTime(timeMs);
+		const field = state.weatherLayer;
 		const video = ensureWeatherVideo();
-		if (weatherMonth === month && video.readyState >= 1) return video;
-		const url = weatherUrl(month);
+		if (weatherField === field && weatherMonth === month && video.readyState >= 1) return video;
+		const url = weatherUrl(month, field);
 		if (!url) throw new Error('The atlas weather-data URL is not configured');
 		const serial = ++weatherLoadSerial;
 		weatherError = '';
 		weatherMonth = month;
+		weatherField = field;
 		await new Promise((resolve, reject) => {
 			const ready = () => { cleanup(); resolve(); };
-			const failed = () => { cleanup(); reject(new Error(`Could not load ${month} vorticity video`)); };
+			const failed = () => { cleanup(); reject(new Error(`Could not load ${month} ${WEATHER_FIELDS[field].label} video`)); };
 			const cleanup = () => {
 				video.removeEventListener('loadedmetadata', ready);
 				video.removeEventListener('error', failed);
@@ -1247,7 +1233,7 @@
 
 	async function seekWeather(timeMs) {
 		const video = await loadWeatherMonth(timeMs);
-		const settings = weatherSettings();
+		const settings = weatherSettings(weatherField);
 		const frame = Math.round((timeMs - weatherMonthStart(weatherMonth)) / HOUR_MS);
 		const target = Math.max(0, frame / settings.fps + .001 / settings.fps);
 		if (Math.abs(video.currentTime - target) < .25 / settings.fps) {
@@ -1256,7 +1242,7 @@
 		}
 		await new Promise((resolve, reject) => {
 			const ready = () => { cleanup(); resolve(); };
-			const failed = () => { cleanup(); reject(new Error(`Could not seek ${weatherMonth} vorticity video`)); };
+			const failed = () => { cleanup(); reject(new Error(`Could not seek ${weatherMonth} ${WEATHER_FIELDS[weatherField].label} video`)); };
 			const cleanup = () => {
 				video.removeEventListener('seeked', ready);
 				video.removeEventListener('error', failed);
@@ -1269,7 +1255,7 @@
 	}
 
 	async function syncWeatherToFocus() {
-		if (state.weatherLayer !== 'vorticity' || !Number.isFinite(state.focusTimeMs)) {
+		if (state.weatherLayer === 'none' || !Number.isFinite(state.focusTimeMs)) {
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 			return;
 		}
@@ -1315,7 +1301,7 @@
 		state.focusTimeMs = timeMs;
 		state.focusPointIndex = pointIndex;
 		state.focusSource = 'point';
-		state.weatherLayer = 'vorticity';
+		if (state.weatherLayer === 'none') state.weatherLayer = 'vorticity';
 		$('#mlaWeatherLayer').value = state.weatherLayer;
 		updateTimeControls();
 		if (!(options && options.noUrl)) renderDossier();
@@ -1340,6 +1326,14 @@
 		const controls = $('#mlaTimeControls');
 		if (!controls) return;
 		controls.hidden = state.selected == null && !Number.isFinite(state.focusStartMs);
+		const weatherDefinition = WEATHER_FIELDS[state.weatherLayer];
+		const weatherKey = $('#mlaWeatherKey');
+		weatherKey.hidden = !weatherDefinition;
+		if (weatherDefinition) {
+			$('#mlaWeatherKeyMin').textContent = weatherDefinition.keyMin;
+			$('#mlaWeatherKeyMax').textContent = weatherDefinition.keyMax;
+			$('#mlaWeatherRamp').dataset.field = state.weatherLayer;
+		}
 		$('#mlaPreviousHour').disabled = state.selected == null;
 		$('#mlaNextHour').disabled = state.selected == null;
 		const slider = $('#mlaTrackHour');
@@ -1692,8 +1686,8 @@
 
 	function drawMapWeather() {
 		const drawing = setupCanvas('mlaMapWeather');
-		if (state.weatherLayer !== 'vorticity' || !Number.isFinite(state.focusTimeMs) || !weatherVideo || weatherVideo.readyState < 2 || weatherError) return;
-		const settings = weatherSettings();
+		if (state.weatherLayer === 'none' || !Number.isFinite(state.focusTimeMs) || !weatherVideo || weatherVideo.readyState < 2 || weatherError) return;
+		const settings = weatherSettings(state.weatherLayer);
 		const [west, south, east, north] = settings.bounds;
 		const topLeft = drawing.projection.project(north, west);
 		const bottomRight = drawing.projection.project(south, east);
@@ -2192,10 +2186,6 @@
 		new ResizeObserver(() => mapScheduler.invalidate(MAP_DIRTY.ALL)).observe($('#mlaMapStack'));
 	}
 
-	function badge(text, tone) {
-		return `<span class="mla-badge" data-tone="${esc(tone || 'official')}">${esc(text)}</span>`;
-	}
-
 	function officialGrade(index) {
 		const item = crosswalk(index);
 		if (item && item.imd && item.imd.system.peak_grade) return item.imd.system.peak_grade;
@@ -2227,9 +2217,6 @@
 		}
 		const index = state.selected;
 		const row = track(index);
-		const badges = [
-			badge(`Atlas ${CLASS_SHORT[row[T.category]]}`, 'official')
-		];
 		const facts = [
 			['Duration', durationText(row[T.duration_hours])],
 			['Hourly positions', fmt(row[T.n_rows])],
@@ -2244,12 +2231,11 @@
 			? `<div class="mla-match-box"><h4>Selected track hour</h4><p><strong id="mlaDossierFocusTime">${esc(dateTime(state.focusTimeMs))}</strong><br><span id="mlaDossierFocusPosition">Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[index].length)} · ${fmt(paths.decoded[index][state.focusPointIndex][0], 2)}°N, ${fmt(paths.decoded[index][state.focusPointIndex][1], 2)}°E</span></p></div>`
 			: '';
 		node.innerHTML = `
-			<div class="mla-dossier-head"><div><div class="mla-badge-row">${badges.join('')}</div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaClearSelection" type="button" aria-label="Clear selected track">×</button></div>
+			<div class="mla-dossier-head"><div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			${focusedHour}
 			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
 			`;
-		$('#mlaClearSelection').addEventListener('click', () => selectTrack(null));
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
 		$('#mlaFitTrack').addEventListener('click', fitSelected);
@@ -3168,7 +3154,7 @@
 		syncControls();
 		applyFilters({noUrl: true});
 		updateTimeControls();
-		if (state.weatherLayer === 'vorticity' && Number.isFinite(state.focusTimeMs)) syncWeatherToFocus();
+		if (state.weatherLayer !== 'none' && Number.isFinite(state.focusTimeMs)) syncWeatherToFocus();
 		activateTab(state.tab, false);
 		renderData();
 		$('#mlaLoading').hidden = true;
