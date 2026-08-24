@@ -6,6 +6,9 @@
 	<meta name="theme-color" content="#071a1c">
 	<meta name="description" content="An interactive atlas of ERA5-derived South Asian monsoon low-pressure systems from the LPS v5.4.2 recall-first core catalogue.">
 	<title>Monsoon Low-Pressure System Atlas</title>
+	<link rel="preconnect" href="https://use.typekit.net" crossorigin>
+	<link rel="preconnect" href="https://p.typekit.net" crossorigin>
+	<link rel="stylesheet" href="https://use.typekit.net/pxa6ohj.css">
 </head>
 <body>
 <style>
@@ -35,9 +38,10 @@
 	--mla-flag: #a23d34;
 	--mla-radius: 14px;
 	--mla-shadow: 0 1px 2px rgba(40, 33, 25, .08), 0 14px 34px -24px rgba(40, 33, 25, .42);
+	--mla-font: "effra", Effra, Arial, sans-serif;
 	color: var(--mla-ink);
 	background: linear-gradient(180deg, var(--mla-paper), color-mix(in srgb, var(--mla-paper) 90%, #ead49c 10%));
-	font-family: Aptos, "Segoe UI", system-ui, -apple-system, sans-serif;
+	font-family: var(--mla-font);
 	font-size: 15px;
 	line-height: 1.46;
 	min-height: 100vh;
@@ -100,7 +104,7 @@
 }
 .mla-eyebrow-below { margin-top: 9px; }
 .mla-title {
-	font-family: Georgia, "Times New Roman", serif;
+	font-family: var(--mla-font);
 	font-size: clamp(38px, 5.2vw, 76px);
 	font-weight: 500;
 	letter-spacing: -.035em;
@@ -225,10 +229,10 @@
 .mla-percentile-group { grid-column: 1 / -1; border-top: 1px solid var(--mla-line); padding-top: 12px; }
 .mla-percentile-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px 16px; }
 .mla-percentile-filter { display: grid; gap: 5px; min-width: 0; }
-.mla-percentile-filter output { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--mla-ink); }
+.mla-percentile-filter output { font-family: var(--mla-font); color: var(--mla-ink); }
 .mla-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-filter-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--mla-line); padding: 9px 13px; }
-.mla-result-count { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
+.mla-result-count { font-family: var(--mla-font); font-size: 13px; }
 .mla-active-filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-active-filter { border-radius: 999px; background: var(--mla-well); padding: 4px 8px; font-size: 12px; color: var(--mla-muted); }
 .mla-caution { margin: 8px 0 0; color: var(--mla-muted); font-size: 12px; }
@@ -236,14 +240,14 @@
 .mla-panel { animation: mla-panel-in .18s ease both; }
 @keyframes mla-panel-in { from { transform: translateY(3px); opacity: .72; } to { transform: none; opacity: 1; } }
 .mla-panel-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin: 3px 0 12px; }
-.mla-panel-heading h2 { font-family: Georgia, "Times New Roman", serif; font-weight: 500; font-size: 29px; line-height: 1.05; margin: 0; }
+.mla-panel-heading h2 { font-family: var(--mla-font); font-weight: 500; font-size: 29px; line-height: 1.05; margin: 0; }
 .mla-panel-heading p { margin: 0; max-width: 78ch; color: var(--mla-muted); }
 
 .mla-card { border: 1px solid var(--mla-line); border-radius: var(--mla-radius); background: var(--mla-card); box-shadow: var(--mla-shadow); }
 .mla-explore-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; }
 .mla-map-card { overflow: clip; }
 .mla-map-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--mla-line); }
-.mla-map-head h3 { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 500; margin: 0; }
+.mla-map-head h3 { font-family: var(--mla-font); font-size: 21px; font-weight: 500; margin: 0; }
 .mla-map-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .mla-map-tools .mla-select { width: auto; min-height: 36px; padding: 6px 8px; font-size: 13px; }
 .mla-map-control { display: grid; gap: 2px; color: var(--mla-muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
@@ -293,7 +297,7 @@
 .mla-dossier { padding: 15px; }
 .mla-dossier-empty { color: var(--mla-muted); padding: 8px 0; }
 .mla-dossier-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
-.mla-dossier h3 { font-family: Georgia, "Times New Roman", serif; font-size: 27px; line-height: 1.05; font-weight: 500; margin: 6px 0; }
+.mla-dossier h3 { font-family: var(--mla-font); font-size: 27px; line-height: 1.05; font-weight: 500; margin: 6px 0; }
 .mla-dossier-sub { margin: 0; color: var(--mla-muted); }
 .mla-badge-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-fact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
@@ -308,7 +312,7 @@
 .mla-match-box dd { margin: 0; }
 
 .mla-section-card { margin-top: 14px; padding: 14px; }
-.mla-section-card h3 { font-family: Georgia, "Times New Roman", serif; font-weight: 500; font-size: 21px; margin: 0 0 9px; }
+.mla-section-card h3 { font-family: var(--mla-font); font-weight: 500; font-size: 21px; margin: 0 0 9px; }
 .mla-toolbar { display: flex; gap: 8px; justify-content: space-between; align-items: end; flex-wrap: wrap; margin-bottom: 10px; }
 .mla-toolbar-group { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
 .mla-toolbar .mla-field { min-width: 150px; }
@@ -327,7 +331,7 @@
 
 .mla-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .mla-chart-card { padding: 13px; }
-.mla-chart-card h3 { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 500; margin: 0 0 3px; }
+.mla-chart-card h3 { font-family: var(--mla-font); font-size: 21px; font-weight: 500; margin: 0 0 3px; }
 .mla-chart-card p { margin: 0 0 8px; color: var(--mla-muted); font-size: 13px; }
 .mla-chart-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 3px; }
 .mla-chart-head .mla-field { width: min(230px, 48%); }
@@ -349,7 +353,7 @@
 .mla-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .mla-stat { padding: 12px; }
 .mla-stat span { display: block; color: var(--mla-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.mla-stat strong { display: block; margin-top: 4px; color: var(--mla-indigo-deep); font-family: Georgia, "Times New Roman", serif; font-size: 28px; line-height: 1; font-weight: 500; }
+.mla-stat strong { display: block; margin-top: 4px; color: var(--mla-indigo-deep); font-family: var(--mla-font); font-size: 28px; line-height: 1; font-weight: 500; }
 .mla-stat small { display: block; margin-top: 5px; color: var(--mla-muted); }
 
 .mla-compare-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 12px; }
@@ -363,16 +367,16 @@
 .mla-record { padding: 13px; border-top: 5px solid var(--mla-peacock); }
 .mla-record:nth-child(2) { border-top-color: var(--mla-madder); }
 .mla-record:nth-child(3) { border-top-color: var(--mla-turmeric); }
-.mla-record h3 { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 500; margin: 5px 0; }
+.mla-record h3 { font-family: var(--mla-font); font-size: 21px; font-weight: 500; margin: 5px 0; }
 .mla-record p { margin: 0; color: var(--mla-muted); }
 
 .mla-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .mla-prose { padding: 16px; }
-.mla-prose h3 { font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 500; margin: 0 0 8px; }
+.mla-prose h3 { font-family: var(--mla-font); font-size: 22px; font-weight: 500; margin: 0 0 8px; }
 .mla-prose h4 { margin: 16px 0 5px; font-size: 15px; font-weight: 500; }
 .mla-prose p { margin: 7px 0; color: var(--mla-muted); }
 .mla-prose ul { margin: 8px 0; padding-left: 20px; color: var(--mla-muted); }
-.mla-prose code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--mla-well); padding: 2px 4px; border-radius: 4px; }
+.mla-prose code { font-family: var(--mla-font); background: var(--mla-well); padding: 2px 4px; border-radius: 4px; }
 .mla-download-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 
 .mla-toast {
@@ -704,7 +708,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r2","weatherFormat":"webm","weatherFps":6,"weatherBounds":[49.875,-5.875,109.875,40.125]}</script>
 
-<script src="assets/atlas-app.5f99dfa93ac4.js"></script>
+<script src="assets/atlas-app.c6367579e826.js"></script>
 
 </body>
 </html>

@@ -14,6 +14,7 @@
 	const COMPLETE_END_YEAR = 2025;
 	const MAP_DIRTY = Object.freeze({BASE: 1, WEATHER: 2, DATA: 4, OVERLAY: 8, ALL: 15});
 	const HOUR_MS = 3600000;
+	const CANVAS_FONT = '"effra", Effra, Arial, sans-serif';
 
 	let CORE;
 	let DETAIL;
@@ -1545,7 +1546,7 @@
 		context.strokeStyle = 'rgba(67, 76, 64, .18)';
 		context.fillStyle = 'rgba(67, 76, 64, .66)';
 		context.lineWidth = 1;
-		context.font = '11px ui-monospace, Consolas, monospace';
+		context.font = `11px ${CANVAS_FONT}`;
 		const view = projection.viewBounds;
 		const lonStart = Math.ceil(view.lonMin / 10) * 10;
 		const latStart = Math.ceil(view.latMin / 5) * 5;
@@ -1601,7 +1602,7 @@
 			context.stroke();
 		});
 		if (options && options.labels && state.mapZoom >= 1.6) {
-			context.font = '11px Aptos, Segoe UI, sans-serif';
+			context.font = `11px ${CANVAS_FONT}`;
 			context.fillStyle = 'rgba(23, 41, 79, .72)';
 			for (const geometry of CORE.geo.states) {
 				if (!geometry.anchor) continue;
@@ -2301,7 +2302,7 @@
 		const drawing = setupChart(id);
 		if (!drawing) return;
 		drawing.context.fillStyle = css('--mla-muted', '#685c4d');
-		drawing.context.font = '14px Aptos, Segoe UI, sans-serif';
+		drawing.context.font = `14px ${CANVAS_FONT}`;
 		drawing.context.fillText(message || 'No data for this cohort', 18, 34);
 	}
 
@@ -2327,7 +2328,7 @@
 		const X = value => padding.left + (value - xMin) / ((xMax - xMin) || 1) * (width - padding.left - padding.right);
 		const Y = value => height - padding.bottom - (value - yMin) / ((yMax - yMin) || 1) * (height - padding.top - padding.bottom);
 		context.save();
-		context.font = '11px ui-monospace, Consolas, monospace';
+		context.font = `11px ${CANVAS_FONT}`;
 		context.fillStyle = css('--mla-muted', '#685c4d');
 		context.strokeStyle = 'rgba(70, 60, 45, .16)';
 		for (let tick = 0; tick <= 4; tick++) {
@@ -2389,7 +2390,7 @@
 			context.stroke();
 			context.setLineDash([]);
 			context.fillStyle = css('--mla-ink', '#282119');
-			context.font = '12px Aptos, Segoe UI, sans-serif';
+			context.font = `12px ${CANVAS_FONT}`;
 			context.fillText(item.name, legendX + 24, 20);
 			legendX += legendWidths[series.indexOf(item)];
 		}
@@ -2432,7 +2433,7 @@
 		const timeLabel = value => xMax >= 96 ? `${fmt(value / 24, 1)} d` : `${fmt(value)} h`;
 
 		context.save();
-		context.font = '11px ui-monospace, Consolas, monospace';
+		context.font = `11px ${CANVAS_FONT}`;
 		context.fillStyle = css('--mla-muted', '#685c4d');
 		context.strokeStyle = 'rgba(70, 60, 45, .16)';
 		for (let tick = 0; tick <= 4; tick++) {
@@ -2449,7 +2450,7 @@
 			context.fillText(timeLabel(value), X(value), height - 12);
 		}
 		context.textAlign = 'left';
-		context.font = '12px Aptos, Segoe UI, sans-serif';
+		context.font = `12px ${CANVAS_FONT}`;
 		context.fillStyle = definition.colour;
 		context.fillRect(padding.left, 16, 18, 3);
 		context.fillStyle = css('--mla-ink', '#282119');
@@ -2519,7 +2520,7 @@
 		const padding = {left: 46, right: 16, top: 24, bottom: 46};
 		const maximum = Math.max(1, ...items.map(item => item.value));
 		const barWidth = (width - padding.left - padding.right) / items.length;
-		context.font = '11px ui-monospace, Consolas, monospace';
+		context.font = `11px ${CANVAS_FONT}`;
 		context.fillStyle = css('--mla-muted', '#685c4d');
 		context.strokeStyle = 'rgba(70, 60, 45, .16)';
 		for (let tick = 0; tick <= 4; tick++) {
@@ -2551,7 +2552,7 @@
 		const cellHeight = (height - padding.top - padding.bottom) / rows.length;
 		const maximum = Math.max(1, ...matrix.flat().filter(Number.isFinite));
 		const labelColour = css('--mla-muted', '#685c4d');
-		context.font = '11px ui-monospace, Consolas, monospace';
+		context.font = `11px ${CANVAS_FONT}`;
 		context.fillStyle = labelColour;
 		columns.forEach((label, index) => context.fillText(label, padding.left + index * cellWidth + 3, height - 15));
 		rows.forEach((label, row) => {
@@ -3100,6 +3101,11 @@
 		$('#mlaLoading').hidden = true;
 		root.dataset.ready = 'true';
 		writeUrl('replace');
+		if (document.fonts && document.fonts.ready) {
+			document.fonts.ready.then(() => {
+				if (root.dataset.ready === 'true') renderCurrentPanel();
+			});
+		}
 		window.addEventListener('resize', debounce(renderCurrentPanel, 150));
 	} catch (error) {
 		showFatal(error);
