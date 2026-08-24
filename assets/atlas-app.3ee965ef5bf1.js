@@ -21,6 +21,7 @@
 	let detailPromise;
 	let T;
 	let S;
+	let Q;
 	let paths;
 	let segmentIndex;
 	let densityCells;
@@ -1550,17 +1551,18 @@
 		const view = projection.viewBounds;
 		const lonStart = Math.ceil(view.lonMin / 10) * 10;
 		const latStart = Math.ceil(view.latMin / 5) * 5;
+		const mapLabels = [];
 		for (let longitude = lonStart; longitude <= view.lonMax; longitude += 10) {
 			const first = projection.project(view.latMin, longitude);
 			const second = projection.project(view.latMax, longitude);
 			context.beginPath(); context.moveTo(first[0], first[1]); context.lineTo(second[0], second[1]); context.stroke();
-			if (second[0] > 0 && second[0] < width - 24) context.fillText(`${longitude}°E`, second[0] + 3, 14);
+			if (second[0] > 0 && second[0] < width - 24) mapLabels.push([`${longitude}°E`, second[0] + 3, 14]);
 		}
 		for (let latitude = latStart; latitude <= view.latMax; latitude += 5) {
 			const first = projection.project(latitude, view.lonMin);
 			const second = projection.project(latitude, view.lonMax);
 			context.beginPath(); context.moveTo(first[0], first[1]); context.lineTo(second[0], second[1]); context.stroke();
-			if (first[1] > 16 && first[1] < height - 8) context.fillText(`${latitude}°N`, 4, first[1] - 3);
+			if (first[1] > 16 && first[1] < height - 8) mapLabels.push([`${latitude}°N`, 4, first[1] - 3]);
 		}
 		context.beginPath();
 		drawRingPath(context, projection, CORE.geo.land);
@@ -1609,6 +1611,39 @@
 				const point = projection.project(geometry.anchor[1], geometry.anchor[0]);
 				if (point[0] > 12 && point[0] < width - 12 && point[1] > 12 && point[1] < height - 12) context.fillText(geometry.name.replace(' & ', '/'), point[0] + 2, point[1] - 2);
 			}
+		}
+		context.font = `11px ${CANVAS_FONT}`;
+		context.fillStyle = 'rgba(67, 76, 64, .76)';
+		for (const [label, x, y] of mapLabels) context.fillText(label, x, y);
+		context.restore();
+	}
+
+	function drawMapReferenceLines(context, projection) {
+		context.save();
+		context.beginPath();
+		drawRingPath(context, projection, CORE.geo.land);
+		context.strokeStyle = 'rgba(66, 54, 40, .44)';
+		context.lineWidth = .9;
+		context.stroke();
+		for (const border of CORE.geo.borders || []) {
+			if (!border.p || border.p.length < 2) continue;
+			context.beginPath();
+			border.p.forEach((point, index) => {
+				const projected = projection.project(point[1], point[0]);
+				if (!index) context.moveTo(projected[0], projected[1]); else context.lineTo(projected[0], projected[1]);
+			});
+			context.setLineDash(border.c === 1 ? [4, 3] : []);
+			context.strokeStyle = 'rgba(66, 54, 40, .38)';
+			context.lineWidth = .7;
+			context.stroke();
+		}
+		context.setLineDash([]);
+		for (const geometry of CORE.geo.states) {
+			context.beginPath();
+			drawRingPath(context, projection, geometry.rings);
+			context.strokeStyle = 'rgba(35, 63, 120, .42)';
+			context.lineWidth = .6;
+			context.stroke();
 		}
 		context.restore();
 	}
@@ -2571,7 +2606,7 @@
 	}
 
 	function fixedProjection(width, height, bounds) {
-		const padding = 22;
+		const padding = 30;
 		const scale = Math.min((width - padding * 2) / (bounds.lonMax - bounds.lonMin), (height - padding * 2) / (bounds.latMax - bounds.latMin));
 		const centreLon = (bounds.lonMin + bounds.lonMax) / 2;
 		const centreLat = (bounds.latMin + bounds.latMax) / 2;
@@ -2584,7 +2619,7 @@
 	function drawGenesisMap() {
 		const drawing = setupChart('mlaGenesisChart');
 		if (!drawing) return;
-		const projection = fixedProjection(drawing.width, drawing.height, {lonMin: 48, lonMax: 118, latMin: -5, latMax: 47});
+		const projection = fixedProjection(drawing.width, drawing.height, {lonMin: 52, lonMax: 108, latMin: -4, latMax: 36});
 		drawMapGeography(drawing.context, projection, drawing.width, drawing.height, {});
 		const cells = new Map();
 		for (const index of state.active) {
@@ -2604,6 +2639,25 @@
 			drawing.context.fillStyle = rgba(ramp(Math.sqrt(value / maximum)), .82);
 			drawing.context.fillRect(topLeft[0], topLeft[1], Math.max(1, bottomRight[0] - topLeft[0]), Math.max(1, bottomRight[1] - topLeft[1]));
 		}
+		drawMapReferenceLines(drawing.context, projection);
+		const legendWidth = Math.min(280, drawing.width * .34);
+		const legendX = drawing.width - legendWidth - 18;
+		const legendY = drawing.height - 25;
+		const gradient = drawing.context.createLinearGradient(legendX, 0, legendX + legendWidth, 0);
+		for (let step = 0; step <= 32; step++) gradient.addColorStop(step / 32, ramp(step / 32));
+		drawing.context.fillStyle = gradient;
+		drawing.context.fillRect(legendX, legendY, legendWidth, 9);
+		drawing.context.font = `11px ${CANVAS_FONT}`;
+		drawing.context.fillStyle = css('--mla-ink', '#282119');
+		drawing.context.textAlign = 'left';
+		drawing.context.fillText('Systems per 0.5° cell', legendX, legendY - 6);
+		const tickValues = [...new Set([0, Math.max(1, Math.round(maximum / 4)), Math.max(1, Math.round(maximum / 2)), maximum])];
+		for (const value of tickValues) {
+			const x = legendX + Math.sqrt(value / maximum) * legendWidth;
+			drawing.context.textAlign = value === 0 ? 'left' : value === maximum ? 'right' : 'center';
+			drawing.context.fillText(fmt(value), x, legendY + 22);
+		}
+		drawing.context.textAlign = 'left';
 	}
 
 	function completeYear(year) {
@@ -2787,28 +2841,46 @@
 	}
 
 	const EXTREMES = {
-		duration: {label: 'Duration', unit: 'h', value: index => track(index)[T.duration_hours], descending: true, continuity: true},
-		distance: {label: 'Linked path length', unit: 'km', value: index => track(index)[T.distance_km], descending: true, continuity: true},
-		deficit: {label: 'Pressure deficit', unit: 'hPa', value: index => track(index)[T.peak_deficit_x10] / 10, descending: true},
-		wind: {label: 'Maximum wind', unit: 'm s⁻¹', value: index => track(index)[T.peak_wind_x10] / 10, descending: true},
-		rain: {label: '24 h precipitation', unit: 'mm', value: index => track(index)[T.peak_precip_x10] / 10, descending: true},
-		vort: {label: 'Smoothed vorticity', unit: '10⁻⁵ s⁻¹', value: index => track(index)[T.peak_vort_x10] / 10, descending: true},
-		mslp: {label: 'Minimum MSLP', unit: 'hPa', value: index => track(index)[T.min_mslp_x10] / 10, descending: false}
+		duration: {label: 'Duration', unit: 'h', decimals: 0, value: index => track(index)[T.duration_hours], descending: true, note: 'Hourly event span · supported centres included'},
+		distance: {label: 'Linked path length', unit: 'km', decimals: 0, value: index => track(index)[T.distance_km], descending: true, note: 'Great-circle distance summed along hourly centres'},
+		meanSpeed: {label: 'Mean translation speed', unit: 'm s⁻¹', decimals: 1, value: index => track(index)[T.distance_km] * 1000 / Math.max(3600, track(index)[T.duration_hours] * 3600), descending: true, note: 'Path length divided by elapsed event duration'},
+		deficit: {label: 'Pressure deficit', unit: 'hPa', decimals: 1, value: index => track(index)[T.peak_deficit_x10] / 10, descending: true},
+		wind: {label: 'Maximum wind', unit: 'm s⁻¹', decimals: 1, value: index => track(index)[T.peak_wind_x10] / 10, descending: true},
+		rain: {label: '24 h precipitation', unit: 'mm', decimals: 1, value: index => track(index)[T.peak_precip_x10] / 10, descending: true, note: 'Largest trailing 24-hour track-centred diagnostic'},
+		vort: {label: 'Smoothed vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => track(index)[T.peak_vort_x10] / 10, descending: true},
+		mslp: {label: 'Minimum MSLP', unit: 'hPa', decimals: 1, value: index => track(index)[T.min_mslp_x10] / 10, descending: false},
+		q850: {label: 'q850', unit: 'g kg⁻¹', decimals: 1, value: index => track(index)[T.peak_q850_x10] / 10, descending: true},
+		rh850: {label: 'RH850', unit: '%', decimals: 1, value: index => track(index)[T.peak_rh850_x10] / 10, descending: true},
+		observedPositions: {label: 'Observed positions', unit: 'fixes', decimals: 0, value: index => track(index)[T.observed_positions], descending: true, note: 'Detector-supported hourly positions only'},
+		qualifyingPositions: {label: 'Mature detections', unit: 'fixes', decimals: 0, value: index => track(index)[T.qualifying_positions], descending: true, note: 'Positions passing the mature-physics gate'},
+		lowestCoverage: {label: 'Observed coverage', unit: '%', decimals: 0, value: index => CORE.qc[index][Q.coverage_pct], descending: false, note: 'Lowest detector-observed fraction of the hourly event span'},
+		posteriorShare: {label: 'Posterior-position share', unit: '%', decimals: 1, value: index => track(index)[T.posterior_fraction_x1000] / 10, descending: true, note: 'Supported interpolated centres as a fraction of hourly positions'},
+		missingRun: {label: 'Longest supported missing run', unit: 'h', decimals: 0, value: index => track(index)[T.max_missing_run_hours], descending: true, note: 'Longest consecutive run without an observed detector fix'},
+		maxStepSpeed: {label: 'Maximum step speed', unit: 'm s⁻¹', decimals: 1, value: index => CORE.qc[index][Q.max_speed_ms], descending: true, note: 'QA diagnostic from consecutive hourly centres'},
+		rainDays: {label: 'UTC rain days', unit: 'days', decimals: 0, value: index => track(index)[T.rain_days], descending: true, note: 'UTC calendar days touched by the event track'},
+		stateRain: {label: 'Highest crossed-state mean rain', unit: 'mm day⁻¹', decimals: 1, value: index => track(index)[T.top_state_mean_x10] / 10, descending: true, note: 'Largest event-mean IMD rainfall among crossed states/UTs'},
+		northGenesis: {label: 'Genesis latitude', unit: '°N', decimals: 2, value: index => track(index)[T.gen_lat_x1000] / 1000, descending: true, note: 'Northernmost first published centre'},
+		southGenesis: {label: 'Genesis latitude', unit: '°N', decimals: 2, value: index => track(index)[T.gen_lat_x1000] / 1000, descending: false, note: 'Southernmost first published centre'},
+		eastGenesis: {label: 'Genesis longitude', unit: '°E', decimals: 2, value: index => track(index)[T.gen_lon_x1000] / 1000, descending: true, note: 'Easternmost first published centre'},
+		westGenesis: {label: 'Genesis longitude', unit: '°E', decimals: 2, value: index => track(index)[T.gen_lon_x1000] / 1000, descending: false, note: 'Westernmost first published centre'}
 	};
 
 	function renderExtremes() {
 		if ($('#mlaPanelExtremes').hidden) return;
 		const definition = EXTREMES[state.extremeMetric];
-		const indexes = state.active.slice().sort((first, second) => definition.descending ? definition.value(second) - definition.value(first) : definition.value(first) - definition.value(second));
-		$('#mlaExtremeCaveat').textContent = 'Catalogue diagnostics · not externally validated records';
+		const indexes = state.active.filter(index => Number.isFinite(definition.value(index))).sort((first, second) => {
+			const difference = definition.descending ? definition.value(second) - definition.value(first) : definition.value(first) - definition.value(second);
+			return difference || track(first)[T.id] - track(second)[T.id];
+		});
+		const valueText = index => `${fmt(definition.value(index), definition.decimals)} ${definition.unit}`.trim();
+		$('#mlaExtremeCaveat').textContent = definition.note || 'Catalogue diagnostic · not an externally validated record';
 		$('#mlaRecordCards').innerHTML = indexes.slice(0, 3).map((index, rank) => {
-			const value = definition.value(index);
-			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${fmt(value, 1)} ${esc(definition.unit)}</strong> · ${date(track(index)[T.start_ms])} · ${esc(CLASS_SHORT[track(index)[T.category]])}</p></article>`;
+			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${esc(valueText(index))}</strong> · ${date(track(index)[T.start_ms])} · ${esc(CLASS_SHORT[track(index)[T.category]])}</p></article>`;
 		}).join('') || '<p>No eligible systems in this cohort.</p>';
 		const table = $('#mlaExtremeTable');
 		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak class</th></tr>`;
 		table.querySelector('tbody').innerHTML = indexes.slice(0, 50).map((index, rank) => {
-			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${fmt(definition.value(index), 1)} ${esc(definition.unit)}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td></tr>`;
+			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${esc(valueText(index))}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td></tr>`;
 		}).join('') || '<tr><td colspan="5">No eligible systems.</td></tr>';
 	}
 
@@ -3080,6 +3152,7 @@
 		CORE = await loadGzipJson('mla-core-gzip-b64');
 		T = Object.fromEntries(CORE.track_fields.map((name, index) => [name, index]));
 		S = Object.fromEntries(CORE.series_fields.map((name, index) => [name, index]));
+		Q = Object.fromEntries(CORE.qc_fields.map((name, index) => [name, index]));
 		setLoading('Building a spatial index for responsive track selection…');
 		await new Promise(resolve => setTimeout(resolve, 0));
 		buildPathRuntime();

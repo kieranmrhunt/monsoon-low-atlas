@@ -347,6 +347,11 @@
 .mla-profile-chart { height: 190px; }
 .mla-chart-wide { grid-column: 1 / -1; }
 .mla-chart-wide .mla-chart { height: 340px; }
+.mla-genesis-chart {
+	width: min(100%, 1040px);
+	height: clamp(430px, 48vw, 620px) !important;
+	margin-inline: auto;
+}
 .mla-a11y-data { margin-top: 8px; font-size: 13px; }
 .mla-a11y-data summary { cursor: pointer; color: var(--mla-muted); }
 
@@ -371,6 +376,8 @@
 .mla-record p { margin: 0; color: var(--mla-muted); }
 
 .mla-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.mla-diagnostic-card { grid-column: 1 / -1; padding: 12px; }
+.mla-diagnostic-card img { display: block; width: 100%; height: auto; border-radius: 10px; }
 .mla-prose { padding: 16px; }
 .mla-prose h3 { font-family: var(--mla-font); font-size: 22px; font-weight: 500; margin: 0 0 8px; }
 .mla-prose h4 { margin: 16px 0 5px; font-size: 15px; font-weight: 500; }
@@ -425,6 +432,7 @@
 	.mla-fact-grid { grid-template-columns: 1fr 1fr; }
 	.mla-record-grid { grid-template-columns: 1fr; }
 	.mla-chart-wide { grid-column: auto; }
+	.mla-genesis-chart { height: clamp(390px, 78vw, 540px) !important; }
 	.mla-stat-grid { grid-template-columns: 1fr 1fr; }
 	.mla-panel-heading { display: block; }
 	.mla-panel-heading p { margin-top: 7px; }
@@ -441,6 +449,7 @@
 	.mla-map-control { width: 100%; }
 	.mla-chart-head { display: block; }
 	.mla-chart-head .mla-field { width: 100%; margin-top: 8px; }
+	.mla-genesis-chart { height: 360px !important; }
 	.mla-btn,
 	.mla-tab { min-height: 44px; }
 }
@@ -607,7 +616,6 @@
 		<section class="mla-panel" id="mlaPanelExplore" role="tabpanel" aria-labelledby="mlaTabExplore" data-panel="explore">
 			<div class="mla-panel-heading">
 				<h2>System explorer</h2>
-				<p>A density-first map of the selected physical-event cohort.</p>
 			</div>
 			<div class="mla-explore-grid">
 				<section class="mla-card mla-map-card" aria-labelledby="mlaMapHeading">
@@ -673,7 +681,7 @@
 				<section class="mla-card mla-chart-card mla-chart-wide"><h3>Annual genesis count</h3><p>Complete selected-month exposure only; the line is an event count, not a trend attribution.</p><canvas class="mla-chart" id="mlaAnnualChart" role="img" aria-label="Annual genesis counts for the filtered cohort"></canvas><details class="mla-a11y-data"><summary>Accessible annual data</summary><div id="mlaAnnualData"></div></details></section>
 				<section class="mla-card mla-chart-card"><h3>Seasonal cycle</h3><p>Genesis systems, peak-metric systems or active event-months according to the shared month definition.</p><canvas class="mla-chart" id="mlaMonthChart" role="img" aria-label="Monthly distribution for the filtered cohort"></canvas><details class="mla-a11y-data"><summary>Accessible monthly data</summary><div id="mlaMonthData"></div></details></section>
 				<section class="mla-card mla-chart-card"><h3>Atlas-derived class by decade</h3><p>Annualised within each exposed decade; category 6 means VSCS or stronger.</p><canvas class="mla-chart" id="mlaClassChart" role="img" aria-label="Annualised atlas-derived classes by decade"></canvas><details class="mla-a11y-data"><summary>Accessible class data</summary><div id="mlaClassData"></div></details></section>
-				<section class="mla-card mla-chart-card mla-chart-wide"><h3>Genesis density</h3><p>Unique genesis systems per half-degree cell; colours use a single quantitative scale.</p><canvas class="mla-chart" id="mlaGenesisChart" role="img" aria-label="Genesis density map for the filtered cohort"></canvas></section>
+				<section class="mla-card mla-chart-card mla-chart-wide"><h3>Genesis density</h3><p>Unique genesis systems per half-degree cell; colour intensity uses a square-root count scale.</p><canvas class="mla-chart mla-genesis-chart" id="mlaGenesisChart" role="img" aria-label="Genesis density map for the filtered cohort"></canvas></section>
 			</div>
 		</section>
 
@@ -682,7 +690,7 @@
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
 					<div class="mla-toolbar-group">
-						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Diagnostic</span><select class="mla-select" id="mlaExtremeMetric"><option value="duration">Duration</option><option value="distance">Path length</option><option value="deficit">Pressure deficit</option><option value="wind">Maximum wind</option><option value="rain">24 h precipitation</option><option value="vort">Smoothed vorticity</option><option value="mslp">Minimum MSLP</option></select></label>
+						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Diagnostic</span><select class="mla-select" id="mlaExtremeMetric"><optgroup label="Track and intensity"><option value="duration">Longest duration</option><option value="distance">Longest path</option><option value="meanSpeed">Mean translation speed</option><option value="deficit">Largest pressure deficit</option><option value="wind">Highest maximum wind</option><option value="rain">Highest 24 h precipitation</option><option value="vort">Highest smoothed vorticity</option><option value="mslp">Lowest minimum MSLP</option><option value="q850">Highest q850</option><option value="rh850">Highest RH850</option></optgroup><optgroup label="Support and continuity"><option value="observedPositions">Most observed positions</option><option value="qualifyingPositions">Most mature detections</option><option value="lowestCoverage">Lowest observed coverage</option><option value="posteriorShare">Largest posterior-position share</option><option value="missingRun">Longest supported missing run</option><option value="maxStepSpeed">Highest step speed</option><option value="rainDays">Most UTC rain days</option><option value="stateRain">Highest crossed-state mean rain</option></optgroup><optgroup label="Genesis location"><option value="northGenesis">Northernmost</option><option value="southGenesis">Southernmost</option><option value="eastGenesis">Easternmost</option><option value="westGenesis">Westernmost</option></optgroup></select></label>
 						<label class="mla-field" for="mlaExtremeEligibility" hidden><span class="mla-label">Eligibility</span><select class="mla-select" id="mlaExtremeEligibility"><option value="all">All filtered systems</option></select></label>
 					</div>
 					<span class="mla-badge" data-tone="review" id="mlaExtremeCaveat">Catalogue diagnostics · not externally validated records</span>
@@ -695,6 +703,7 @@
 		<section class="mla-panel" id="mlaPanelData" role="tabpanel" aria-labelledby="mlaTabData" data-panel="data" hidden>
 			<div class="mla-panel-heading"><h2>Data, definitions and reproducibility</h2><p>Physical-event identity and complete v5.4.2 final-centre physics are kept explicit.</p></div>
 			<div class="mla-method-grid">
+				<a class="mla-card mla-diagnostic-card" href="figures/lps-v5.4.2-track-diagnostics.png" target="_blank" rel="noopener"><img src="figures/lps-v5.4.2-track-diagnostics.png" alt="Four-panel catalogue diagnostic showing genesis density, seasonal peak classes, duration against path length, and the pressure-deficit lifecycle."></a>
 				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4.2 recall-first core</strong> contains 368,925 hourly positions grouped into 2,980 strength-qualified physical events. Every event is continuous at hourly resolution.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions, classifications and diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
 				<section class="mla-card mla-prose"><h3>Identity and physics</h3><p><code>track_id</code> identifies the physical event used for plotting, counts, matching and climatology. <code>event_id</code> and <code>continuity_parent_track_id</code> are identical aliases in v5.4.2.</p><h4>Map convention</h4><p>Each event is drawn as one uniform track. ERA5 physics is independently re-sampled at every observed or supported interpolated centre.</p></section>
 				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> centre diagnostic in 10⁻⁵ s⁻¹.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm; source rows retain their valid-history count.</li><li><strong>Percentiles:</strong> fixed across all 2,980 v5.4.2 physical events and independently combinable; filters do not rescale them.</li></ul><h4>Genesis regions</h4><p>Indian land means the first published centre lies inside an atlas state/UT polygon. Bay of Bengal and Arabian Sea require a water genesis point in 0–30°N, 45–100°E, using the Natural Earth land mask; 77.5°E separates the two ocean bins. Other contains every remaining land or ocean location. These are transparent atlas analysis regions, not official genesis classifications.</p><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed fixes at physical-event grain and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each event stores the area-mean daily rainfall averaged over UTC calendar days touched by its track; cohort maps weight events by active days.</p></section>
@@ -708,7 +717,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r2","weatherFormat":"webm","weatherFps":6,"weatherBounds":[49.875,-5.875,109.875,40.125]}</script>
 
-<script src="assets/atlas-app.c6367579e826.js"></script>
+<script src="assets/atlas-app.3ee965ef5bf1.js"></script>
 
 </body>
 </html>
