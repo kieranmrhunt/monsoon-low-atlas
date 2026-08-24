@@ -97,8 +97,8 @@
 	letter-spacing: .09em;
 	text-transform: uppercase;
 	color: var(--mla-muted);
-	margin-bottom: 5px;
 }
+.mla-eyebrow-below { margin-top: 9px; }
 .mla-title {
 	font-family: Georgia, "Times New Roman", serif;
 	font-size: clamp(38px, 5.2vw, 76px);
@@ -107,19 +107,7 @@
 	line-height: .98;
 	margin: 0;
 }
-.mla-deck { margin: 8px 0 0; color: var(--mla-muted); max-width: 80ch; }
 .mla-header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-.mla-release-strip {
-	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
-	gap: 10px 22px;
-	margin: 14px 0 0;
-	padding-top: 12px;
-	border-top: 1px solid var(--mla-line);
-}
-.mla-release-strip div { min-width: 0; }
-.mla-release-strip dt { color: var(--mla-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
-.mla-release-strip dd { margin: 2px 0 0; color: var(--mla-indigo-deep); font-size: 18px; font-weight: 650; }
 
 .mla-btn,
 .mla-tab,
@@ -160,7 +148,6 @@
 .mla-tab[aria-selected="true"]:hover { background: #d5ddec; border-color: #17294f; }
 .mla-btn:disabled { cursor: not-allowed; opacity: .58; transform: none; }
 
-.mla-status-pill,
 .mla-badge {
 	display: inline-flex;
 	align-items: center;
@@ -172,8 +159,6 @@
 	font-size: 12px;
 	font-weight: 500;
 }
-.mla-status-pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--mla-review); }
-.mla-status-pill[data-status="ready"]::before { background: var(--mla-good); }
 .mla-badge[data-tone="good"] { color: var(--mla-good); border-color: color-mix(in srgb, var(--mla-good) 45%, var(--mla-line)); }
 .mla-badge[data-tone="review"] { color: var(--mla-review); border-color: color-mix(in srgb, var(--mla-review) 45%, var(--mla-line)); }
 .mla-badge[data-tone="flag"] { color: var(--mla-flag); border-color: color-mix(in srgb, var(--mla-flag) 45%, var(--mla-line)); }
@@ -265,6 +250,7 @@
 .mla-map-control .mla-select { color: var(--mla-ink); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .mla-map-stack { position: relative; height: 610px; overflow: hidden; background: var(--mla-sea); }
 .mla-map-layer { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+#mlaMapWeather { pointer-events: none; }
 #mlaMapOverlay { cursor: grab; touch-action: none; }
 #mlaMapOverlay.is-dragging { cursor: grabbing; }
 .mla-map-tip {
@@ -283,6 +269,18 @@
 	transition: opacity .08s ease;
 }
 .mla-map-tip[data-visible="true"] { opacity: 1; }
+.mla-time-controls {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	flex-wrap: wrap;
+	padding: 9px 12px;
+	border-top: 1px solid var(--mla-line);
+	background: color-mix(in srgb, var(--mla-well) 74%, transparent);
+}
+.mla-time-controls output { margin-right: auto; font-variant-numeric: tabular-nums; font-weight: 650; }
+.mla-vorticity-key { display: inline-flex; align-items: center; gap: 6px; color: var(--mla-muted); font-size: 11px; }
+.mla-vorticity-ramp { width: 92px; height: 9px; border-radius: 999px; background: linear-gradient(90deg, #2d5b80, #ebf1e5 11%, #e5ca42 33%, #d7692b 56%, #7e1d43); }
 .mla-map-foot { display: flex; gap: 10px 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 9px 12px; border-top: 1px solid var(--mla-line); color: var(--mla-muted); font-size: 12px; }
 .mla-legend { display: flex; gap: 7px 12px; align-items: center; flex-wrap: wrap; }
 .mla-legend-item { display: inline-flex; align-items: center; gap: 5px; }
@@ -404,7 +402,6 @@
 }
 
 @media (max-width: 760px) {
-	.mla-release-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.mla-wrap { width: min(100% - 20px, 1540px); }
 	.mla-mast-row { display: block; }
 	.mla-header-actions { justify-content: flex-start; margin-top: 12px; }
@@ -456,22 +453,15 @@
 			<div class="mla-motif" aria-hidden="true"></div>
 			<div class="mla-mast-row">
 				<div>
-					<div class="mla-eyebrow">ERA5-derived LPS v5.4.2 recall-first core catalogue · 1940–2025</div>
 					<h1 class="mla-title">Indian Monsoon Low Atlas</h1>
-					<p class="mla-deck">Explore 2,980 hourly-complete physical events with ERA5 physics sampled at every published centre.</p>
+					<div class="mla-eyebrow mla-eyebrow-below">ERA5-derived LPS v5.4.2 recall-first core catalogue · 1940–2025</div>
 				</div>
 				<div class="mla-header-actions">
-					<span class="mla-status-pill" id="mlaDataStatus">Loading catalogue</span>
+					<a class="mla-btn mla-btn-small" id="mlaZenodoHeader" target="_blank" rel="noopener" hidden>Full dataset</a>
 					<button class="mla-btn mla-btn-small" id="mlaCopyLink" type="button">Copy view link</button>
 					<button class="mla-btn mla-btn-primary mla-btn-small" id="mlaQuickExport" type="button">Export cohort</button>
 				</div>
 			</div>
-			<dl class="mla-release-strip" aria-label="Catalogue coverage">
-				<div><dt>Physical events</dt><dd>2,980</dd></div>
-				<div><dt>Hourly positions</dt><dd>368,925</dd></div>
-				<div><dt>Coverage</dt><dd>1940–2025</dd></div>
-				<div><dt>Named cyclones</dt><dd>92</dd></div>
-			</dl>
 		</div>
 	</header>
 
@@ -494,7 +484,7 @@
 			<div class="mla-filter-primary">
 				<label class="mla-field" for="mlaSearch">
 					<span class="mla-label">Find a system</span>
-					<input class="mla-control" id="mlaSearch" type="search" placeholder="Cyclone name, DD 1986 03, 2016, ID 69674 or active date">
+					<input class="mla-control" id="mlaSearch" type="search" placeholder="Cyclone, ID, year, YYYY-MM-DD or YYYY-MM-DD HH:00">
 				</label>
 				<div class="mla-field">
 					<div class="mla-period-head"><span class="mla-label" id="mlaPeriodLabel">Genesis years</span><div class="mla-period-toggle" role="group" aria-label="Filter by genesis years or active dates"><button class="mla-btn mla-btn-small" id="mlaTimeModeYears" type="button" aria-pressed="true">Years</button><button class="mla-btn mla-btn-small" id="mlaTimeModeDates" type="button" aria-pressed="false">Dates</button></div></div>
@@ -619,6 +609,7 @@
 							<label class="mla-map-control" for="mlaMapLayer"><span>Layer</span><select class="mla-select" id="mlaMapLayer"><option value="auto">Auto: density then tracks</option><option value="density">Unique-track density</option><option value="tracks">Individual tracks</option><option value="genesis">Genesis locations</option><option value="lysis">Lysis locations</option></select></label>
 							<label class="mla-map-control" for="mlaMapColour"><span>Colour</span><select class="mla-select" id="mlaMapColour"><option value="single">Single atlas blue</option><option value="class">Atlas class</option><option value="metric">Selected percentile</option><option value="year">Genesis year</option></select></label>
 							<label class="mla-map-control" for="mlaStateFill"><span>State fill</span><select class="mla-select" id="mlaStateFill"><option value="none">Outlines only</option><option value="selected">Mean rain: selected system</option><option value="cohort">Mean rain: filtered cohort</option></select></label>
+							<label class="mla-map-control" for="mlaWeatherLayer"><span>Weather</span><select class="mla-select" id="mlaWeatherLayer"><option value="none">No weather field</option><option value="vorticity">850-hPa vorticity</option></select></label>
 							<label class="mla-map-control" for="mlaMapPath"><span>Track period</span><select class="mla-select" id="mlaMapPath"><option value="months">Selected months only</option><option value="full">Whole system lifecycle</option></select></label>
 							<label class="mla-map-control" for="mlaMapScope"><span>Geography</span><select class="mla-select" id="mlaMapScope"><option value="southasia">Indian monsoon core</option><option value="full">Full catalogue domain</option></select></label>
 							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button>
@@ -629,9 +620,18 @@
 					</div>
 					<div class="mla-map-stack" id="mlaMapStack">
 						<canvas class="mla-map-layer" id="mlaMapBase" aria-hidden="true"></canvas>
+						<canvas class="mla-map-layer" id="mlaMapWeather" aria-hidden="true"></canvas>
 						<canvas class="mla-map-layer" id="mlaMapData" aria-hidden="true"></canvas>
 						<canvas class="mla-map-layer" id="mlaMapOverlay" role="img" aria-describedby="mlaMapDescription">Interactive map of filtered atlas tracks. Use the systems table for a keyboard-accessible alternative.</canvas>
 						<div class="mla-map-tip" id="mlaMapTip" role="tooltip"></div>
+					</div>
+					<div class="mla-time-controls" id="mlaTimeControls" hidden>
+						<button class="mla-btn mla-btn-small" id="mlaPreviousHour" type="button" aria-label="Previous track hour">−1 h</button>
+						<button class="mla-btn mla-btn-small" id="mlaPlayTrack" type="button" aria-pressed="false">Play track</button>
+						<button class="mla-btn mla-btn-small" id="mlaNextHour" type="button" aria-label="Next track hour">+1 h</button>
+						<label class="mla-map-control" for="mlaPlaybackSpeed"><span>Playback</span><select class="mla-select" id="mlaPlaybackSpeed"><option value="2">2 h s⁻¹</option><option value="6" selected>6 h s⁻¹</option><option value="12">12 h s⁻¹</option></select></label>
+						<output id="mlaFocusTime" aria-live="polite"></output>
+						<span class="mla-vorticity-key"><span>−5</span><span class="mla-vorticity-ramp" aria-hidden="true"></span><span>40 × 10⁻⁵ s⁻¹</span></span>
 					</div>
 					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered cohort. Density counts each track at most once per half-degree cell. Individual systems use a uniform track style throughout.</p>
 					<div class="mla-map-foot">
@@ -691,7 +691,7 @@
 				<section class="mla-card mla-prose"><h3>Catalogue</h3><p><strong>LPS v5.4.2 recall-first core</strong> contains 368,925 hourly positions grouped into 2,980 strength-qualified physical events. Every event is continuous at hourly resolution.</p><h4>Coverage</h4><p id="mlaCoverageText"></p><h4>Scope</h4><p>Positions, classifications and diagnostics are ERA5-derived. The catalogue is not an official best track.</p></section>
 				<section class="mla-card mla-prose"><h3>Identity and physics</h3><p><code>track_id</code> identifies the physical event used for plotting, counts, matching and climatology. <code>event_id</code> and <code>continuity_parent_track_id</code> are identical aliases in v5.4.2.</p><h4>Map convention</h4><p>Each event is drawn as one uniform track. ERA5 physics is independently re-sampled at every observed or supported interpolated centre.</p></section>
 				<section class="mla-card mla-prose"><h3>Metric definitions</h3><ul><li><strong>Pressure deficit:</strong> environmental ring pressure minus local minimum MSLP, hPa.</li><li><strong>MSLP depth:</strong> percentile ranking based on minimum mean sea-level pressure; lower pressure ranks stronger.</li><li><strong>Smoothed vorticity:</strong> centre diagnostic in 10⁻⁵ s⁻¹.</li><li><strong>24 h precipitation:</strong> trailing track-centred catalogue diagnostic, mm; source rows retain their valid-history count.</li><li><strong>Percentiles:</strong> fixed across all 2,980 v5.4.2 physical events and independently combinable; filters do not rescale them.</li></ul><h4>Genesis regions</h4><p>Indian land means the first published centre lies inside an atlas state/UT polygon. Bay of Bengal and Arabian Sea require a water genesis point in 0–30°N, 45–100°E, using the Natural Earth land mask; 77.5°E separates the two ocean bins. Other contains every remaining land or ocean location. These are transparent atlas analysis regions, not official genesis classifications.</p><h4>IBTrACS names</h4><p>Named systems use NOAA IBTrACS v04r01 North Indian and Western Pacific best tracks. Matches use observed fixes at physical-event grain and require credible time overlap, track separation and ambiguity margin. Unmatched systems use atlas class, genesis year and within-class annual sequence, such as DD 1986 03.</p><h4>State rainfall</h4><p>State fills use IMD 0.25-degree daily gridded rainfall. Each event stores the area-mean daily rainfall averaged over UTC calendar days touched by its track; cohort maps weight events by active days.</p></section>
-				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include v5.4.2 physical-event IDs, units, filter state, source provenance, state rainfall and complete published-centre physics.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaReleaseSummary" target="_blank" rel="noopener">LPS v5.4.2 release manifest and checksums</a> · <a href="data/lps-v5.4.2-era5-1940-2025-core.quality-report.md" target="_blank" rel="noopener">quality report</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
+				<section class="mla-card mla-prose"><h3>Download and provenance</h3><p>Exports include v5.4.2 physical-event IDs, units, filter state, source provenance, state rainfall and complete published-centre physics.</p><div class="mla-download-grid"><button class="mla-btn" id="mlaDownloadSummaries" type="button">Filtered summaries CSV</button><button class="mla-btn" id="mlaDownloadGeojson" type="button">Filtered tracks GeoJSON</button><button class="mla-btn" id="mlaDownloadQuery" type="button">Reproducibility JSON</button><button class="mla-btn" id="mlaDownloadFixes" type="button">Selected fixes CSV</button></div><h4>Release record</h4><p><a id="mlaZenodoRecord" target="_blank" rel="noopener" hidden>Full dataset on Zenodo</a><span id="mlaZenodoSeparator" hidden> · </span><a id="mlaReleaseSummary" target="_blank" rel="noopener">release manifest and checksums</a> · <a href="data/lps-v5.4.2-era5-1940-2025-core.quality-report.md" target="_blank" rel="noopener">quality report</a></p><h4>Build</h4><p id="mlaBuildText"></p></section>
 			</div>
 		</section>
 
@@ -699,9 +699,9 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz"}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2","weatherFormat":"webm","weatherFps":6,"weatherBounds":[49.875,-5.875,109.875,40.125]}</script>
 
-<script src="assets/atlas-app.68dfaa4a2b80.js"></script>
+<script src="assets/atlas-app.23f3e9d6f822.js"></script>
 
 </body>
 </html>

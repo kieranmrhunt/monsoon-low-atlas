@@ -16,7 +16,36 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - The state/UT filter requires at least one hourly published centre inside the selected administrative boundary.
 - Genesis-region filters use the first published centre. Indian land uses the atlas state/UT polygons; the two ocean bins require a Natural Earth water point in 0–30 degrees north and 45–100 degrees east, split at 77.5 degrees east. Remaining locations are labelled Other.
 - The default map draws only positions in the selected months; whole-event lifecycles remain available.
+- A search in `YYYY-MM-DD` form highlights the part of every filtered track active on that UTC date and marks its position during the day. Adding an hour, for example `2016-07-16 12:00`, marks every active system at that exact catalogue hour.
+- Clicking an already-selected track chooses the nearest hourly centre, reports its UTC time and position, and opens the 850-hPa relative-vorticity background. The selected track can be stepped or played through hour by hour.
+- The weather background is a visual context layer, not an additional catalogue diagnostic. It is the ERA5 850-hPa relative-vorticity field averaged from 0.25 degrees to a 1-degree grid over 50–110°E, 6°S–40°N.
 - The split build loads compressed catalogue payloads from `assets/*.json.gz` and decompresses them in modern browsers.
+
+## Weather archive and deployment
+
+The atlas remains a static GitHub Pages site. Monthly weather videos live on the public JASMIN GWS and are fetched directly by the browser with CORS. Each video frame is one UTC ERA5 hour; six frames per second is therefore six catalogue hours per second at the default playback speed.
+
+`data/vorticity-active-months.csv` contains the 622 months touched by at least one released event. The Slurm array script renders only those months:
+
+```bash
+sbatch scripts/build_vorticity_videos.slurm
+```
+
+After the array finishes, validate every expected month and write the public manifest and checksums:
+
+```bash
+python scripts/build_vorticity_videos.py \
+  --output-dir path/to/atlas-weather-v5.4.2 \
+  --month-manifest data/vorticity-active-months.csv \
+  --container webm \
+  --finalize
+```
+
+Deploy that directory at the `weatherBase` URL in `index.html`. A deployment is complete only when `manifest.json`, `checksums.sha256`, and all listed `vorticity/YYYY/YYYYMM.{webm,json}` files are public.
+
+## Full catalogue archive
+
+The Data tab links to the versioned Zenodo dataset through the `zenodo` value in the JSON configuration at the bottom of `index.html`. The Zenodo package contains only the full compressed CSV and typed Parquet catalogue. Its rendered Description carries the construction summary and a grouped one-sentence guide to all 319 columns.
 
 ## Rebuild the catalogue assets
 
