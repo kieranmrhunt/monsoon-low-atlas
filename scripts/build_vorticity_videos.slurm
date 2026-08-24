@@ -14,7 +14,7 @@ set -euo pipefail
 ATLAS_ROOT="${SLURM_SUBMIT_DIR}"
 PYTHON="${LPS_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 MONTH_MANIFEST="${1:-${ATLAS_ROOT}/data/vorticity-active-months.csv}"
-OUTPUT_DIR="${2:-${ATLAS_ROOT}/../lps-v5.3-continuity-framework/production/v5.4.2/atlas-weather-v5.4.2}"
+OUTPUT_DIR="${2:-${ATLAS_ROOT}/../lps-v5.3-continuity-framework/production/v5.4.2/atlas-weather-v5.4.2-r2}"
 
 export MPLCONFIGDIR="${LPS_MPLCONFIGDIR:-${TMPDIR:-/tmp}/mla-mpl-${SLURM_JOB_ID}}"
 export XDG_CACHE_HOME="${TMPDIR:-/tmp}/mla-cache-${SLURM_JOB_ID}"

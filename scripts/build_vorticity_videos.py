@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build compact monthly 1-degree 850-hPa vorticity videos for the atlas.
+"""Build compact monthly 0.25-degree 850-hPa vorticity videos for the atlas.
 
 Each ERA5 hour is encoded as one video frame.  The atlas uses a fixed frame
-rate to map UTC hours to video time, which makes point selection and playback
-possible without publishing hundreds of thousands of individual images.
+rate to map UTC hours to video time, which lets the track-hour slider seek to
+individual fields without publishing hundreds of thousands of images.
 """
 
 from __future__ import annotations
@@ -26,12 +26,17 @@ import xarray as xr
 DEFAULT_SOURCE_DIR = Path("/home/users/kieran/ncas/data/era5-incompass/hourly_vorts_SA")
 DEFAULT_BOUNDS = (50.0, -6.0, 110.0, 40.0)  # west, south, east, north
 DEFAULT_FPS = 6
+GRID_DEGREES = 0.25
+COARSEN_FACTOR = 1
+EXPECTED_DIMENSIONS = (240, 184)
+RASTER_BOUNDS = (49.875, -5.875, 109.875, 40.125)
 COLOUR_STOPS = (
-	(-5.0, (45, 91, 128)),
-	(0.0, (235, 241, 229)),
-	(10.0, (229, 202, 66)),
-	(20.0, (215, 105, 43)),
-	(40.0, (126, 29, 67)),
+	(0.0, (49, 54, 149)),
+	(4.0, (69, 117, 180)),
+	(8.0, (145, 191, 219)),
+	(12.0, (247, 247, 247)),
+	(18.0, (214, 96, 77)),
+	(30.0, (103, 0, 31)),
 )
 
 
@@ -108,7 +113,7 @@ def select_850_vorticity(dataset: xr.Dataset) -> xr.DataArray:
 	return field
 
 
-def one_degree_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, float, float]]:
+def atlas_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, float, float]]:
 	dataset = xr.open_dataset(source)
 	field = select_850_vorticity(dataset)
 	west, south, east, north = DEFAULT_BOUNDS
@@ -120,7 +125,15 @@ def one_degree_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, fl
 		dataset.close()
 		raise ValueError("Requested atlas bounds do not intersect the ERA5 grid")
 	field = field.isel(latitude=lat_index, longitude=lon_index)
-	field = field.coarsen(latitude=4, longitude=4, boundary="trim").mean()
+	if COARSEN_FACTOR > 1:
+		field = field.coarsen(latitude=COARSEN_FACTOR, longitude=COARSEN_FACTOR, boundary="trim").mean()
+	else:
+		# Drop the duplicated far edge of the inclusive source subset so video
+		# dimensions remain even for broadly supported YUV 4:2:0 decoding.
+		field = field.isel(
+			latitude=slice(0, field.sizes["latitude"] // 2 * 2),
+			longitude=slice(0, field.sizes["longitude"] // 2 * 2),
+		)
 	latitude = np.asarray(field.latitude.values, dtype=float)
 	longitude = np.asarray(field.longitude.values, dtype=float)
 	if latitude[0] < latitude[-1]:
@@ -141,11 +154,16 @@ def one_degree_field(source: Path) -> tuple[xr.DataArray, tuple[float, float, fl
 
 
 def colourise(values: np.ndarray) -> np.ndarray:
-	values = np.nan_to_num(np.asarray(values, dtype=np.float32), nan=COLOUR_STOPS[0][0])
+	values = np.asarray(values, dtype=np.float32)
+	positive = np.isfinite(values) & (values > 0)
+	values = np.where(positive, values, 0)
 	stop_values = np.asarray([item[0] for item in COLOUR_STOPS], dtype=np.float32)
 	stop_colours = np.asarray([item[1] for item in COLOUR_STOPS], dtype=np.float32)
 	channels = [np.interp(values, stop_values, stop_colours[:, channel]) for channel in range(3)]
-	return np.clip(np.stack(channels, axis=-1), 0, 255).astype(np.uint8)
+	rgb = np.clip(np.stack(channels, axis=-1), 0, 255).astype(np.uint8)
+	alpha = np.where(positive, np.clip(values / 6.0, 0, 1) * 255, 0).astype(np.uint8)
+	mask = np.repeat(alpha[..., None], 3, axis=-1)
+	return np.concatenate((rgb, mask), axis=1)
 
 
 def render_month(args: argparse.Namespace, month: str) -> None:
@@ -156,27 +174,33 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 	metadata_path = destination.with_suffix(".json")
 	if destination.is_file() and metadata_path.is_file() and not args.overwrite:
 		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-		if metadata.get("sha256") == sha256(destination):
+		if (
+			metadata.get("sha256") == sha256(destination)
+			and metadata.get("schema") == "monsoon-low-atlas-vorticity-video-v3"
+			and metadata.get("grid_degrees") == GRID_DEGREES
+			and metadata.get("mask_layout") == "right-half-luma"
+		):
 			print(f"{month}: already complete")
 			return
 	destination.parent.mkdir(parents=True, exist_ok=True)
 	temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
-	field, raster_bounds = one_degree_field(source)
+	field, raster_bounds = atlas_field(source)
 	times = pd.DatetimeIndex(field.time.values)
 	height = int(field.sizes["latitude"])
 	width = int(field.sizes["longitude"])
+	encoded_width = width * 2
 	if width % 2 or height % 2:
 		field.close()
-		raise ValueError(f"H.264 yuv420p requires even dimensions, got {width}x{height}")
+		raise ValueError(f"YUV 4:2:0 video requires even dimensions, got {width}x{height}")
 	command = [
 		args.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "rawvideo", "-pix_fmt", "rgb24", "-s:v", f"{width}x{height}",
+		"-f", "rawvideo", "-pix_fmt", "rgb24", "-s:v", f"{encoded_width}x{height}",
 		"-r", str(args.fps), "-i", "-", "-an",
 	]
 	if args.container == "webm":
 		command.extend([
-			"-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-deadline", "good", "-cpu-used", "2",
-			"-pix_fmt", "yuv420p", "-g", str(args.fps * 2), "-f", "webm", str(temporary),
+			"-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0", "-deadline", "good", "-cpu-used", "2",
+			"-pix_fmt", "yuv420p", "-g", str(args.fps), "-f", "webm", str(temporary),
 		])
 	else:
 		command.extend([
@@ -208,16 +232,20 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 	finally:
 		field.close()
 	metadata = {
-		"schema": "monsoon-low-atlas-vorticity-video-v1",
+		"schema": "monsoon-low-atlas-vorticity-video-v3",
 		"month": month,
 		"source": f"ERA5 hourly_vorts_SA/{source.name}",
 		"source_sha256": sha256(source),
 		"field": "ERA5 850-hPa relative vorticity",
 		"units": "1e-5 s-1",
-		"grid_degrees": 1.0,
+		"grid_degrees": GRID_DEGREES,
+		"positive_only": True,
+		"mask_layout": "right-half-luma",
+		"mask": "left half is the colour field; right-half luma is opacity, with values at or below zero transparent and positive values fully opaque by 6e-5 s-1",
 		"bounds_west_south_east_north": list(raster_bounds),
 		"width": width,
 		"height": height,
+		"encoded_width": encoded_width,
 		"first_time_utc": times[0].isoformat().replace("+00:00", "") + "Z",
 		"last_time_utc": times[-1].isoformat().replace("+00:00", "") + "Z",
 		"frames": len(times),
@@ -253,13 +281,17 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		expected_last = (pd.Timestamp(year=year, month=month_number, day=1, tz="UTC") + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)).isoformat().replace("+00:00", "Z")
 		actual_sha = sha256(video)
 		checks = {
-			"schema": metadata.get("schema") == "monsoon-low-atlas-vorticity-video-v1",
+			"schema": metadata.get("schema") == "monsoon-low-atlas-vorticity-video-v3",
 			"month": metadata.get("month") == month,
 			"frames": metadata.get("frames") == expected_frames,
 			"fps": metadata.get("frames_per_second") == args.fps,
 			"container": metadata.get("container") == args.container,
-			"grid": metadata.get("grid_degrees") == 1.0,
-			"dimensions": (metadata.get("width"), metadata.get("height")) == (60, 46),
+			"grid": metadata.get("grid_degrees") == GRID_DEGREES,
+			"dimensions": (metadata.get("width"), metadata.get("height")) == EXPECTED_DIMENSIONS,
+			"encoded_dimensions": (metadata.get("encoded_width"), metadata.get("height")) == (EXPECTED_DIMENSIONS[0] * 2, EXPECTED_DIMENSIONS[1]),
+			"positive_only": metadata.get("positive_only") is True,
+			"mask": metadata.get("mask_layout") == "right-half-luma",
+			"bounds": metadata.get("bounds_west_south_east_north") == list(RASTER_BOUNDS),
 			"last_time": metadata.get("last_time_utc") == expected_last,
 			"bytes": metadata.get("bytes") == video.stat().st_size,
 			"sha256": metadata.get("sha256") == actual_sha,
@@ -289,11 +321,14 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		checksum_lines.append(f"{actual_sha}  {relative_video}")
 		checksum_lines.append(f"{metadata_sha}  {relative_metadata}")
 	manifest = {
-		"schema": "monsoon-low-atlas-weather-archive-v1",
+		"schema": "monsoon-low-atlas-weather-archive-v3",
 		"field": "ERA5 850-hPa relative vorticity",
 		"units": "1e-5 s-1",
-		"grid_degrees": 1.0,
-		"bounds_west_south_east_north": [49.875, -5.875, 109.875, 40.125],
+		"grid_degrees": GRID_DEGREES,
+		"positive_only": True,
+		"mask_layout": "right-half-luma",
+		"colour_stops": [{"value": value, "rgb": list(colour)} for value, colour in COLOUR_STOPS],
+		"bounds_west_south_east_north": list(RASTER_BOUNDS),
 		"frames_per_second": args.fps,
 		"container": args.container,
 		"active_months": len(entries),

@@ -279,8 +279,12 @@
 	background: color-mix(in srgb, var(--mla-well) 74%, transparent);
 }
 .mla-time-controls output { margin-right: auto; font-variant-numeric: tabular-nums; font-weight: 650; }
+.mla-track-time-control { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: min(320px, 100%); }
+.mla-track-time-control span { color: var(--mla-faint); font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.mla-time-slider { width: 100%; min-width: 150px; accent-color: var(--mla-indigo-deep); cursor: pointer; }
+.mla-time-slider:disabled { cursor: not-allowed; opacity: .5; }
 .mla-vorticity-key { display: inline-flex; align-items: center; gap: 6px; color: var(--mla-muted); font-size: 11px; }
-.mla-vorticity-ramp { width: 92px; height: 9px; border-radius: 999px; background: linear-gradient(90deg, #2d5b80, #ebf1e5 11%, #e5ca42 33%, #d7692b 56%, #7e1d43); }
+.mla-vorticity-ramp { width: 110px; height: 9px; border-radius: 999px; background: linear-gradient(90deg, rgba(49, 54, 149, 0), #313695 8%, #4575b4 24%, #91bfdb 40%, #f7f7f7 55%, #d6604d 78%, #67001f); }
 .mla-map-foot { display: flex; gap: 10px 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 9px 12px; border-top: 1px solid var(--mla-line); color: var(--mla-muted); font-size: 12px; }
 .mla-legend { display: flex; gap: 7px 12px; align-items: center; flex-wrap: wrap; }
 .mla-legend-item { display: inline-flex; align-items: center; gap: 5px; }
@@ -609,7 +613,7 @@
 							<label class="mla-map-control" for="mlaMapLayer"><span>Layer</span><select class="mla-select" id="mlaMapLayer"><option value="auto">Auto: density then tracks</option><option value="density">Unique-track density</option><option value="tracks">Individual tracks</option><option value="genesis">Genesis locations</option><option value="lysis">Lysis locations</option></select></label>
 							<label class="mla-map-control" for="mlaMapColour"><span>Colour</span><select class="mla-select" id="mlaMapColour"><option value="single">Single atlas blue</option><option value="class">Atlas class</option><option value="metric">Selected percentile</option><option value="year">Genesis year</option></select></label>
 							<label class="mla-map-control" for="mlaStateFill"><span>State fill</span><select class="mla-select" id="mlaStateFill"><option value="none">Outlines only</option><option value="selected">Mean rain: selected system</option><option value="cohort">Mean rain: filtered cohort</option></select></label>
-							<label class="mla-map-control" for="mlaWeatherLayer"><span>Weather</span><select class="mla-select" id="mlaWeatherLayer"><option value="none">No weather field</option><option value="vorticity">850-hPa vorticity</option></select></label>
+							<label class="mla-map-control" for="mlaWeatherLayer"><span>Weather</span><select class="mla-select" id="mlaWeatherLayer"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option></select></label>
 							<label class="mla-map-control" for="mlaMapPath"><span>Track period</span><select class="mla-select" id="mlaMapPath"><option value="months">Selected months only</option><option value="full">Whole system lifecycle</option></select></label>
 							<label class="mla-map-control" for="mlaMapScope"><span>Geography</span><select class="mla-select" id="mlaMapScope"><option value="southasia">Indian monsoon core</option><option value="full">Full catalogue domain</option></select></label>
 							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button>
@@ -627,11 +631,10 @@
 					</div>
 					<div class="mla-time-controls" id="mlaTimeControls" hidden>
 						<button class="mla-btn mla-btn-small" id="mlaPreviousHour" type="button" aria-label="Previous track hour">−1 h</button>
-						<button class="mla-btn mla-btn-small" id="mlaPlayTrack" type="button" aria-pressed="false">Play track</button>
+						<label class="mla-track-time-control" for="mlaTrackHour"><span>Track hour</span><input class="mla-time-slider" id="mlaTrackHour" type="range" min="0" max="0" value="0" step="1" aria-label="Selected track hour"></label>
 						<button class="mla-btn mla-btn-small" id="mlaNextHour" type="button" aria-label="Next track hour">+1 h</button>
-						<label class="mla-map-control" for="mlaPlaybackSpeed"><span>Playback</span><select class="mla-select" id="mlaPlaybackSpeed"><option value="2">2 h s⁻¹</option><option value="6" selected>6 h s⁻¹</option><option value="12">12 h s⁻¹</option></select></label>
 						<output id="mlaFocusTime" aria-live="polite"></output>
-						<span class="mla-vorticity-key"><span>−5</span><span class="mla-vorticity-ramp" aria-hidden="true"></span><span>40 × 10⁻⁵ s⁻¹</span></span>
+						<span class="mla-vorticity-key"><span>0</span><span class="mla-vorticity-ramp" aria-hidden="true"></span><span>40 × 10⁻⁵ s⁻¹</span></span>
 					</div>
 					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered cohort. Density counts each track at most once per half-degree cell. Individual systems use a uniform track style throughout.</p>
 					<div class="mla-map-foot">
@@ -699,9 +702,9 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2","weatherFormat":"webm","weatherFps":6,"weatherBounds":[49.875,-5.875,109.875,40.125]}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.c6db29ed4192.json.gz","detail":"assets/atlas-detail.6d6c0ac24d47.json.gz","zenodo":"https://doi.org/10.5281/zenodo.22078694","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r2","weatherFormat":"webm","weatherFps":6,"weatherBounds":[49.875,-5.875,109.875,40.125]}</script>
 
-<script src="assets/atlas-app.23f3e9d6f822.js"></script>
+<script src="assets/atlas-app.5f99dfa93ac4.js"></script>
 
 </body>
 </html>

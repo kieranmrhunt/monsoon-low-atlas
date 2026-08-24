@@ -39,8 +39,11 @@
 	let weatherVideo = null;
 	let weatherMonth = '';
 	let weatherLoadSerial = 0;
-	let weatherFrameRequest = 0;
 	let weatherError = '';
+	let weatherFrameCanvas = null;
+	let weatherFrameContext = null;
+	let weatherEncodedCanvas = null;
+	let weatherEncodedContext = null;
 
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
@@ -95,7 +98,6 @@
 		focusTimeMs: null,
 		focusPointIndex: null,
 		focusSource: '',
-		playing: false,
 		hovered: null,
 		active: [],
 		activeBit: null,
@@ -983,16 +985,15 @@
 		});
 		$('#mlaWeatherLayer').addEventListener('change', event => {
 			state.weatherLayer = event.target.value;
-			if (state.weatherLayer === 'none') stopPlayback();
-			else syncWeatherToFocus();
+			if (state.weatherLayer === 'vorticity') syncWeatherToFocus();
 			updateTimeControls();
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
 			writeUrl('replace');
 		});
 		$('#mlaPreviousHour').addEventListener('click', () => stepTrackHour(-1));
 		$('#mlaNextHour').addEventListener('click', () => stepTrackHour(1));
-		$('#mlaPlayTrack').addEventListener('click', togglePlayback);
-		$('#mlaPlaybackSpeed').addEventListener('change', updatePlaybackRate);
+		$('#mlaTrackHour').addEventListener('input', moveTrackHourSlider);
+		$('#mlaTrackHour').addEventListener('change', commitTrackHourSlider);
 		$('#mlaMapScope').addEventListener('change', event => { state.mapScope = event.target.value; resetMapView(); writeUrl('replace'); });
 		$('#mlaMapPath').addEventListener('change', event => {
 			state.mapPath = event.target.value;
@@ -1195,11 +1196,6 @@
 		return Date.parse(`${month.slice(0, 4)}-${month.slice(4, 6)}-01T00:00:00Z`);
 	}
 
-	function weatherFrameTime() {
-		if (!weatherVideo || !weatherMonth || !Number.isFinite(weatherVideo.currentTime)) return null;
-		return weatherMonthStart(weatherMonth) + Math.round(weatherVideo.currentTime * weatherSettings().fps) * HOUR_MS;
-	}
-
 	function ensureWeatherVideo() {
 		if (weatherVideo) return weatherVideo;
 		weatherVideo = document.createElement('video');
@@ -1208,11 +1204,8 @@
 		weatherVideo.playsInline = true;
 		weatherVideo.preload = 'auto';
 		weatherVideo.addEventListener('seeked', () => mapScheduler.invalidate(MAP_DIRTY.WEATHER));
-		weatherVideo.addEventListener('timeupdate', syncFocusFromWeatherVideo);
-		weatherVideo.addEventListener('ended', continuePlaybackIntoNextMonth);
 		weatherVideo.addEventListener('error', () => {
 			weatherError = '850-hPa vorticity frame unavailable for this month';
-			stopPlayback();
 			updateTimeControls();
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 		});
@@ -1273,7 +1266,7 @@
 		return video;
 	}
 
-	async function syncWeatherToFocus(options) {
+	async function syncWeatherToFocus() {
 		if (state.weatherLayer !== 'vorticity' || !Number.isFinite(state.focusTimeMs)) {
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 			return;
@@ -1281,99 +1274,38 @@
 		weatherError = '';
 		updateTimeControls();
 		try {
-			const video = await seekWeather(state.focusTimeMs);
-			if (options && options.play) {
-				state.playing = true;
-				updatePlaybackRate();
-				await video.play();
-				scheduleWeatherFrames();
-			}
+			await seekWeather(state.focusTimeMs);
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
 		} catch (error) {
 			if (String(error && error.message).includes('Superseded')) return;
 			weatherError = error && error.message ? error.message : String(error);
-			stopPlayback();
 		}
 		updateTimeControls();
 	}
 
-	function updatePlaybackRate() {
-		if (!weatherVideo) return;
-		const hoursPerSecond = Number($('#mlaPlaybackSpeed').value) || 6;
-		weatherVideo.playbackRate = hoursPerSecond / weatherSettings().fps;
-	}
+	const scheduleSliderWeather = debounce(syncWeatherToFocus, 80);
 
-	function scheduleWeatherFrames() {
-		if (!state.playing || !weatherVideo) return;
-		if ('requestVideoFrameCallback' in weatherVideo) {
-			weatherFrameRequest = weatherVideo.requestVideoFrameCallback(() => {
-				weatherFrameRequest = 0;
-				syncFocusFromWeatherVideo();
-				if (state.playing) scheduleWeatherFrames();
-			});
-		}
-	}
-
-	function syncFocusFromWeatherVideo() {
-		if (!state.playing || state.selected == null) return;
-		const timeMs = weatherFrameTime();
-		if (!Number.isFinite(timeMs)) return;
-		const row = track(state.selected);
-		if (timeMs >= Number(row[T.end_ms])) {
-			setTrackPointFocus(state.selected, paths.decoded[state.selected].length - 1, {keepPlaying: true, noSeek: true, noUrl: true});
-			stopPlayback();
-			writeUrl('replace');
-			return;
-		}
-		const pointIndex = pointIndexAtTime(state.selected, timeMs);
-		if (pointIndex < 0) return;
-		state.focusStartMs = timeMs;
-		state.focusEndMs = timeMs;
-		state.focusTimeMs = timeMs;
-		state.focusPointIndex = pointIndex;
-		state.focusSource = 'point';
-		updateTimeControls();
-		mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
-	}
-
-	async function continuePlaybackIntoNextMonth() {
-		if (!state.playing || state.selected == null) return;
-		const nextTime = Date.UTC(Number(weatherMonth.slice(0, 4)), Number(weatherMonth.slice(4, 6)), 1);
-		if (nextTime > Number(track(state.selected)[T.end_ms])) { stopPlayback(); return; }
-		const pointIndex = pointIndexAtTime(state.selected, nextTime);
-		if (pointIndex < 0) { stopPlayback(); return; }
-		setTrackPointFocus(state.selected, pointIndex, {keepPlaying: true, noSeek: true, noUrl: true});
-		await syncWeatherToFocus({play: true});
-	}
-
-	function stopPlayback() {
-		state.playing = false;
-		if (weatherVideo && !weatherVideo.paused) weatherVideo.pause();
-		if (weatherVideo && weatherFrameRequest && 'cancelVideoFrameCallback' in weatherVideo) weatherVideo.cancelVideoFrameCallback(weatherFrameRequest);
-		weatherFrameRequest = 0;
-		updateTimeControls();
-	}
-
-	function togglePlayback() {
-		if (state.playing) { stopPlayback(); writeUrl('replace'); return; }
+	function moveTrackHourSlider(event) {
 		if (state.selected == null) return;
-		let pointIndex = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
-		if (pointIndex >= paths.decoded[state.selected].length - 1) pointIndex = 0;
+		const pointIndex = clamp(Number(event.target.value) || 0, 0, paths.decoded[state.selected].length - 1);
 		setTrackPointFocus(state.selected, pointIndex, {noSeek: true, noUrl: true});
+		scheduleSliderWeather();
+	}
+
+	function commitTrackHourSlider() {
+		if (state.selected == null) return;
 		renderDossier();
-		syncWeatherToFocus({play: true});
+		writeUrl('replace');
 	}
 
 	function stepTrackHour(direction) {
 		if (state.selected == null) return;
-		stopPlayback();
 		const current = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
 		setTrackPointFocus(state.selected, clamp(current + direction, 0, paths.decoded[state.selected].length - 1));
 	}
 
 	function setTrackPointFocus(trackIndex, pointIndex, options) {
 		if (trackIndex == null || !Number.isInteger(pointIndex)) return;
-		if (!(options && options.keepPlaying)) stopPlayback();
 		pointIndex = clamp(pointIndex, 0, paths.decoded[trackIndex].length - 1);
 		const timeMs = pointTimeMs(trackIndex, pointIndex);
 		state.focusStartMs = timeMs;
@@ -1391,7 +1323,6 @@
 	}
 
 	function clearTimeFocus(options) {
-		stopPlayback();
 		state.focusStartMs = null;
 		state.focusEndMs = null;
 		state.focusTimeMs = null;
@@ -1409,14 +1340,24 @@
 		controls.hidden = state.selected == null && !Number.isFinite(state.focusStartMs);
 		$('#mlaPreviousHour').disabled = state.selected == null;
 		$('#mlaNextHour').disabled = state.selected == null;
-		$('#mlaPlayTrack').disabled = state.selected == null;
-		$('#mlaPlayTrack').textContent = state.playing ? 'Pause' : 'Play track';
-		$('#mlaPlayTrack').setAttribute('aria-pressed', String(state.playing));
+		const slider = $('#mlaTrackHour');
+		slider.disabled = state.selected == null;
+		if (state.selected != null) {
+			const lastPoint = paths.decoded[state.selected].length - 1;
+			const pointIndex = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
+			slider.max = String(lastPoint);
+			slider.value = String(clamp(pointIndex, 0, lastPoint));
+			slider.setAttribute('aria-valuetext', Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : 'Move to choose a track hour');
+		} else {
+			slider.max = '0';
+			slider.value = '0';
+			slider.setAttribute('aria-valuetext', 'No selected track');
+		}
 		let message = '';
 		if (weatherError) message = `${weatherError} · ${Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : ''}`;
 		else if (Number.isFinite(state.focusTimeMs)) message = `${dateTime(state.focusTimeMs)} · ${state.active.filter(index => pointIndexAtTime(index, state.focusTimeMs) >= 0).length} systems active`;
 		else if (Number.isFinite(state.focusStartMs)) message = `${date(state.focusStartMs)} UTC · ${state.active.filter(index => pointRangeAtTime(index, state.focusStartMs, state.focusEndMs)).length} systems active · daily positions highlighted`;
-		else if (state.selected != null) message = 'Click the selected track again to choose an hour, or play from genesis.';
+		else if (state.selected != null) message = 'Move the track-hour slider or click the selected track again to choose an hour.';
 		$('#mlaFocusTime').textContent = message;
 		const dossierTime = $('#mlaDossierFocusTime');
 		const dossierPosition = $('#mlaDossierFocusPosition');
@@ -1676,6 +1617,43 @@
 		drawMapGeography(drawing.context, drawing.projection, drawing.width, drawing.height, {labels: true});
 	}
 
+	function maskedWeatherFrame() {
+		const encodedWidth = weatherVideo.videoWidth;
+		const height = weatherVideo.videoHeight;
+		const width = Math.floor(encodedWidth / 2);
+		if (!width || !height || encodedWidth !== width * 2) return null;
+		if (!weatherFrameCanvas) {
+			weatherFrameCanvas = document.createElement('canvas');
+			weatherFrameContext = weatherFrameCanvas.getContext('2d', {willReadFrequently: true});
+			weatherEncodedCanvas = document.createElement('canvas');
+			weatherEncodedContext = weatherEncodedCanvas.getContext('2d', {willReadFrequently: true});
+		}
+		if (weatherFrameCanvas.width !== width || weatherFrameCanvas.height !== height) {
+			weatherFrameCanvas.width = width;
+			weatherFrameCanvas.height = height;
+			weatherEncodedCanvas.width = encodedWidth;
+			weatherEncodedCanvas.height = height;
+		}
+		weatherEncodedContext.clearRect(0, 0, encodedWidth, height);
+		weatherEncodedContext.drawImage(weatherVideo, 0, 0, encodedWidth, height);
+		const encoded = weatherEncodedContext.getImageData(0, 0, encodedWidth, height);
+		const frame = weatherFrameContext.createImageData(width, height);
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				const target = (y * width + x) * 4;
+				const colour = (y * encodedWidth + x) * 4;
+				const mask = (y * encodedWidth + x + width) * 4;
+				frame.data[target] = encoded.data[colour];
+				frame.data[target + 1] = encoded.data[colour + 1];
+				frame.data[target + 2] = encoded.data[colour + 2];
+				const opacity = encoded.data[mask];
+				frame.data[target + 3] = opacity <= 8 ? 0 : opacity;
+			}
+		}
+		weatherFrameContext.putImageData(frame, 0, 0);
+		return weatherFrameCanvas;
+	}
+
 	function drawMapWeather() {
 		const drawing = setupCanvas('mlaMapWeather');
 		if (state.weatherLayer !== 'vorticity' || !Number.isFinite(state.focusTimeMs) || !weatherVideo || weatherVideo.readyState < 2 || weatherError) return;
@@ -1684,10 +1662,11 @@
 		const topLeft = drawing.projection.project(north, west);
 		const bottomRight = drawing.projection.project(south, east);
 		drawing.context.save();
-		drawing.context.globalAlpha = .74;
-		drawing.context.imageSmoothingEnabled = true;
+		drawing.context.globalAlpha = .88;
+		drawing.context.imageSmoothingEnabled = false;
 		try {
-			drawing.context.drawImage(weatherVideo, topLeft[0], topLeft[1], bottomRight[0] - topLeft[0], bottomRight[1] - topLeft[1]);
+			const frame = maskedWeatherFrame();
+			if (frame) drawing.context.drawImage(frame, topLeft[0], topLeft[1], bottomRight[0] - topLeft[0], bottomRight[1] - topLeft[1]);
 		} catch (error) {
 			weatherError = 'The browser could not draw this cross-origin weather frame';
 			updateTimeControls();
@@ -2232,17 +2211,12 @@
 			<div class="mla-dossier-head"><div><div class="mla-badge-row">${badges.join('')}</div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaClearSelection" type="button" aria-label="Clear selected track">×</button></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			${focusedHour}
-			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaPlaySelected" type="button">Play from genesis</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
+			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
 			`;
 		$('#mlaClearSelection').addEventListener('click', () => selectTrack(null));
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
 		$('#mlaFitTrack').addEventListener('click', fitSelected);
-		$('#mlaPlaySelected').addEventListener('click', () => {
-			setTrackPointFocus(state.selected, 0, {noSeek: true, noUrl: true});
-			renderDossier();
-			syncWeatherToFocus({play: true});
-		});
 		$('#mlaSelectedFixes').addEventListener('click', downloadSelectedFixes);
 	}
 
