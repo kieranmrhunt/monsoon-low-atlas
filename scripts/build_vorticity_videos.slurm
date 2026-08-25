@@ -10,6 +10,7 @@
 #SBATCH --output=../hpc-logs/mla-weather-%A_%a.out
 
 set -euo pipefail
+umask 0022
 
 ATLAS_ROOT="${SLURM_SUBMIT_DIR}"
 PYTHON="${LPS_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"

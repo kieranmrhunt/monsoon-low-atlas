@@ -14,6 +14,7 @@
 	const COMPLETE_END_YEAR = 2025;
 	const MAP_DIRTY = Object.freeze({BASE: 1, WEATHER: 2, DATA: 4, OVERLAY: 8, ALL: 15});
 	const HOUR_MS = 3600000;
+	const CONCURRENT_CENTRE_SEPARATION_KM = 150;
 	const CANVAS_FONT = '"effra", Effra, Arial, sans-serif';
 	const WEATHER_FIELDS = Object.freeze({
 		vorticity: {label: '850-hPa vorticity', keyMin: '0', keyMax: '40 × 10⁻⁵ s⁻¹'},
@@ -164,6 +165,40 @@
 		const first = Math.max(0, Math.ceil((Number(startMs) - trackStart) / HOUR_MS));
 		const last = Math.min(paths.decoded[trackIndex].length - 1, Math.floor((Number(endMs) - trackStart) / HOUR_MS));
 		return first <= last ? [first, last] : null;
+	}
+
+	function centreSeparationKm(first, second) {
+		const radians = Math.PI / 180;
+		const firstLatitude = first[0] * radians;
+		const secondLatitude = second[0] * radians;
+		const latitudeDifference = (second[0] - first[0]) * radians;
+		const longitudeDifference = (second[1] - first[1]) * radians;
+		const haversine = Math.sin(latitudeDifference / 2) ** 2
+			+ Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDifference / 2) ** 2;
+		return 6371.0088 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(Math.max(0, 1 - haversine)));
+	}
+
+	function mapTrackIndexes() {
+		if (!CORE || !paths || !Number.isFinite(state.focusTimeMs) || state.focusStartMs !== state.focusEndMs) return state.active;
+		const candidates = [];
+		for (const trackIndex of state.active) {
+			const pointIndex = pointIndexAtTime(trackIndex, state.focusTimeMs);
+			if (pointIndex >= 0) candidates.push({trackIndex, pointIndex, point: paths.decoded[trackIndex][pointIndex]});
+		}
+		candidates.sort((first, second) => {
+			const selectedOrder = Number(second.trackIndex === state.selected) - Number(first.trackIndex === state.selected);
+			if (selectedOrder) return selectedOrder;
+			const categoryOrder = Number(track(second.trackIndex)[T.category]) - Number(track(first.trackIndex)[T.category]);
+			if (categoryOrder) return categoryOrder;
+			const vorticityOrder = Number(track(second.trackIndex)[T.peak_vort_x10]) - Number(track(first.trackIndex)[T.peak_vort_x10]);
+			if (vorticityOrder) return vorticityOrder;
+			return Number(atlasId(first.trackIndex)) - Number(atlasId(second.trackIndex));
+		});
+		const distinct = [];
+		for (const candidate of candidates) {
+			if (distinct.every(retained => centreSeparationKm(candidate.point, retained.point) >= CONCURRENT_CENTRE_SEPARATION_KM)) distinct.push(candidate);
+		}
+		return distinct.map(candidate => candidate.trackIndex);
 	}
 
 	function periodYearMin() {
@@ -1434,7 +1469,7 @@
 		let message = '';
 		if (weatherError) message = `${weatherError} · ${Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : ''}`;
 		else if (weatherLoading && weatherDefinition) message = `Loading ${weatherDefinition.label}${Number.isFinite(state.focusTimeMs) ? ` · ${dateTime(state.focusTimeMs)}` : ''}…`;
-		else if (Number.isFinite(state.focusTimeMs)) message = `${dateTime(state.focusTimeMs)} · ${state.active.filter(index => pointIndexAtTime(index, state.focusTimeMs) >= 0).length} systems active`;
+		else if (Number.isFinite(state.focusTimeMs)) message = `${dateTime(state.focusTimeMs)} · ${mapTrackIndexes().length} systems active`;
 		else if (Number.isFinite(state.focusStartMs)) message = `${date(state.focusStartMs)} UTC · ${state.active.filter(index => pointRangeAtTime(index, state.focusStartMs, state.focusEndMs)).length} systems active · daily positions highlighted`;
 		else if (state.selected != null) message = 'Move the track-hour slider or click the selected track again to choose an hour.';
 		else if (weatherDefinition) message = 'Select a track, then choose an hour for the weather field.';
@@ -1857,14 +1892,14 @@
 
 	function effectiveLayer() {
 		if (state.mapLayer !== 'auto') return state.mapLayer;
-		return state.active.length > 650 && state.mapZoom < 2.5 ? 'density' : 'tracks';
+		return mapTrackIndexes().length > 650 && state.mapZoom < 2.5 ? 'density' : 'tracks';
 	}
 
-	function drawDensity(context, projection) {
+	function drawDensity(context, projection, indexes) {
 		const cellsData = currentDensityCells();
 		const counts = new Uint16Array(cellsData.columns * cellsData.rows);
 		let maximum = 0;
-		for (const trackIndex of state.active) {
+		for (const trackIndex of indexes) {
 			for (const cell of cellsData.perTrack[trackIndex]) {
 				counts[cell]++;
 				if (counts[cell] > maximum) maximum = counts[cell];
@@ -1903,18 +1938,18 @@
 		}
 	}
 
-	function drawTrackLayer(context, projection) {
+	function drawTrackLayer(context, projection, indexes) {
 		const groups = new Map();
-		for (const index of state.active) {
+		for (const index of indexes) {
 			if (!boundsIntersect(CORE.bounds[index], projection.viewBounds)) continue;
 			const colour = trackColour(index);
 			if (!groups.has(colour)) groups.set(colour, []);
 			groups.get(colour).push(index);
 		}
-		for (const [colour, indexes] of groups) {
+		for (const [colour, groupIndexes] of groups) {
 			context.beginPath();
-			for (const index of indexes) appendTrackPath(context, projection, index, state.mapZoom < 1.5 ? 3 : state.mapZoom < 3 ? 2 : 1, false);
-			context.strokeStyle = rgba(colour, state.active.length > 1000 ? .34 : .58);
+			for (const index of groupIndexes) appendTrackPath(context, projection, index, state.mapZoom < 1.5 ? 3 : state.mapZoom < 3 ? 2 : 1, false);
+			context.strokeStyle = rgba(colour, indexes.length > 1000 ? .34 : .58);
 			context.lineWidth = state.mapZoom > 3 ? 1.5 : 1;
 			context.lineCap = 'round';
 			context.lineJoin = 'round';
@@ -1922,9 +1957,9 @@
 		}
 	}
 
-	function drawPointLayer(context, projection, mode) {
-		const radius = state.active.length > 1000 ? 1.6 : 2.4;
-		for (const index of state.active) {
+	function drawPointLayer(context, projection, mode, indexes) {
+		const radius = indexes.length > 1000 ? 1.6 : 2.4;
+		for (const index of indexes) {
 			const row = track(index);
 			const latitude = Number(row[mode === 'lysis' ? T.end_lat_x1000 : T.gen_lat_x1000]) / 1000;
 			const longitude = Number(row[mode === 'lysis' ? T.end_lon_x1000 : T.gen_lon_x1000]) / 1000;
@@ -1962,16 +1997,17 @@
 	function drawMapData() {
 		const drawing = setupCanvas('mlaMapData');
 		const layer = effectiveLayer();
+		const indexes = mapTrackIndexes();
 		const hideSubsetTracks = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
 		let maximum = 0;
-		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection);
-		else if (layer === 'tracks') { if (!hideSubsetTracks) drawTrackLayer(drawing.context, drawing.projection); }
-		else drawPointLayer(drawing.context, drawing.projection, layer);
-		const pathLabel = `${fmt(visiblePointCount(state.active))} selected-month positions`;
+		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection, indexes);
+		else if (layer === 'tracks') { if (!hideSubsetTracks) drawTrackLayer(drawing.context, drawing.projection, indexes); }
+		else drawPointLayer(drawing.context, drawing.projection, layer, indexes);
+		const pathLabel = `${fmt(visiblePointCount(indexes))} selected-month positions`;
 		const rainfall = stateRainfallSummary();
 		const rainfallLabel = rainfall ? ` · IMD state mean across ${fmt(rainfall.systemDays)} system-days` : '';
 		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'unique-track density' : layer;
-		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} systems · ${layerLabel} · ${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
+		$('#mlaMapStatus').textContent = `${fmt(indexes.length)} systems · ${layerLabel} · ${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		renderStateRainfallValues(rainfall);
 		mapLegend(layer, maximum);
 	}
@@ -1995,7 +2031,7 @@
 		context.save();
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
-		for (const trackIndex of state.active) {
+		for (const trackIndex of exact ? mapTrackIndexes() : state.active) {
 			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
 			if (!range) continue;
 			const points = paths.decoded[trackIndex];
@@ -2097,10 +2133,12 @@
 		const y = clientY - rectangle.top;
 		const projection = mapProjection(rectangle.width, rectangle.height);
 		const layer = effectiveLayer();
+		const mapIndexes = mapTrackIndexes();
+		const mapBits = new Set(mapIndexes);
 		if (layer === 'genesis' || layer === 'lysis') {
 			let bestTrack = -1;
 			let bestDistance = (touch ? 20 : 11) ** 2;
-			for (const trackIndex of state.active) {
+			for (const trackIndex of mapIndexes) {
 				const row = track(trackIndex);
 				const latitude = Number(row[layer === 'lysis' ? T.end_lat_x1000 : T.gen_lat_x1000]) / 1000;
 				const longitude = Number(row[layer === 'lysis' ? T.end_lon_x1000 : T.gen_lon_x1000]) / 1000;
@@ -2121,7 +2159,7 @@
 			radiusLon: radiusPx / projection.scale,
 			radiusLat: radiusPx / projection.scale,
 			project: projection.project,
-			active: trackIndex => state.activeBit[trackIndex] && (!subsetTracksHidden || trackIndex === state.selected),
+			active: trackIndex => mapBits.has(trackIndex) && (!subsetTracksHidden || trackIndex === state.selected),
 			segmentVisible: (trackIndex, pointIndex) => pointVisible(trackIndex, pointIndex - 1) && pointVisible(trackIndex, pointIndex)
 		});
 	}

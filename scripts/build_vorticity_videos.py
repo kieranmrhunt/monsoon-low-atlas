@@ -316,6 +316,9 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 		raise FileNotFoundError(source)
 	destination = args.output_dir / args.field / month[:4] / f"{month}.{args.container}"
 	metadata_path = destination.with_suffix(".json")
+	destination.parent.mkdir(parents=True, exist_ok=True)
+	for directory in (args.output_dir, args.output_dir / args.field, destination.parent):
+		directory.chmod(0o2755)
 	if destination.is_file() and metadata_path.is_file() and not args.overwrite:
 		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 		if (
@@ -326,7 +329,6 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 		):
 			print(f"{month}: already complete")
 			return
-	destination.parent.mkdir(parents=True, exist_ok=True)
 	temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
 	field, raster_bounds, sources = atlas_field(source, args.field, month)
 	times = pd.DatetimeIndex(field.time.values)
@@ -363,6 +365,7 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 		if return_code:
 			raise subprocess.CalledProcessError(return_code, command)
 		os.replace(temporary, destination)
+		destination.chmod(0o644)
 	except Exception:
 		if process.stdin and not process.stdin.closed:
 			try:
@@ -408,6 +411,7 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 		metadata["source_previous"] = f"{spec['source_label']}/{sources[1].name}"
 		metadata["source_previous_sha256"] = sha256(sources[1])
 	metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+	metadata_path.chmod(0o644)
 	print(json.dumps(metadata, indent=2, sort_keys=True))
 
 
@@ -415,6 +419,8 @@ def finalize_archive(args: argparse.Namespace) -> None:
 	if args.month_manifest is None:
 		raise ValueError("--month-manifest is required with --finalize")
 	spec = FIELD_SPECS[args.field]
+	for directory in (args.output_dir, args.output_dir / args.field):
+		directory.chmod(0o2755)
 	month_table = pd.read_csv(args.month_manifest, dtype={"yyyymm": str})
 	months = [str(value) for value in month_table["yyyymm"]]
 	if not months or len(set(months)) != len(months):
@@ -455,6 +461,9 @@ def finalize_archive(args: argparse.Namespace) -> None:
 			raise ValueError(f"Weather month {month} failed: {', '.join(failed)}")
 		metadata["source"] = f"{spec['source_label']}/{month}.nc"
 		metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+		video.parent.chmod(0o2755)
+		video.chmod(0o644)
+		metadata_path.chmod(0o644)
 		relative_video = video.relative_to(args.output_dir).as_posix()
 		relative_metadata = metadata_path.relative_to(args.output_dir).as_posix()
 		metadata_sha = sha256(metadata_path)
