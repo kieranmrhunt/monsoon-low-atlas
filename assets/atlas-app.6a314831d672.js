@@ -2126,7 +2126,7 @@
 		const pathLabel = layer === 'none' ? '' : ` · ${fmt(visiblePointCount(indexes))} selected-month positions`;
 		const rainfall = stateRainfallSummary();
 		const rainfallLabel = rainfall ? ` · IMD state ${rainfall.anomaly ? 'fractional JJAS anomaly' : 'mean'} across ${fmt(rainfall.systemDays)} system-days` : '';
-		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'unique-track density' : layer === 'none' ? 'no LPS layer' : layer;
+		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'unique-track density' : layer === 'none' ? (state.selected == null ? 'no LPS subset layer' : 'selected system only') : layer;
 		$('#mlaMapStatus').textContent = `${fmt(indexes.length)} systems · ${layerLabel}${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		renderStateRainfallValues(rainfall);
 		mapLegend(layer, maximum);
@@ -2145,13 +2145,18 @@
 		context.restore();
 	}
 
+	function timeFocusTrackIndexes(exact) {
+		if (effectiveLayer() === 'none') return state.selected == null ? [] : [state.selected];
+		return exact ? mapTrackIndexes() : state.active;
+	}
+
 	function drawTimeFocus(context, projection) {
 		if (!Number.isFinite(state.focusStartMs) || !Number.isFinite(state.focusEndMs)) return;
 		const exact = state.focusStartMs === state.focusEndMs;
 		context.save();
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
-		for (const trackIndex of exact ? mapTrackIndexes() : state.active) {
+		for (const trackIndex of timeFocusTrackIndexes(exact)) {
 			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
 			if (!range) continue;
 			const points = paths.decoded[trackIndex];
@@ -2184,8 +2189,8 @@
 
 	function drawMapOverlay() {
 		const drawing = setupCanvas('mlaMapOverlay');
-		if (effectiveLayer() === 'none') return;
-		if (state.hovered != null && state.hovered !== state.selected && state.activeBit[state.hovered]) strokeTrack(drawing.context, drawing.projection, state.hovered, css('--mla-madder', '#aa3d2d'), 2.5);
+		const selectedOnly = effectiveLayer() === 'none';
+		if (!selectedOnly && state.hovered != null && state.hovered !== state.selected && state.activeBit[state.hovered]) strokeTrack(drawing.context, drawing.projection, state.hovered, css('--mla-madder', '#aa3d2d'), 2.5);
 		if (state.selected != null) {
 			strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 6.4);
 			strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-indigo-deep', '#17294f'), 3.6);
@@ -2257,7 +2262,7 @@
 		const exact = state.focusStartMs === state.focusEndMs;
 		let bestTrack = -1;
 		let bestDistance = (touch ? 24 : 11) ** 2;
-		for (const trackIndex of exact ? mapTrackIndexes() : state.active) {
+		for (const trackIndex of timeFocusTrackIndexes(exact)) {
 			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
 			if (!range) continue;
 			const markerIndex = exact ? range[0] : Math.round((range[0] + range[1]) / 2);
@@ -2269,7 +2274,6 @@
 	}
 
 	function mapHitTest(clientX, clientY, touch) {
-		if (effectiveLayer() === 'none') return -1;
 		const focusMarker = timeFocusMarkerHitTest(clientX, clientY, touch);
 		if (focusMarker >= 0) return focusMarker;
 		const canvas = $('#mlaMapOverlay');
@@ -2278,7 +2282,8 @@
 		const y = clientY - rectangle.top;
 		const projection = mapProjection(rectangle.width, rectangle.height);
 		const layer = effectiveLayer();
-		const mapIndexes = mapTrackIndexes();
+		const mapIndexes = layer === 'none' ? (state.selected == null ? [] : [state.selected]) : mapTrackIndexes();
+		if (!mapIndexes.length) return -1;
 		const mapBits = new Set(mapIndexes);
 		if (layer === 'genesis' || layer === 'lysis') {
 			let bestTrack = -1;
