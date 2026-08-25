@@ -129,12 +129,14 @@ def read_dashboard_data(path: Path) -> dict:
 def state_rainfall_series(
     payload: dict,
     state_slugs: list[str],
+    coverage_start: int = 1940,
+    coverage_end: int = 2025,
 ) -> tuple[list[dict[int, np.ndarray]], list[bool]]:
     regions = payload["regions"]
     metadata = {item["id"]: item for item in regions["list"]}
-    years = [int(value) for value in payload["years"] if 1940 <= int(value) <= 2025]
-    if years != list(range(1940, 2026)):
-        raise ValueError("IMD daily state rainfall does not cover every LPS catalogue year")
+    years = [int(value) for value in payload["years"] if coverage_start <= int(value) <= coverage_end]
+    if years != list(range(coverage_start, coverage_end + 1)):
+        raise ValueError(f"IMD daily state rainfall does not cover {coverage_start}-{coverage_end}")
 
     special = {
         "dadra_and_nagar_haveli": ["dadra-and-nagar-haveli-and-daman-and-diu"],
@@ -182,6 +184,31 @@ def state_rainfall_series(
             yearly[year] = combined
         state_series.append(yearly)
     return state_series, available
+
+
+def state_jjas_climatology(
+    payload: dict,
+    state_slugs: list[str],
+) -> tuple[list[int], list[int]]:
+    years = [int(value) for value in payload["years"]]
+    coverage = [min(years), max(years)]
+    state_series, unused = state_rainfall_series(
+        payload,
+        state_slugs,
+        coverage_start=coverage[0],
+        coverage_end=coverage[1],
+    )
+    climatology = []
+    for yearly in state_series:
+        chunks = []
+        for year, values in yearly.items():
+            first = datetime(year, 6, 1).timetuple().tm_yday - 1
+            last = datetime(year, 9, 30).timetuple().tm_yday
+            valid = values[first:last]
+            chunks.append(valid[np.isfinite(valid)])
+        pooled = np.concatenate(chunks) if chunks else np.array([], dtype=float)
+        climatology.append(int(round(float(np.mean(pooled)))) if len(pooled) else -1)
+    return climatology, coverage
 
 
 def mean_state_rainfall(
@@ -318,6 +345,10 @@ def main() -> None:
     template = read_gzip_json(args.template_core)
     rainfall = read_dashboard_data(args.rainfall_data)
     rainfall_series, state_available = state_rainfall_series(
+        rainfall,
+        template["state_slugs"],
+    )
+    state_jjas_mean_x10, state_jjas_coverage = state_jjas_climatology(
         rainfall,
         template["state_slugs"],
     )
@@ -755,6 +786,10 @@ def main() -> None:
             "statistic": "Area-mean daily rainfall averaged over UTC calendar days touched by each LPS physical event.",
             "coverage": [1940, 2025],
             "baseline": rainfall["meta"]["baseline"],
+            "jjas_climatology_x10": state_jjas_mean_x10,
+            "jjas_climatology_period": state_jjas_coverage,
+            "jjas_climatology_months": [6, 7, 8, 9],
+            "fractional_anomaly": "event-period state mean / all-record JJAS daily state mean - 1",
         },
     }
 
