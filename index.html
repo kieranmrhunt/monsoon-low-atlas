@@ -268,6 +268,7 @@
 .mla-map-control .mla-select { color: var(--mla-ink); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .mla-map-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--mla-muted); font-size: 12px; white-space: nowrap; }
 .mla-map-toggle input { accent-color: var(--mla-indigo-deep); }
+.mla-map-nav-buttons { display: inline-flex; align-items: center; gap: 7px; flex-wrap: nowrap; white-space: nowrap; }
 .mla-map-stack { position: relative; height: 610px; overflow: hidden; background: var(--mla-sea); }
 .mla-map-layer { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
 #mlaMapWeather { pointer-events: none; }
@@ -655,10 +656,7 @@
 							<label class="mla-map-control" for="mlaWeatherLayer"><span>Weather</span><select class="mla-select" id="mlaWeatherLayer"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option><option value="rh500">500-hPa relative humidity</option></select></label>
 							<label class="mla-map-toggle" for="mlaStateOutlines"><input id="mlaStateOutlines" type="checkbox" checked> State outlines</label>
 							<label class="mla-map-toggle" for="mlaIbtracsOverlay"><input id="mlaIbtracsOverlay" type="checkbox" checked> Dashed matched IBTrACS track</label>
-							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button>
-							<button class="mla-btn mla-btn-small" id="mlaZoomReset" type="button">Reset view</button>
-							<button class="mla-btn mla-btn-small" id="mlaFitCohort" type="button">Fit subset</button>
-							<button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomIn" type="button" aria-label="Zoom in">+</button>
+							<div class="mla-map-nav-buttons" role="group" aria-label="Map view controls"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button><button class="mla-btn mla-btn-small" id="mlaZoomReset" type="button">Reset view</button><button class="mla-btn mla-btn-small" id="mlaFitCohort" type="button">Fit subset</button><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomIn" type="button" aria-label="Zoom in">+</button></div>
 						</div>
 					</div>
 					<div class="mla-map-stack" id="mlaMapStack">
