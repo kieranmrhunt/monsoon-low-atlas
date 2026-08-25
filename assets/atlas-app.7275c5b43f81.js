@@ -1913,8 +1913,7 @@
 		} else if (state.mapColour === 'class') {
 			trackLegend = [1, 2, 3, 4, 5, 6].map(value => `<span class="mla-legend-item"><span class="mla-swatch" style="background:${CLASS_COLOURS[value]}"></span>${CLASS_SHORT[value]}</span>`).join('');
 		} else if (state.mapColour === 'single') {
-			const feature = layer === 'genesis' ? 'genesis point' : layer === 'lysis' ? 'lysis point' : 'track';
-			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${trackColour(0)}"></span>${esc(CORE.meta.catalogue_version)} ${feature}</span>`;
+			trackLegend = '';
 		} else if (state.mapColour === 'metric') {
 			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.1)}"></span>lower ${esc(metric().title)} percentile</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.55)}"></span>P50</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(1)}"></span>higher percentile</span>`;
 		} else {
