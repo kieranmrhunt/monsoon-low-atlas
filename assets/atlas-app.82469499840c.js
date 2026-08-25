@@ -17,11 +17,12 @@
 	const CANVAS_FONT = '"effra", Effra, Arial, sans-serif';
 	const WEATHER_FIELDS = Object.freeze({
 		vorticity: {label: '850-hPa vorticity', keyMin: '0', keyMax: '40 × 10⁻⁵ s⁻¹'},
-		precipitation: {label: 'hourly precipitation', keyMin: '0', keyMax: '20 mm h⁻¹'},
+		precipitation: {label: 'trailing 24 h precipitation', keyMin: '0', keyMax: '150 mm'},
 		rh500: {label: '500-hPa relative humidity', keyMin: '0', keyMax: '100%'}
 	});
 
 	let CORE;
+	let CLIMATE;
 	let DETAIL;
 	let detailPromise;
 	let T;
@@ -29,7 +30,6 @@
 	let Q;
 	let paths;
 	let segmentIndex;
-	let densityCells;
 	let densityMonthCache = new Map();
 	let catalogueBounds;
 	let fallbackLabels = [];
@@ -47,7 +47,9 @@
 	let weatherMonth = '';
 	let weatherField = '';
 	let weatherLoadSerial = 0;
+	let weatherSyncSerial = 0;
 	let weatherError = '';
+	let weatherLoading = false;
 	let weatherFrameCanvas = null;
 	let weatherFrameContext = null;
 	let weatherEncodedCanvas = null;
@@ -88,15 +90,18 @@
 		match: 'any',
 		qc: 'any',
 		genesisRegion: 'all',
+		bsiso: 'all',
+		enso: 'all',
 		stateIndex: -1,
 		stateMin: 0,
 		search: '',
 		mapLayer: 'auto',
 		mapColour: 'single',
 		stateFill: 'none',
-		mapScope: 'full',
-		mapPath: 'months',
+		stateOutlines: true,
+		ibtracsOverlay: true,
 		weatherLayer: 'none',
+		weatherTracks: false,
 		mapZoom: 1,
 		mapCenterLon: 82,
 		mapCenterLat: 20,
@@ -228,7 +233,7 @@
 				if (!configNode) throw new Error(`Missing atlas payload ${id}`);
 				atlasConfig = JSON.parse(configNode.textContent);
 			}
-			const key = id === 'mla-core-gzip-b64' ? 'core' : id === 'mla-detail-gzip-b64' ? 'detail' : '';
+			const key = id === 'mla-core-gzip-b64' ? 'core' : id === 'mla-detail-gzip-b64' ? 'detail' : id === 'mla-climate-gzip-b64' ? 'climate' : '';
 			if (!key || !atlasConfig[key]) throw new Error(`Missing atlas data URL for ${id}`);
 			const response = await fetch(atlasConfig[key], {cache: 'force-cache'});
 			if (!response.ok) throw new Error(`Could not fetch ${key} data (${response.status})`);
@@ -323,7 +328,6 @@
 			cellSize: 1,
 			bounds: {minLon: catalogueBounds.lonMin, maxLon: catalogueBounds.lonMax, minLat: catalogueBounds.latMin, maxLat: catalogueBounds.latMax}
 		});
-		densityCells = buildDensityCells(.5, catalogueBounds);
 		densityMonthCache.clear();
 	}
 
@@ -363,7 +367,6 @@
 	}
 
 	function currentDensityCells() {
-		if (state.mapPath === 'full') return densityCells;
 		const key = [...state.months].sort((a, b) => a - b).join(',');
 		if (!densityMonthCache.has(key)) densityMonthCache.set(key, buildDensityCells(.5, catalogueBounds, state.months));
 		return densityMonthCache.get(key);
@@ -444,7 +447,7 @@
 						if (this.seen[segment] === this.stamp) continue;
 						this.seen[segment] = this.stamp;
 						const track = this.owner[segment];
-						if (!options.active[track]) continue;
+						if (typeof options.active === 'function' ? !options.active(track) : !options.active[track]) continue;
 						if (options.segmentVisible && !options.segmentVisible(track, this.pointIndex[segment])) continue;
 						const first = options.project(this.y1[segment], this.x1[segment]);
 						const second = options.project(this.y2[segment], this.x2[segment]);
@@ -620,6 +623,13 @@
 		return state.genesisRegion === 'all' || genesisRegions[index] === state.genesisRegion;
 	}
 
+	function climatePass(index) {
+		if (!CLIMATE) return true;
+		if (state.bsiso !== 'all' && CLIMATE.bsiso.phase[index] !== Number(state.bsiso)) return false;
+		if (state.enso !== 'all' && CLIMATE.enso.class[index] !== Number(state.enso)) return false;
+		return true;
+	}
+
 	function trackPassesState(trackIndex, stateIndex) {
 		const key = `${stateIndex}:passes`;
 		if (!nearStateCache.has(key)) nearStateCache.set(key, new Int8Array(CORE.tracks.length).fill(-1));
@@ -651,7 +661,7 @@
 
 	function filterSignature() {
 		const percentiles = FILTER_METRIC_KEYS.map(key => `${key}:${state.percentileMins[key]}`).join(',');
-		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.stateIndex, state.stateMin, state.search].join('|');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.bsiso, state.enso, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
 	function parsedSearch() {
@@ -696,7 +706,7 @@
 			if (exactDateStart == null && !monthPass(index)) continue;
 			if (!state.classes.has(row[T.category])) continue;
 			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
-			if (!matchPass(index) || !qcPass(index) || !genesisRegionPass(index) || !statePass(index)) continue;
+			if (!matchPass(index) || !qcPass(index) || !genesisRegionPass(index) || !climatePass(index) || !statePass(index)) continue;
 			if (query) {
 				if (exactDateStart != null && (row[T.end_ms] < exactDateStart || row[T.start_ms] > exactDateEnd)) continue;
 				if (exactDateStart == null && exactYear != null && row[T.start_year] !== exactYear) continue;
@@ -781,6 +791,8 @@
 		$('#mlaMatch').value = state.match;
 		$('#mlaQc').value = state.qc;
 		$('#mlaGenesisRegion').value = state.genesisRegion;
+		$('#mlaBsiso').value = state.bsiso;
+		$('#mlaEnso').value = state.enso;
 		$('#mlaState').value = state.stateIndex < 0 ? '' : String(state.stateIndex);
 		$('#mlaStateMin').value = state.stateMin;
 		$('#mlaSearch').value = state.search;
@@ -788,8 +800,9 @@
 		$('#mlaMapColour').value = state.mapColour;
 		$('#mlaStateFill').value = state.stateFill;
 		$('#mlaWeatherLayer').value = state.weatherLayer;
-		$('#mlaMapScope').value = state.mapScope;
-		$('#mlaMapPath').value = state.mapPath;
+		$('#mlaStateOutlines').checked = state.stateOutlines;
+		$('#mlaIbtracsOverlay').checked = state.ibtracsOverlay;
+		$('#mlaWeatherTracks').checked = state.weatherTracks;
 		$('#mlaExtremeMetric').value = state.extremeMetric;
 		$('#mlaExtremeEligibility').value = state.extremeEligibility;
 		$('#mlaEvolutionMetric').value = state.evolutionMetric;
@@ -846,6 +859,8 @@
 		state.match = 'any';
 		state.qc = 'any';
 		state.genesisRegion = 'all';
+		state.bsiso = 'all';
+		state.enso = 'all';
 		state.stateIndex = -1;
 		state.stateMin = 0;
 		state.search = '';
@@ -925,6 +940,8 @@
 		$('#mlaMatch').addEventListener('change', event => { state.match = event.target.value; applyFilters(); });
 		$('#mlaQc').addEventListener('change', event => { state.qc = event.target.value; applyFilters(); });
 		$('#mlaGenesisRegion').addEventListener('change', event => { state.genesisRegion = event.target.value; applyFilters(); });
+		$('#mlaBsiso').addEventListener('change', event => { state.bsiso = event.target.value; applyFilters(); });
+		$('#mlaEnso').addEventListener('change', event => { state.enso = event.target.value; applyFilters(); });
 		$('#mlaState').addEventListener('change', event => {
 			state.stateIndex = event.target.value === '' ? -1 : Number(event.target.value);
 			nearStateCache.clear();
@@ -966,28 +983,43 @@
 		$('#mlaWeatherLayer').addEventListener('change', event => {
 			state.weatherLayer = event.target.value;
 			weatherError = '';
+			if (state.weatherLayer !== 'none') state.weatherTracks = false;
 			if (state.weatherLayer !== 'none') syncWeatherToFocus();
+			else { weatherSyncSerial++; weatherLoadSerial++; weatherLoading = false; }
 			updateTimeControls();
-			mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
+			mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 			writeUrl('replace');
+		});
+		$('#mlaWeatherTracks').addEventListener('change', event => {
+			state.weatherTracks = event.target.checked;
+			mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+			writeUrl('replace');
+		});
+		$('#mlaStateOutlines').addEventListener('change', event => {
+			state.stateOutlines = event.target.checked;
+			mapScheduler.invalidate(MAP_DIRTY.BASE);
+			writeUrl('replace');
+		});
+		$('#mlaIbtracsOverlay').addEventListener('change', event => {
+			state.ibtracsOverlay = event.target.checked;
+			mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+			writeUrl('replace');
+		});
+		$('#mlaRetryWeather').addEventListener('click', () => {
+			weatherError = '';
+			weatherMonth = '';
+			weatherField = '';
+			syncWeatherToFocus();
 		});
 		$('#mlaPreviousHour').addEventListener('click', () => stepTrackHour(-1));
 		$('#mlaNextHour').addEventListener('click', () => stepTrackHour(1));
 		$('#mlaTrackHour').addEventListener('input', moveTrackHourSlider);
 		$('#mlaTrackHour').addEventListener('change', commitTrackHourSlider);
-		$('#mlaMapScope').addEventListener('change', event => { state.mapScope = event.target.value; resetMapView(); writeUrl('replace'); });
-		$('#mlaMapPath').addEventListener('change', event => {
-			state.mapPath = event.target.value;
-			renderDossier();
-			if (state.active.length && state.active.length <= 80) fitCohort({quiet: true});
-			else mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
-			writeUrl('replace');
-		});
 		$('#mlaFitCohort').addEventListener('click', () => fitCohort());
 		$('#mlaExtremeMetric').addEventListener('change', event => { state.extremeMetric = event.target.value; renderExtremes(); });
 		$('#mlaExtremeEligibility').addEventListener('change', event => { state.extremeEligibility = event.target.value; renderExtremes(); });
 		$('#mlaEvolutionMetric').addEventListener('change', event => { state.evolutionMetric = event.target.value; renderLifeCharts(); writeUrl('replace'); });
-		$('#mlaLoadProfile').addEventListener('click', () => ensureDetail('Opening detailed cohort series…').then(renderLifeCharts).catch(showFatal));
+		$('#mlaLoadProfile').addEventListener('click', () => ensureDetail('Opening detailed subset series…').then(renderLifeCharts).catch(showFatal));
 		$('#mlaCopyLink').addEventListener('click', copyViewLink);
 		$('#mlaQuickExport').addEventListener('click', downloadSummaries);
 		$('#mlaDownloadSummaries').addEventListener('click', downloadSummaries);
@@ -1047,20 +1079,23 @@
 		});
 		if (state.match !== 'any') parameters.set('match', state.match);
 		if (state.genesisRegion !== 'all') parameters.set('genesis', state.genesisRegion);
+		if (state.bsiso !== 'all') parameters.set('bsiso', state.bsiso);
+		if (state.enso !== 'all') parameters.set('enso', state.enso);
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
 		if (state.mapColour !== 'single') parameters.set('colour', state.mapColour);
 		if (state.stateFill !== 'none') parameters.set('statefill', state.stateFill);
-		if (state.mapScope !== 'full') parameters.set('scope', state.mapScope);
-		if (state.mapPath !== 'months') parameters.set('path', state.mapPath);
+		if (!state.stateOutlines) parameters.set('states', '0');
+		if (!state.ibtracsOverlay) parameters.set('ibtrack', '0');
 		if (state.weatherLayer !== 'none') parameters.set('weather', state.weatherLayer);
+		if (state.weatherTracks) parameters.set('weathertracks', '1');
 		if (state.focusSource === 'point' && Number.isFinite(state.focusTimeMs)) parameters.set('time', new Date(state.focusTimeMs).toISOString().slice(0, 13));
 		if (state.evolutionMetric !== 'deficit') parameters.set('evolve', state.evolutionMetric);
 		const profileMetrics = PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key));
 		if (profileMetrics.join(',') !== DEFAULT_PROFILE_METRICS.join(',')) parameters.set('profiles', profileMetrics.join(','));
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
-		if (Math.abs(state.mapZoom - 1) > .01 || state.mapScope !== 'full') parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
+		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
 		return parameters;
 	}
@@ -1100,15 +1135,18 @@
 		if (parameters.has('pmin') && !parameters.has(`p${state.metric}`)) state.percentileMins[state.metric] = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
 		if (['any', 'unmatched', 'high', 'credible', 'named'].includes(parameters.get('match'))) state.match = parameters.get('match');
 		state.genesisRegion = Object.hasOwn(GENESIS_REGION_LABELS, parameters.get('genesis')) ? parameters.get('genesis') : 'all';
+		state.bsiso = ['-1', '0', '1', '2', '3', '4', '5', '6', '7', '8'].includes(parameters.get('bsiso')) ? parameters.get('bsiso') : 'all';
+		state.enso = ['-1', '0', '1', '2'].includes(parameters.get('enso')) ? parameters.get('enso') : 'all';
 		const overIndex = CORE.state_slugs.indexOf(parameters.get('over'));
 		if (overIndex >= 0) state.stateIndex = overIndex;
 		state.search = parameters.get('q') || '';
 		if (['auto', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
 		if (['single', 'class', 'metric', 'year'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['none', 'selected', 'cohort'].includes(parameters.get('statefill'))) state.stateFill = parameters.get('statefill');
-		if (['southasia', 'full'].includes(parameters.get('scope'))) state.mapScope = parameters.get('scope');
-		if (['months', 'full'].includes(parameters.get('path'))) state.mapPath = parameters.get('path');
+		state.stateOutlines = parameters.get('states') !== '0';
+		state.ibtracsOverlay = parameters.get('ibtrack') !== '0';
 		if (['none', 'vorticity', 'precipitation', 'rh500'].includes(parameters.get('weather'))) state.weatherLayer = parameters.get('weather');
+		state.weatherTracks = parameters.get('weathertracks') === '1';
 		if (METRICS[parameters.get('evolve')] && parameters.get('evolve') !== 'rain') state.evolutionMetric = parameters.get('evolve');
 		const profileMetrics = (parameters.get('profiles') || '').split(',').filter(key => PROFILE_METRIC_KEYS.includes(key));
 		if (profileMetrics.length) state.profileMetrics = new Set(profileMetrics);
@@ -1165,8 +1203,9 @@
 		const bounds = configuredBounds && !Array.isArray(configuredBounds)
 			? configuredBounds[field]
 			: configuredBounds;
+		const configuredBases = atlasConfig.weatherBases || {};
 		return {
-			base: String(atlasConfig.weatherBase || '').replace(/\/$/, ''),
+			base: String(configuredBases[field] || atlasConfig.weatherBase || '').replace(/\/$/, ''),
 			fps: Number(atlasConfig.weatherFps) || 6,
 			bounds: Array.isArray(bounds) ? bounds.map(Number) : [49.875, -5.875, 109.875, 40.125]
 		};
@@ -1190,12 +1229,30 @@
 		weatherVideo.preload = 'auto';
 		weatherVideo.addEventListener('seeked', () => mapScheduler.invalidate(MAP_DIRTY.WEATHER));
 		weatherVideo.addEventListener('error', () => {
+			if (!weatherField) return;
 			const definition = WEATHER_FIELDS[weatherField];
 			weatherError = `${definition ? definition.label : 'Weather'} frame unavailable for this month`;
 			updateTimeControls();
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 		});
 		return weatherVideo;
+	}
+
+	function waitForVideoEvent(video, eventName, failureMessage, timeoutMs) {
+		return new Promise((resolve, reject) => {
+			let timer;
+			const ready = () => { cleanup(); resolve(video); };
+			const failed = () => { cleanup(); reject(new Error(failureMessage)); };
+			const timedOut = () => { cleanup(); reject(new Error(`${failureMessage} (timed out)`)); };
+			const cleanup = () => {
+				clearTimeout(timer);
+				video.removeEventListener(eventName, ready);
+				video.removeEventListener('error', failed);
+			};
+			video.addEventListener(eventName, ready, {once: true});
+			video.addEventListener('error', failed, {once: true});
+			timer = setTimeout(timedOut, timeoutMs);
+		});
 	}
 
 	function weatherUrl(month, field) {
@@ -1215,18 +1272,10 @@
 		weatherError = '';
 		weatherMonth = month;
 		weatherField = field;
-		await new Promise((resolve, reject) => {
-			const ready = () => { cleanup(); resolve(); };
-			const failed = () => { cleanup(); reject(new Error(`Could not load ${month} ${WEATHER_FIELDS[field].label} video`)); };
-			const cleanup = () => {
-				video.removeEventListener('loadedmetadata', ready);
-				video.removeEventListener('error', failed);
-			};
-			video.addEventListener('loadedmetadata', ready);
-			video.addEventListener('error', failed);
-			video.src = url;
-			video.load();
-		});
+		const loading = waitForVideoEvent(video, 'loadedmetadata', `Could not load ${month} ${WEATHER_FIELDS[field].label}`, 20000);
+		video.src = url;
+		video.load();
+		await loading;
 		if (serial !== weatherLoadSerial) throw new Error('Superseded weather request');
 		return video;
 	}
@@ -1240,26 +1289,21 @@
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 			return video;
 		}
-		await new Promise((resolve, reject) => {
-			const ready = () => { cleanup(); resolve(); };
-			const failed = () => { cleanup(); reject(new Error(`Could not seek ${weatherMonth} ${WEATHER_FIELDS[weatherField].label} video`)); };
-			const cleanup = () => {
-				video.removeEventListener('seeked', ready);
-				video.removeEventListener('error', failed);
-			};
-			video.addEventListener('seeked', ready);
-			video.addEventListener('error', failed);
-			video.currentTime = target;
-		});
+		const seeking = waitForVideoEvent(video, 'seeked', `Could not seek ${weatherMonth} ${WEATHER_FIELDS[weatherField].label}`, 15000);
+		video.currentTime = target;
+		await seeking;
 		return video;
 	}
 
 	async function syncWeatherToFocus() {
 		if (state.weatherLayer === 'none' || !Number.isFinite(state.focusTimeMs)) {
+			weatherLoading = false;
 			mapScheduler.invalidate(MAP_DIRTY.WEATHER);
 			return;
 		}
+		const syncSerial = ++weatherSyncSerial;
 		weatherError = '';
+		weatherLoading = true;
 		updateTimeControls();
 		try {
 			await seekWeather(state.focusTimeMs);
@@ -1267,8 +1311,10 @@
 		} catch (error) {
 			if (String(error && error.message).includes('Superseded')) return;
 			weatherError = error && error.message ? error.message : String(error);
+		} finally {
+			if (syncSerial === weatherSyncSerial) weatherLoading = false;
 		}
-		updateTimeControls();
+		if (syncSerial === weatherSyncSerial) updateTimeControls();
 	}
 
 	const scheduleSliderWeather = debounce(syncWeatherToFocus, 80);
@@ -1301,11 +1347,11 @@
 		state.focusTimeMs = timeMs;
 		state.focusPointIndex = pointIndex;
 		state.focusSource = 'point';
-		if (state.weatherLayer === 'none') state.weatherLayer = 'vorticity';
+		if (state.weatherLayer === 'none') { state.weatherLayer = 'vorticity'; state.weatherTracks = false; }
 		$('#mlaWeatherLayer').value = state.weatherLayer;
 		updateTimeControls();
 		if (!(options && options.noUrl)) renderDossier();
-		mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
+		mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 		if (!(options && options.noSeek)) syncWeatherToFocus();
 		if (!(options && options.noUrl)) writeUrl('push');
 	}
@@ -1317,18 +1363,25 @@
 		state.focusPointIndex = null;
 		state.focusSource = '';
 		weatherError = '';
+		weatherLoading = false;
+		weatherSyncSerial++;
+		weatherLoadSerial++;
 		if (!(options && options.keepWeather)) state.weatherLayer = 'none';
 		updateTimeControls();
-		if (CORE) mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.OVERLAY);
+		if (CORE) mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 	}
 
 	function updateTimeControls() {
 		const controls = $('#mlaTimeControls');
 		if (!controls) return;
-		controls.hidden = state.selected == null && !Number.isFinite(state.focusStartMs);
+		controls.hidden = state.selected == null && !Number.isFinite(state.focusStartMs) && state.weatherLayer === 'none';
 		const weatherDefinition = WEATHER_FIELDS[state.weatherLayer];
 		const weatherKey = $('#mlaWeatherKey');
+		const weatherTracksControl = $('#mlaWeatherTracksControl');
 		weatherKey.hidden = !weatherDefinition;
+		weatherTracksControl.hidden = !weatherDefinition;
+		$('#mlaWeatherTracks').checked = state.weatherTracks;
+		$('#mlaRetryWeather').hidden = !weatherError;
 		if (weatherDefinition) {
 			$('#mlaWeatherKeyMin').textContent = weatherDefinition.keyMin;
 			$('#mlaWeatherKeyMax').textContent = weatherDefinition.keyMax;
@@ -1351,9 +1404,11 @@
 		}
 		let message = '';
 		if (weatherError) message = `${weatherError} · ${Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : ''}`;
+		else if (weatherLoading && weatherDefinition) message = `Loading ${weatherDefinition.label}${Number.isFinite(state.focusTimeMs) ? ` · ${dateTime(state.focusTimeMs)}` : ''}…`;
 		else if (Number.isFinite(state.focusTimeMs)) message = `${dateTime(state.focusTimeMs)} · ${state.active.filter(index => pointIndexAtTime(index, state.focusTimeMs) >= 0).length} systems active`;
 		else if (Number.isFinite(state.focusStartMs)) message = `${date(state.focusStartMs)} UTC · ${state.active.filter(index => pointRangeAtTime(index, state.focusStartMs, state.focusEndMs)).length} systems active · daily positions highlighted`;
 		else if (state.selected != null) message = 'Move the track-hour slider or click the selected track again to choose an hour.';
+		else if (weatherDefinition) message = 'Select a track, then choose an hour for the weather field.';
 		$('#mlaFocusTime').textContent = message;
 		const dossierTime = $('#mlaDossierFocusTime');
 		const dossierPosition = $('#mlaDossierFocusPosition');
@@ -1391,8 +1446,7 @@
 	});
 
 	function mapBounds() {
-		if (state.mapScope === 'full') return catalogueBounds || {lonMin: 47, lonMax: 118, latMin: -6, latMax: 48};
-		return {lonMin: 58, lonMax: 105, latMin: 0, latMax: 38};
+		return catalogueBounds || {lonMin: 47, lonMax: 118, latMin: -6, latMax: 48};
 	}
 
 	function constrainMapView(width, height) {
@@ -1595,9 +1649,9 @@
 				context.strokeStyle = 'rgba(35, 63, 120, .30)';
 				context.lineWidth = .55;
 			}
-			context.stroke();
+			if (state.stateOutlines) context.stroke();
 		});
-		if (options && options.labels && state.mapZoom >= 1.6) {
+		if (state.stateOutlines && options && options.labels && state.mapZoom >= 1.6) {
 			context.font = `11px ${CANVAS_FONT}`;
 			context.fillStyle = 'rgba(23, 41, 79, .72)';
 			for (const geometry of CORE.geo.states) {
@@ -1632,12 +1686,14 @@
 			context.stroke();
 		}
 		context.setLineDash([]);
-		for (const geometry of CORE.geo.states) {
-			context.beginPath();
-			drawRingPath(context, projection, geometry.rings);
-			context.strokeStyle = 'rgba(35, 63, 120, .42)';
-			context.lineWidth = .6;
-			context.stroke();
+		if (state.stateOutlines) {
+			for (const geometry of CORE.geo.states) {
+				context.beginPath();
+				drawRingPath(context, projection, geometry.rings);
+				context.strokeStyle = 'rgba(35, 63, 120, .42)';
+				context.lineWidth = .6;
+				context.stroke();
+			}
 		}
 		context.restore();
 	}
@@ -1739,11 +1795,10 @@
 	}
 
 	function pointVisible(trackIndex, pointIndex) {
-		return state.mapPath === 'full' || state.months.has(paths.month[paths.offsets[trackIndex] + pointIndex]);
+		return state.months.has(paths.month[paths.offsets[trackIndex] + pointIndex]);
 	}
 
 	function visiblePointCount(indexes) {
-		if (state.mapPath === 'full') return indexes.reduce((sum, index) => sum + paths.decoded[index].length, 0);
 		let total = 0;
 		for (const index of indexes) {
 			for (const run of CORE.point_month_runs[index] || []) {
@@ -1858,28 +1913,37 @@
 		} else if (state.mapColour === 'class') {
 			trackLegend = [1, 2, 3, 4, 5, 6].map(value => `<span class="mla-legend-item"><span class="mla-swatch" style="background:${CLASS_COLOURS[value]}"></span>${CLASS_SHORT[value]}</span>`).join('');
 		} else if (state.mapColour === 'single') {
-			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${trackColour(0)}"></span>${esc(CORE.meta.catalogue_version)} event</span>`;
+			const feature = layer === 'genesis' ? 'genesis point' : layer === 'lysis' ? 'lysis point' : 'track';
+			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${trackColour(0)}"></span>${esc(CORE.meta.catalogue_version)} ${feature}</span>`;
+		} else if (state.mapColour === 'metric') {
+			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.1)}"></span>lower ${esc(metric().title)} percentile</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.55)}"></span>P50</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(1)}"></span>higher percentile</span>`;
 		} else {
-			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.1)}"></span>low</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.55)}"></span>middle</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(1)}"></span>high</span>`;
+			trackLegend = `<span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.1)}"></span>earlier genesis year</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(.55)}"></span>1982</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${ramp(1)}"></span>later genesis year</span>`;
 		}
 		const rainfall = stateRainfallSummary();
 		const rainfallLegend = rainfall
 			? `<span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallColour(0)}"></span>state rain 0</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallColour(1)}"></span>${fmt(rainfall.maximum)} mm/day</span>`
 			: state.stateFill === 'selected' ? '<span class="mla-legend-item">Select a system for state rainfall</span>' : '';
-		node.innerHTML = rainfallLegend + trackLegend;
+		const item = state.selected == null ? null : credibleIb(state.selected);
+		const ibtracsLegend = state.ibtracsOverlay && item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path
+			? `<span class="mla-legend-item"><span class="mla-swatch" style="height:0;background:none;border-top:2px dashed ${css('--mla-peacock', '#08736f')}"></span>matched IBTrACS best track</span>`
+			: '';
+		node.innerHTML = rainfallLegend + trackLegend + ibtracsLegend;
 	}
 
 	function drawMapData() {
 		const drawing = setupCanvas('mlaMapData');
 		const layer = effectiveLayer();
+		const hideSubsetTracks = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
 		let maximum = 0;
 		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection);
-		else if (layer === 'tracks') drawTrackLayer(drawing.context, drawing.projection);
+		else if (layer === 'tracks') { if (!hideSubsetTracks) drawTrackLayer(drawing.context, drawing.projection); }
 		else drawPointLayer(drawing.context, drawing.projection, layer);
-		const pathLabel = state.mapPath === 'months' ? `${fmt(visiblePointCount(state.active))} selected-month positions` : 'whole lifecycles';
+		const pathLabel = `${fmt(visiblePointCount(state.active))} selected-month positions`;
 		const rainfall = stateRainfallSummary();
 		const rainfallLabel = rainfall ? ` · IMD state mean across ${fmt(rainfall.systemDays)} system-days` : '';
-		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} systems · ${layer === 'density' ? 'unique-track density' : layer} · ${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
+		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'unique-track density' : layer;
+		$('#mlaMapStatus').textContent = `${fmt(state.active.length)} systems · ${layerLabel} · ${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		renderStateRainfallValues(rainfall);
 		mapLegend(layer, maximum);
 	}
@@ -1942,7 +2006,7 @@
 			strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-indigo-deep', '#17294f'), 3.6);
 		}
 		const item = state.selected == null ? null : credibleIb(state.selected);
-		if (item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path) {
+		if (state.ibtracsOverlay && item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path) {
 			const official = decodePolyline(CORE.ibtracs_tracks[item.sid].path);
 			drawing.context.save();
 			drawing.context.beginPath();
@@ -2004,8 +2068,23 @@
 		const x = clientX - rectangle.left;
 		const y = clientY - rectangle.top;
 		const projection = mapProjection(rectangle.width, rectangle.height);
+		const layer = effectiveLayer();
+		if (layer === 'genesis' || layer === 'lysis') {
+			let bestTrack = -1;
+			let bestDistance = (touch ? 20 : 11) ** 2;
+			for (const trackIndex of state.active) {
+				const row = track(trackIndex);
+				const latitude = Number(row[layer === 'lysis' ? T.end_lat_x1000 : T.gen_lat_x1000]) / 1000;
+				const longitude = Number(row[layer === 'lysis' ? T.end_lon_x1000 : T.gen_lon_x1000]) / 1000;
+				const point = projection.project(latitude, longitude);
+				const distance = (point[0] - x) ** 2 + (point[1] - y) ** 2;
+				if (distance < bestDistance) { bestDistance = distance; bestTrack = trackIndex; }
+			}
+			return bestTrack;
+		}
 		const geographical = projection.invert(x, y);
 		const radiusPx = touch ? 18 : 10;
+		const subsetTracksHidden = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
 		return segmentIndex.query({
 			x, y,
 			lat: geographical[0],
@@ -2014,7 +2093,7 @@
 			radiusLon: radiusPx / projection.scale,
 			radiusLat: radiusPx / projection.scale,
 			project: projection.project,
-			active: state.activeBit,
+			active: trackIndex => state.activeBit[trackIndex] && (!subsetTracksHidden || trackIndex === state.selected),
 			segmentVisible: (trackIndex, pointIndex) => pointVisible(trackIndex, pointIndex - 1) && pointVisible(trackIndex, pointIndex)
 		});
 	}
@@ -2054,9 +2133,6 @@
 
 	function fitMapToBounds(bounds) {
 		if (!bounds) return false;
-		const focus = mapBounds();
-		const full = bounds[2] > focus.lonMax || bounds[0] < focus.lonMin || bounds[3] > focus.latMax || bounds[1] < focus.latMin;
-		if (full) state.mapScope = 'full';
 		const canvas = $('#mlaMapOverlay');
 		const rectangle = canvas.getBoundingClientRect();
 		const scope = mapBounds();
@@ -2066,7 +2142,6 @@
 		state.mapCenterLon = (bounds[0] + bounds[2]) / 2;
 		state.mapCenterLat = (bounds[1] + bounds[3]) / 2;
 		constrainMapView(rectangle.width, rectangle.height);
-		$('#mlaMapScope').value = state.mapScope;
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
 		writeUrl('replace');
 		return true;
@@ -2193,6 +2268,20 @@
 		return '';
 	}
 
+	function bsisoLabel(index) {
+		const phase = CLIMATE.bsiso.phase[index];
+		const amplitude = CLIMATE.bsiso.amplitude_x100[index];
+		if (phase < 0) return 'Unavailable';
+		if (phase === 0) return `Inactive (${fmt(amplitude / 100, 2)})`;
+		return `Phase ${phase} (${fmt(amplitude / 100, 2)})`;
+	}
+
+	function ensoLabel(index) {
+		const category = CLIMATE.enso.class[index];
+		if (category < 0) return 'Unavailable';
+		return `${['La Niña', 'Neutral', 'El Niño'][category]} (${fmt(CLIMATE.enso.oni_x100[index] / 100, 2)} °C)`;
+	}
+
 	function renderDossier() {
 		const node = $('#mlaDossier');
 		if (state.selected == null) {
@@ -2212,7 +2301,7 @@
 				['Named cyclone matches', fmt(named)],
 				['Displayed positions', fmt(visiblePointCount(state.active))]
 			];
-			node.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current cohort</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">${state.mapPath === 'months' ? 'Selected-month positions' : 'Whole lifecycles'} on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, rainfall context and downloads.</p>`;
+			node.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current subset</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">Selected-month positions on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, rainfall context and downloads.</p>`;
 			return;
 		}
 		const index = state.selected;
@@ -2225,7 +2314,9 @@
 			['Minimum MSLP', `${fmt(row[T.min_mslp_x10] / 10, 1)} hPa`],
 			['Peak 24 h rain', `${fmt(row[T.peak_precip_x10] / 10, 1)} mm`],
 			['Linked path', `${fmt(row[T.distance_km])} km`],
-			['Peak q850', `${fmt(row[T.peak_q850_x10] / 10, 1)} g kg⁻¹`]
+			['Peak q850', `${fmt(row[T.peak_q850_x10] / 10, 1)} g kg⁻¹`],
+			['BSISO-1 at genesis', bsisoLabel(index)],
+			['ENSO at genesis', ensoLabel(index)]
 		];
 		const focusedHour = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 && Number.isFinite(state.focusTimeMs)
 			? `<div class="mla-match-box"><h4>Selected track hour</h4><p><strong id="mlaDossierFocusTime">${esc(dateTime(state.focusTimeMs))}</strong><br><span id="mlaDossierFocusPosition">Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[index].length)} · ${fmt(paths.decoded[index][state.focusPointIndex][0], 2)}°N, ${fmt(paths.decoded[index][state.focusPointIndex][1], 2)}°E</span></p></div>`
@@ -2279,7 +2370,7 @@
 		renderDossier();
 		updateTimeControls();
 		renderTopTable();
-		mapScheduler.invalidate((state.stateFill === 'selected' ? MAP_DIRTY.BASE | MAP_DIRTY.DATA : 0) | MAP_DIRTY.OVERLAY);
+		mapScheduler.invalidate((state.stateFill === 'selected' ? MAP_DIRTY.BASE : 0) | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 		renderLifeCharts();
 		if (state.selected != null && options && options.fit) requestAnimationFrame(fitSelected);
 		writeUrl('push');
@@ -2324,7 +2415,7 @@
 		if (!drawing) return;
 		drawing.context.fillStyle = css('--mla-muted', '#685c4d');
 		drawing.context.font = `14px ${CANVAS_FONT}`;
-		drawing.context.fillText(message || 'No data for this cohort', 18, 34);
+		drawing.context.fillText(message || 'No data for this subset', 18, 34);
 	}
 
 	function drawLinePlot(id, series, options) {
@@ -2742,8 +2833,8 @@
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
-			$('#mlaProfileStack').innerHTML = '<canvas class="mla-chart mla-profile-chart" id="mlaProfilePlaceholder" role="img" aria-label="Cohort profiles are ready to load"></canvas>';
-			emptyChart('mlaProfilePlaceholder', 'Load the cohort variables when needed');
+			$('#mlaProfileStack').innerHTML = '<canvas class="mla-chart mla-profile-chart" id="mlaProfilePlaceholder" role="img" aria-label="Subset profiles are ready to load"></canvas>';
+			emptyChart('mlaProfilePlaceholder', 'Load the subset variables when needed');
 			$('#mlaProfileData').innerHTML = '';
 			return;
 		}
@@ -2753,7 +2844,7 @@
 		const stack = $('#mlaProfileStack');
 		stack.innerHTML = profileMetrics.map(key => {
 			const definition = METRICS[key];
-			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title}: filtered-cohort median and interquartile range with all-LPS mean`)}"></canvas></div>`;
+			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title}: filtered-subset median and interquartile range with all-LPS mean`)}"></canvas></div>`;
 		}).join('');
 		const accessibleProfiles = [];
 		for (const key of profileMetrics) {
@@ -2762,10 +2853,10 @@
 			const allProfile = cohortProfile(allIndexes, key, 'life');
 			const maximumN = Math.max(0, ...profile.points.map(point => point.n));
 			const allMaximumN = Math.max(0, ...allProfile.points.map(point => point.n));
-			$(`#mlaProfileMeta-${key}`).textContent = `${definition.unit} · cohort n ≤ ${fmt(maximumN)} · all LPS n ≤ ${fmt(allMaximumN)}`;
+			$(`#mlaProfileMeta-${key}`).textContent = `${definition.unit} · subset n ≤ ${fmt(maximumN)} · all LPS n ≤ ${fmt(allMaximumN)}`;
 			drawLinePlot(`mlaProfileChart-${key}`, [
 				{
-					name: 'Cohort median',
+					name: 'Subset median',
 					colour: definition.colour,
 					points: profile.points
 				},
@@ -2784,7 +2875,7 @@
 				yFormat: value => fmt(value, key === 'mslp' ? 0 : 1)
 			});
 			accessibleProfiles.push(`<h4>${esc(`${definition.title} (${definition.unit})`)}</h4>${accessibleTable(
-				['Life fraction', 'Cohort median', 'Cohort Q1', 'Cohort Q3', 'Cohort systems', 'All-LPS mean', 'All-LPS systems'],
+				['Life fraction', 'Subset median', 'Subset Q1', 'Subset Q3', 'Subset systems', 'All-LPS mean', 'All-LPS systems'],
 				profile.points.map((point, index) => [`${fmt(point.x)}%`, fmt(point.y, 2), fmt(point.low, 2), fmt(point.high, 2), point.n, fmt(allProfile.points[index].mean, 2), allProfile.points[index].n])
 			)}`);
 		}
@@ -2862,7 +2953,7 @@
 		$('#mlaExtremeCaveat').textContent = definition.note || 'Catalogue diagnostic · not an externally validated record';
 		$('#mlaRecordCards').innerHTML = indexes.slice(0, 3).map((index, rank) => {
 			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${esc(valueText(index))}</strong> · ${date(track(index)[T.start_ms])} · ${esc(CLASS_SHORT[track(index)[T.category]])}</p></article>`;
-		}).join('') || '<p>No eligible systems in this cohort.</p>';
+		}).join('') || '<p>No eligible systems in this subset.</p>';
 		const table = $('#mlaExtremeTable');
 		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak class</th></tr>`;
 		table.querySelector('tbody').innerHTML = indexes.slice(0, 50).map((index, rank) => {
@@ -2896,7 +2987,7 @@
 		}
 		const fragmented = [...sidGroups.values()].filter(indexes => indexes.length > 1).length;
 		$('#mlaVerificationStats').innerHTML = [
-			['High-confidence IBTrACS', high, `${fmt(high / Math.max(1, state.active.length) * 100, 1)}% of cohort`],
+			['High-confidence IBTrACS', high, `${fmt(high / Math.max(1, state.active.length) * 100, 1)}% of subset`],
 			['Medium-confidence', medium, 'Retained with match diagnostics'],
 			['Named associations', named, 'High or medium confidence'],
 			['Multiple atlas events', fragmented, 'More than one physical event associated with an IBTrACS SID']
@@ -2928,7 +3019,7 @@
 			const confidence = matches.slice().sort((a, b) => order[b.confidence] - order[a.confidence])[0].confidence;
 			const distances = matches.map(match => match.median_km);
 			return `<tr><td>${esc(best && best.name ? `Cyclone ${best.name}` : sid)}<br><small>${esc(sid)}</small></td><td>${indexes.map(index => `<button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${index}</button>`).join(', ')}</td><td>${esc(confidence)}</td><td>${fmt(Math.min(...distances))}–${fmt(Math.max(...distances))} km</td></tr>`;
-		}).join('') || '<tr><td colspan="4">No repeated IBTrACS associations in this cohort.</td></tr>';
+		}).join('') || '<tr><td colspan="4">No repeated IBTrACS associations in this subset.</td></tr>';
 	}
 
 	function csvCell(value) {
@@ -2958,6 +3049,10 @@
 				genesis_latitude: row[T.gen_lat_x1000] / 1000,
 				genesis_longitude: row[T.gen_lon_x1000] / 1000,
 				genesis_region: GENESIS_REGION_LABELS[genesisRegions[index]],
+				bsiso1_phase_at_genesis: CLIMATE.bsiso.phase[index] < 0 ? null : CLIMATE.bsiso.phase[index],
+				bsiso1_amplitude_at_genesis: CLIMATE.bsiso.amplitude_x100[index] < 0 ? null : CLIMATE.bsiso.amplitude_x100[index] / 100,
+				enso_category_at_genesis: CLIMATE.enso.class[index] < 0 ? null : ['La Nina', 'Neutral', 'El Nino'][CLIMATE.enso.class[index]],
+				oni_anomaly_c_at_genesis: CLIMATE.enso.oni_x100[index] === -32768 ? null : CLIMATE.enso.oni_x100[index] / 100,
 				atlas_peak_class: CORE.cat_labels[String(row[T.category])],
 				peak_vorticity_1e_5_s_1: row[T.peak_vort_x10] / 10,
 				peak_precip_24h_mm: row[T.peak_precip_x10] / 10,
@@ -3036,10 +3131,12 @@
 				minimum_fixed_catalogue_percentiles: {...state.percentileMins},
 				continuity_screen: state.qc,
 				genesis_region: state.genesisRegion === 'all' ? null : state.genesisRegion,
+				bsiso1_phase_at_genesis: state.bsiso === 'all' ? null : Number(state.bsiso),
+				enso_category_at_genesis: state.enso === 'all' ? null : Number(state.enso),
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
 				search: state.search || null
 			},
-			view: {map_layer: state.mapLayer, map_colour: state.mapColour, state_fill: state.stateFill, map_track_period: state.mapPath, map_scope: state.mapScope, evolution_metric: state.evolutionMetric, cohort_profile_metrics: PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key))},
+			view: {map_layer: state.mapLayer, map_colour: state.mapColour, state_fill: state.stateFill, state_outlines: state.stateOutlines, matched_ibtracs_overlay: state.ibtracsOverlay, weather_field: state.weatherLayer, show_subset_tracks_with_weather: state.weatherTracks, evolution_metric: state.evolutionMetric, subset_profile_metrics: PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key))},
 			selected_physical_event_id: state.selected == null ? null : atlasId(state.selected),
 			matching_physical_event_ids: state.active.map(atlasId),
 			url: window.location.href,
@@ -3134,8 +3231,9 @@
 	}
 
 	try {
-		setLoading('Decompressing the fast map and summary catalogue…');
-		CORE = await loadGzipJson('mla-core-gzip-b64');
+		setLoading('Decompressing the fast map, summaries and climate filters…');
+		[CORE, CLIMATE] = await Promise.all([loadGzipJson('mla-core-gzip-b64'), loadGzipJson('mla-climate-gzip-b64')]);
+		if (CLIMATE.track_count !== CORE.tracks.length || CLIMATE.bsiso.phase.length !== CORE.tracks.length || CLIMATE.enso.class.length !== CORE.tracks.length) throw new Error('Climate-filter asset does not match the catalogue');
 		T = Object.fromEntries(CORE.track_fields.map((name, index) => [name, index]));
 		S = Object.fromEntries(CORE.series_fields.map((name, index) => [name, index]));
 		Q = Object.fromEntries(CORE.qc_fields.map((name, index) => [name, index]));

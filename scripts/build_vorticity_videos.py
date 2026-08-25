@@ -6,8 +6,10 @@ rate to map UTC hours to video time, which lets the track-hour slider seek to
 individual fields without publishing hundreds of thousands of images.
 
 Vorticity remains at 0.25 degrees. Precipitation and locally derived RH500 are
-coarsened to 1 degree; the 3-hourly pressure-level inputs used for RH500 are
-linearly interpolated to hourly values, with the final analysis held to 23 UTC.
+coarsened to 1 degree. Precipitation is a trailing 24-hour accumulation using
+the preceding month's final 23 hours at month boundaries. The 3-hourly
+pressure-level inputs used for RH500 are linearly interpolated to hourly
+values, with the final analysis held to 23 UTC.
 """
 
 from __future__ import annotations
@@ -50,22 +52,22 @@ FIELD_SPECS = {
 	},
 	"precipitation": {
 		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/hourly_precip_SA"),
-		"schema": "monsoon-low-atlas-precipitation-video-v1",
+		"schema": "monsoon-low-atlas-precipitation-video-v2",
 		"source_label": "ERA5 hourly_precip_SA",
-		"field_label": "ERA5 mean total precipitation rate",
-		"units": "mm h-1",
+		"field_label": "ERA5 trailing 24-hour accumulated precipitation",
+		"units": "mm",
 		"grid_degrees": 1.0,
 		"coarsen_factor": 4,
 		"dimensions": (60, 46),
 		"positive_only": True,
 		"colour_stops": (
-			(0.0, (247, 252, 253)), (0.1, (204, 236, 230)),
-			(0.5, (102, 194, 164)), (2.0, (35, 139, 69)),
-			(5.0, (34, 94, 168)), (10.0, (84, 39, 143)),
-			(20.0, (62, 0, 92)),
+			(0.0, (247, 252, 253)), (1.0, (204, 236, 230)),
+			(5.0, (102, 194, 164)), (10.0, (35, 139, 69)),
+			(25.0, (34, 94, 168)), (50.0, (84, 39, 143)),
+			(100.0, (62, 0, 92)), (150.0, (46, 0, 72)),
 		),
-		"alpha_full": 0.8,
-		"alpha_threshold": 0.02,
+		"alpha_full": 10.0,
+		"alpha_threshold": 0.1,
 	},
 	"rh500": {
 		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/3hourly_pl_SA"),
@@ -223,9 +225,23 @@ def interpolate_hourly(field: xr.DataArray, month: str) -> xr.DataArray:
 	return field.interp(time=target)
 
 
-def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray, tuple[float, float, float, float]]:
-	dataset = xr.open_dataset(source)
-	field = select_weather_field(dataset, field_name)
+def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray, tuple[float, float, float, float], list[Path]]:
+	datasets = [xr.open_dataset(source)]
+	field = select_weather_field(datasets[0], field_name)
+	sources = [source]
+	if field_name == "precipitation":
+		previous_month = (pd.Period(month, freq="M") - 1).strftime("%Y%m")
+		previous_source = source.parent / f"{previous_month}.nc"
+		if not previous_source.is_file():
+			datasets[0].close()
+			raise FileNotFoundError(f"Trailing 24-hour precipitation requires {previous_source}")
+		datasets.append(xr.open_dataset(previous_source))
+		previous = select_weather_field(datasets[-1], field_name).isel(time=slice(-23, None))
+		current_times = np.asarray(field.time.values)
+		field = xr.concat((previous, field), dim="time").sortby("time")
+		_, unique_indexes = np.unique(np.asarray(field.time.values), return_index=True)
+		field = field.isel(time=np.sort(unique_indexes))
+		sources.append(previous_source)
 	spec = FIELD_SPECS[field_name]
 	west, south, east, north = DEFAULT_BOUNDS
 	latitudes = np.asarray(field.latitude.values)
@@ -233,7 +249,8 @@ def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray
 	lat_index = np.flatnonzero((latitudes >= south) & (latitudes <= north))
 	lon_index = np.flatnonzero((longitudes >= west) & (longitudes <= east))
 	if not len(lat_index) or not len(lon_index):
-		dataset.close()
+		for dataset in datasets:
+			dataset.close()
 		raise ValueError("Requested atlas bounds do not intersect the ERA5 grid")
 	field = field.isel(latitude=lat_index, longitude=lon_index)
 	coarsen_factor = int(spec["coarsen_factor"])
@@ -264,7 +281,12 @@ def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray
 	)
 	if field_name == "rh500":
 		field = interpolate_hourly(field, month).clip(min=0, max=100)
-	return field, raster_bounds
+	elif field_name == "precipitation":
+		field = field.rolling(time=24, min_periods=24).sum().sel(time=current_times)
+	field.load()
+	for dataset in datasets:
+		dataset.close()
+	return field, raster_bounds, sources
 
 
 def colourise(values: np.ndarray, spec: dict) -> np.ndarray:
@@ -306,8 +328,7 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 			return
 	destination.parent.mkdir(parents=True, exist_ok=True)
 	temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
-	field, raster_bounds = atlas_field(source, args.field, month)
-	field.load()
+	field, raster_bounds, sources = atlas_field(source, args.field, month)
 	times = pd.DatetimeIndex(field.time.values)
 	height = int(field.sizes["latitude"])
 	width = int(field.sizes["longitude"])
@@ -382,6 +403,10 @@ def render_month(args: argparse.Namespace, month: str) -> None:
 	if args.field == "rh500":
 		metadata["temporal_processing"] = "3-hourly ERA5 analyses linearly interpolated to hourly values; the final 21 UTC analysis is held through 23 UTC"
 		metadata["derivation"] = "relative humidity derived from q and t at 500 hPa using mixed-phase saturation vapour pressure"
+	elif args.field == "precipitation":
+		metadata["temporal_processing"] = "trailing sum of 24 hourly mean precipitation-rate amounts; each month includes the previous month's final 23 hours before accumulation"
+		metadata["source_previous"] = f"{spec['source_label']}/{sources[1].name}"
+		metadata["source_previous_sha256"] = sha256(sources[1])
 	metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 	print(json.dumps(metadata, indent=2, sort_keys=True))
 

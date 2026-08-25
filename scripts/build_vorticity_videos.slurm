@@ -3,7 +3,7 @@
 #SBATCH --partition=standard
 #SBATCH --qos=standard
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
+#SBATCH --mem=8G
 #SBATCH --time=00:40:00
 #SBATCH --job-name=mla-weather
 #SBATCH --array=0-621%50
