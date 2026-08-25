@@ -69,7 +69,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def configure_style(font_path: Path | None) -> None:
-    family = "Arial"
+    available_families = {font.name for font in fontManager.ttflist}
+    family = "Arial" if "Arial" in available_families else "DejaVu Sans"
     if font_path and font_path.is_file():
         fontManager.addfont(font_path)
         family = FontProperties(fname=font_path).get_name()
@@ -218,8 +219,6 @@ def build_figure(frame: pd.DataFrame, summary: pd.DataFrame, geography: dict) ->
         dtype=object,
     )
     figure.get_layout_engine().set(w_pad=0.07, h_pad=0.08, wspace=0.04, hspace=0.07)
-    figure.suptitle("LPS atlas v5.4.2 (1940–2025)", fontsize=19, fontweight=500)
-
     # (a) Each physical event contributes at most once to any 1-degree cell.
     ax = axes[0, 0]
     ax.set_facecolor(SEA)

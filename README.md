@@ -75,3 +75,13 @@ python scripts/build_v542_assets.py `
   --rainfall-data path/to/imd-rainfall-dashboard/data/dashboard_data.js `
   --output-dir assets
 ```
+
+## Rebuild the boundary-worldview diagnostic
+
+`scripts/build_boundary_worldviews_figure.py` downloads and checksum-verifies representative Natural Earth 1:10m v5.1.1 admin-0 point-of-view products, then holds the LPS density and colour scale fixed across the 11 distinct India outlines present in all 34 products. Products with identical India geometry are grouped in one panel. The shared groups are Pakistan/Turkey, China/Taiwan, ISO/top-level countries, and Bangladesh plus Argentina, Brazil, Egypt, France, Germany, Greece, Indonesia, Italy, Japan, Morocco, the Netherlands, Palestine, Poland, Portugal, Saudi Arabia, South Korea, Spain, Sweden, Ukraine and Vietnam.
+
+```bash
+python scripts/build_boundary_worldviews_figure.py
+```
+
+The panel labels describe Natural Earth cartographic worldview products; they are not primary governmental boundary datasets or endorsements by the atlas.
