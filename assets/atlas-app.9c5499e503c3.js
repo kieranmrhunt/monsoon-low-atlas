@@ -41,6 +41,7 @@
 	let lysisRegions = [];
 	let toastTimer;
 	let pointerFrame = 0;
+	let evolutionFocusFrame = 0;
 	let pendingPointer = null;
 	let suppressUrl = false;
 	let lastAutoFitSignature = '';
@@ -1482,6 +1483,7 @@
 		if ((!options || options.activateWeather !== false) && state.weatherLayer === 'none') { state.weatherLayer = 'vorticity'; state.weatherTracks = false; }
 		$('#mlaWeatherLayer').value = state.weatherLayer;
 		updateTimeControls();
+		scheduleEvolutionFocusDraw();
 		if (!(options && options.noUrl)) renderDossier();
 		mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 		if (!(options && options.noSeek)) syncWeatherToFocus();
@@ -1500,6 +1502,7 @@
 		weatherLoadSerial++;
 		if (!(options && options.keepWeather)) state.weatherLayer = 'none';
 		updateTimeControls();
+		scheduleEvolutionFocusDraw();
 		if (CORE) mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 	}
 
@@ -2826,6 +2829,22 @@
 			for (const point of linePoints) { context.beginPath(); context.arc(X(point.hour), Y(point.value), 1.7, 0, Math.PI * 2); context.fill(); }
 		}
 
+		const sliderIndex = trackIndex === state.selected && Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0
+			? clamp(state.focusPointIndex, 0, hours.length - 1)
+			: trackIndex === state.selected ? 0 : -1;
+		const sliderHour = sliderIndex >= 0 ? Number(hours[sliderIndex]) : NaN;
+		if (Number.isFinite(sliderHour)) {
+			const x = X(sliderHour);
+			context.beginPath();
+			context.moveTo(x, padding.top);
+			context.lineTo(x, plotBottom);
+			context.setLineDash([6, 5]);
+			context.strokeStyle = css('--mla-lac', '#8f2938');
+			context.lineWidth = 1.7;
+			context.stroke();
+			context.setLineDash([]);
+		}
+
 		context.restore();
 
 		const summary = `${fmt(hours.length)} hourly positions · ${definition.title} ${fmt(Math.min(...linePoints.map(point => point.value)), 1)}–${fmt(Math.max(...linePoints.map(point => point.value)), 1)} ${definition.unit} · peak 24 h rain ${fmt(Math.max(...rainPoints.map(point => point.value)), 1)} mm.`;
@@ -2846,8 +2865,16 @@
 		canvas.onpointermove = showPoint;
 		canvas.onpointerdown = showPoint;
 		canvas.onpointerleave = () => { readout.textContent = summary; };
-		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars for ${systemLabel(trackIndex)}`);
+		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars for ${systemLabel(trackIndex)}${Number.isFinite(sliderHour) ? `; dashed slider-time marker at ${timeLabel(sliderHour)} from genesis` : ''}`);
 		return {hours, lineValues: lineSeries.values, rainValues: rainSeries.values, summary};
+	}
+
+	function scheduleEvolutionFocusDraw() {
+		if (evolutionFocusFrame || !DETAIL || state.selected == null || $('#mlaPanelExplore').hidden) return;
+		evolutionFocusFrame = requestAnimationFrame(() => {
+			evolutionFocusFrame = 0;
+			if (DETAIL && state.selected != null && !$('#mlaPanelExplore').hidden) drawEvolutionPlot(state.selected, state.evolutionMetric);
+		});
 	}
 
 	function drawBars(id, items, options) {
