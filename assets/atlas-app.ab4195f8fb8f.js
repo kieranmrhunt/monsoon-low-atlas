@@ -2126,7 +2126,30 @@
 		else scheduleMapUrl();
 	}
 
+	function timeFocusMarkerHitTest(clientX, clientY, touch) {
+		if (!Number.isFinite(state.focusStartMs) || !Number.isFinite(state.focusEndMs)) return -1;
+		const canvas = $('#mlaMapOverlay');
+		const rectangle = canvas.getBoundingClientRect();
+		const x = clientX - rectangle.left;
+		const y = clientY - rectangle.top;
+		const projection = mapProjection(rectangle.width, rectangle.height);
+		const exact = state.focusStartMs === state.focusEndMs;
+		let bestTrack = -1;
+		let bestDistance = (touch ? 24 : 11) ** 2;
+		for (const trackIndex of exact ? mapTrackIndexes() : state.active) {
+			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
+			if (!range) continue;
+			const markerIndex = exact ? range[0] : Math.round((range[0] + range[1]) / 2);
+			const marker = projection.project(paths.decoded[trackIndex][markerIndex][0], paths.decoded[trackIndex][markerIndex][1]);
+			const distance = (marker[0] - x) ** 2 + (marker[1] - y) ** 2;
+			if (distance < bestDistance) { bestDistance = distance; bestTrack = trackIndex; }
+		}
+		return bestTrack;
+	}
+
 	function mapHitTest(clientX, clientY, touch) {
+		const focusMarker = timeFocusMarkerHitTest(clientX, clientY, touch);
+		if (focusMarker >= 0) return focusMarker;
 		const canvas = $('#mlaMapOverlay');
 		const rectangle = canvas.getBoundingClientRect();
 		const x = clientX - rectangle.left;
@@ -2298,9 +2321,15 @@
 			canvas.classList.remove('is-dragging');
 			if (suppressTap) { suppressTap = false; return; }
 			if (moved) { writeUrl('replace'); return; }
-			const index = mapHitTest(event.clientX, event.clientY, event.pointerType === 'touch');
+			const touch = event.pointerType === 'touch';
+			const focusMarker = timeFocusMarkerHitTest(event.clientX, event.clientY, touch);
+			if (focusMarker >= 0) {
+				if (focusMarker !== state.selected) selectTrack(focusMarker, {keepTimeFocus: true});
+				return;
+			}
+			const index = mapHitTest(event.clientX, event.clientY, touch);
 			if (index >= 0 && index === state.selected) {
-				const pointIndex = nearestTrackPoint(event.clientX, event.clientY, index, event.pointerType === 'touch');
+				const pointIndex = nearestTrackPoint(event.clientX, event.clientY, index, touch);
 				if (pointIndex >= 0) setTrackPointFocus(index, pointIndex);
 			} else if (index >= 0) selectTrack(index);
 		});
@@ -2428,7 +2457,7 @@
 
 	function selectTrack(index, options) {
 		const next = Number.isInteger(index) ? index : null;
-		if (state.focusSource === 'point' && state.selected !== next) clearTimeFocus();
+		if (state.focusSource === 'point' && state.selected !== next && !(options && options.keepTimeFocus)) clearTimeFocus();
 		state.selected = next;
 		if (state.selected != null && Number.isFinite(state.focusTimeMs)) state.focusPointIndex = pointIndexAtTime(state.selected, state.focusTimeMs);
 		state.hovered = null;
