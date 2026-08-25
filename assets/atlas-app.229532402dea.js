@@ -15,6 +15,7 @@
 	const MAP_DIRTY = Object.freeze({BASE: 1, WEATHER: 2, DATA: 4, OVERLAY: 8, ALL: 15});
 	const HOUR_MS = 3600000;
 	const CONCURRENT_CENTRE_SEPARATION_KM = 150;
+	const FOCUSED_COMPANION_SEPARATION_KM = 750;
 	const CANVAS_FONT = '"effra", Effra, Arial, sans-serif';
 	const WEATHER_FIELDS = Object.freeze({
 		vorticity: {label: '850-hPa vorticity', keyMin: '0', keyMax: '40 × 10⁻⁵ s⁻¹'},
@@ -160,6 +161,10 @@
 		return pointIndex >= 0 && pointIndex < paths.decoded[trackIndex].length ? pointIndex : -1;
 	}
 
+	function pointIsObserved(trackIndex, pointIndex) {
+		return pointIndex >= 0 && !paths.posterior[paths.offsets[trackIndex] + pointIndex];
+	}
+
 	function pointRangeAtTime(trackIndex, startMs, endMs) {
 		const trackStart = Number(track(trackIndex)[T.start_ms]);
 		const first = Math.max(0, Math.ceil((Number(startMs) - trackStart) / HOUR_MS));
@@ -180,10 +185,13 @@
 
 	function mapTrackIndexes() {
 		if (!CORE || !paths || !Number.isFinite(state.focusTimeMs) || state.focusStartMs !== state.focusEndMs) return state.active;
+		const selectedPointFocus = state.focusSource === 'point' && state.selected != null;
 		const candidates = [];
 		for (const trackIndex of state.active) {
 			const pointIndex = pointIndexAtTime(trackIndex, state.focusTimeMs);
-			if (pointIndex >= 0) candidates.push({trackIndex, pointIndex, point: paths.decoded[trackIndex][pointIndex]});
+			if (pointIndex < 0) continue;
+			if (selectedPointFocus && trackIndex !== state.selected && !pointIsObserved(trackIndex, pointIndex)) continue;
+			candidates.push({trackIndex, pointIndex, point: paths.decoded[trackIndex][pointIndex]});
 		}
 		candidates.sort((first, second) => {
 			const selectedOrder = Number(second.trackIndex === state.selected) - Number(first.trackIndex === state.selected);
@@ -194,9 +202,10 @@
 			if (vorticityOrder) return vorticityOrder;
 			return Number(atlasId(first.trackIndex)) - Number(atlasId(second.trackIndex));
 		});
+		const separationKm = selectedPointFocus ? FOCUSED_COMPANION_SEPARATION_KM : CONCURRENT_CENTRE_SEPARATION_KM;
 		const distinct = [];
 		for (const candidate of candidates) {
-			if (distinct.every(retained => centreSeparationKm(candidate.point, retained.point) >= CONCURRENT_CENTRE_SEPARATION_KM)) distinct.push(candidate);
+			if (distinct.every(retained => centreSeparationKm(candidate.point, retained.point) >= separationKm)) distinct.push(candidate);
 		}
 		return distinct.map(candidate => candidate.trackIndex);
 	}
@@ -336,6 +345,7 @@
 		const longitude = new Float32Array(total);
 		const breakBefore = new Uint8Array(total);
 		const month = new Uint8Array(total);
+		const posterior = new Uint8Array(total);
 		let cursor = 0;
 		decoded.forEach((points, track) => {
 			offsets[track] = cursor;
@@ -350,9 +360,12 @@
 			for (const run of (CORE.point_month_runs && CORE.point_month_runs[track]) || []) {
 				month.fill(Number(run[2]), trackOffset + Number(run[0]), trackOffset + Number(run[1]) + 1);
 			}
+			for (const run of (CORE.posterior_runs && CORE.posterior_runs[track]) || []) {
+				posterior.fill(1, trackOffset + Number(run[0]), trackOffset + Number(run[1]) + 1);
+			}
 		});
 		offsets[decoded.length] = cursor;
-		paths = {decoded, offsets, latitude, longitude, breakBefore, month};
+		paths = {decoded, offsets, latitude, longitude, breakBefore, month, posterior};
 		catalogueBounds = {
 			lonMin: Math.floor(Number(CORE.meta.lon_min)) - 2,
 			lonMax: Math.ceil(Number(CORE.meta.lon_max)) + 2,
@@ -1386,7 +1399,7 @@
 	function moveTrackHourSlider(event) {
 		if (state.selected == null) return;
 		const pointIndex = clamp(Number(event.target.value) || 0, 0, paths.decoded[state.selected].length - 1);
-		setTrackPointFocus(state.selected, pointIndex, {noSeek: true, noUrl: true});
+		setTrackPointFocus(state.selected, pointIndex, {activateWeather: false, noSeek: true, noUrl: true});
 		scheduleSliderWeather();
 	}
 
@@ -1399,7 +1412,7 @@
 	function stepTrackHour(direction) {
 		if (state.selected == null) return;
 		const current = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
-		setTrackPointFocus(state.selected, clamp(current + direction, 0, paths.decoded[state.selected].length - 1));
+		setTrackPointFocus(state.selected, clamp(current + direction, 0, paths.decoded[state.selected].length - 1), {activateWeather: false});
 	}
 
 	function setTrackPointFocus(trackIndex, pointIndex, options) {
@@ -1411,7 +1424,7 @@
 		state.focusTimeMs = timeMs;
 		state.focusPointIndex = pointIndex;
 		state.focusSource = 'point';
-		if (state.weatherLayer === 'none') { state.weatherLayer = 'vorticity'; state.weatherTracks = false; }
+		if ((!options || options.activateWeather !== false) && state.weatherLayer === 'none') { state.weatherLayer = 'vorticity'; state.weatherTracks = false; }
 		$('#mlaWeatherLayer').value = state.weatherLayer;
 		updateTimeControls();
 		if (!(options && options.noUrl)) renderDossier();
@@ -1469,6 +1482,7 @@
 		let message = '';
 		if (weatherError) message = `${weatherError} · ${Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : ''}`;
 		else if (weatherLoading && weatherDefinition) message = `Loading ${weatherDefinition.label}${Number.isFinite(state.focusTimeMs) ? ` · ${dateTime(state.focusTimeMs)}` : ''}…`;
+		else if (Number.isFinite(state.focusTimeMs) && state.focusSource === 'point' && state.selected != null) message = `${dateTime(state.focusTimeMs)} · ${mapTrackIndexes().length} centres shown · selected plus observation-supported companions`;
 		else if (Number.isFinite(state.focusTimeMs)) message = `${dateTime(state.focusTimeMs)} · ${mapTrackIndexes().length} systems active`;
 		else if (Number.isFinite(state.focusStartMs)) message = `${date(state.focusStartMs)} UTC · ${state.active.filter(index => pointRangeAtTime(index, state.focusStartMs, state.focusEndMs)).length} systems active · daily positions highlighted`;
 		else if (state.selected != null) message = 'Move the track-hour slider or click the selected track again to choose an hour.';
@@ -1479,7 +1493,7 @@
 		if (dossierTime && dossierPosition && state.selected != null && Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 && Number.isFinite(state.focusTimeMs)) {
 			const point = paths.decoded[state.selected][state.focusPointIndex];
 			dossierTime.textContent = dateTime(state.focusTimeMs);
-			dossierPosition.textContent = `Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[state.selected].length)} · ${fmt(point[0], 2)}°N, ${fmt(point[1], 2)}°E`;
+			dossierPosition.textContent = `Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[state.selected].length)} · ${fmt(point[0], 2)}°N, ${fmt(point[1], 2)}°E · ${pointIsObserved(state.selected, state.focusPointIndex) ? 'observed centre' : 'interpolated centre'}`;
 		}
 	}
 
@@ -2214,7 +2228,7 @@
 		const rectangle = $('#mlaMapStack').getBoundingClientRect();
 		const row = track(index);
 		const item = credibleIb(index);
-		tip.innerHTML = `<strong>${esc(systemLabel(index))}</strong><br>${esc(date(row[T.start_ms]))} · ${esc(CORE.cat_labels[String(row[T.category])])}<br>${esc(metric().title)} P${fmt(percentileMetric(index))} · ${fmt(rawMetric(index), 1)} ${esc(metric().unit)}${item ? `<br>IBTrACS ${esc(item.confidence)} · median ${fmt(item.median_km)} km` : ''}`;
+		tip.innerHTML = `<strong>${esc(systemLabel(index))}</strong><br>${esc(date(row[T.start_ms]))} · Peak ERA5 class: ${esc(CORE.cat_labels[String(row[T.category])])}<br>${esc(metric().title)} P${fmt(percentileMetric(index))} · ${fmt(rawMetric(index), 1)} ${esc(metric().unit)}${item ? `<br>IBTrACS ${esc(item.confidence)} · median ${fmt(item.median_km)} km` : ''}`;
 		tip.style.left = `${clamp(clientX - rectangle.left, 150, rectangle.width - 150)}px`;
 		tip.style.top = `${clamp(clientY - rectangle.top, 70, rectangle.height - 20)}px`;
 		tip.dataset.visible = 'true';
@@ -2402,6 +2416,7 @@
 		const index = state.selected;
 		const row = track(index);
 		const facts = [
+			['Peak ERA5 class', CORE.cat_labels[String(row[T.category])]],
 			['Duration', durationText(row[T.duration_hours])],
 			['Hourly positions', fmt(row[T.n_rows])],
 			['Pressure deficit', `${fmt(row[T.peak_deficit_x10] / 10, 1)} hPa`],
@@ -2416,11 +2431,12 @@
 			['ENSO at genesis', ensoLabel(index)]
 		];
 		const focusedHour = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 && Number.isFinite(state.focusTimeMs)
-			? `<div class="mla-match-box"><h4>Selected track hour</h4><p><strong id="mlaDossierFocusTime">${esc(dateTime(state.focusTimeMs))}</strong><br><span id="mlaDossierFocusPosition">Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[index].length)} · ${fmt(paths.decoded[index][state.focusPointIndex][0], 2)}°N, ${fmt(paths.decoded[index][state.focusPointIndex][1], 2)}°E</span></p></div>`
+			? `<div class="mla-match-box"><h4>Selected track hour</h4><p><strong id="mlaDossierFocusTime">${esc(dateTime(state.focusTimeMs))}</strong><br><span id="mlaDossierFocusPosition">Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[index].length)} · ${fmt(paths.decoded[index][state.focusPointIndex][0], 2)}°N, ${fmt(paths.decoded[index][state.focusPointIndex][1], 2)}°E · ${pointIsObserved(index, state.focusPointIndex) ? 'observed centre' : 'interpolated centre'}</span></p></div>`
 			: '';
 		node.innerHTML = `
 			<div class="mla-dossier-head"><div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
+			<p class="mla-dossier-empty">Peak class is ERA5-derived and uses IMD-equivalent wind thresholds. CS means Cyclonic Storm, not Saffir–Simpson Category 1 or an official agency classification.</p>
 			${focusedHour}
 			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
 			`;
@@ -2474,7 +2490,7 @@
 	}
 
 	function tableHead() {
-		return `<tr><th>System</th><th>Genesis</th><th>Peak class</th><th>${esc(metric().title)}</th><th>Duration</th></tr>`;
+		return `<tr><th>System</th><th>Genesis</th><th>Peak ERA5 class</th><th>${esc(metric().title)}</th><th>Duration</th></tr>`;
 	}
 
 	function tableRow(index, openExplore) {
@@ -3052,7 +3068,7 @@
 			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${esc(valueText(index))}</strong> · ${date(track(index)[T.start_ms])} · ${esc(CLASS_SHORT[track(index)[T.category]])}</p></article>`;
 		}).join('') || '<p>No eligible systems in this subset.</p>';
 		const table = $('#mlaExtremeTable');
-		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak class</th></tr>`;
+		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak ERA5 class</th></tr>`;
 		table.querySelector('tbody').innerHTML = indexes.slice(0, 50).map((index, rank) => {
 			return `<tr><td>${rank + 1}</td><td><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></td><td>${date(track(index)[T.start_ms])}</td><td class="mla-num">${esc(valueText(index))}</td><td>${esc(CLASS_SHORT[track(index)[T.category]])}</td></tr>`;
 		}).join('') || '<tr><td colspan="5">No eligible systems.</td></tr>';
