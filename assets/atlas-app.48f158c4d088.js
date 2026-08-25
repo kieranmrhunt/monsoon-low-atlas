@@ -36,6 +36,7 @@
 	let nearStateCache = new Map();
 	let profileCache = new Map();
 	let genesisRegions = [];
+	let lysisRegions = [];
 	let toastTimer;
 	let pointerFrame = 0;
 	let pendingPointer = null;
@@ -67,13 +68,15 @@
 	const FILTER_METRIC_KEYS = ['deficit', 'vort', 'wind', 'mslp', 'rain'];
 	const PROFILE_METRIC_KEYS = ['deficit', 'wind', 'vort', 'rain', 'mslp', 'q', 'rh'];
 	const DEFAULT_PROFILE_METRICS = ['deficit', 'wind', 'rain'];
-	const GENESIS_REGION_LABELS = {
-		all: 'All genesis locations',
+	const ENDPOINT_REGION_LABELS = {
+		all: 'All locations',
 		bob: 'Bay of Bengal',
-		india: 'Indian land',
 		arabian: 'Arabian Sea',
-		other: 'Other locations'
+		india: 'Indian land',
+		land: 'All land',
+		indian_ocean: 'Indian Ocean'
 	};
+	const ENDPOINT_REGION_BITS = Object.freeze({bob: 1, arabian: 2, india: 4, land: 8, indian_ocean: 16});
 
 	const state = {
 		tab: 'explore',
@@ -90,6 +93,7 @@
 		match: 'any',
 		qc: 'any',
 		genesisRegion: 'all',
+		lysisRegion: 'all',
 		bsiso: 'all',
 		enso: 'all',
 		stateIndex: -1,
@@ -604,23 +608,43 @@
 		return inside;
 	}
 
-	function classifyGenesis(index) {
-		const row = track(index);
-		const lat = Number(row[T.gen_lat_x1000]) / 1000;
-		const lon = Number(row[T.gen_lon_x1000]) / 1000;
-		if (pointOnIndianLand(lon, lat)) return 'india';
-		const water = !pointOnAtlasLand(lon, lat);
-		if (water && lat >= 0 && lat <= 30 && lon >= 77.5 && lon <= 100) return 'bob';
-		if (water && lat >= 0 && lat <= 30 && lon >= 45 && lon < 77.5) return 'arabian';
-		return 'other';
+	function classifyEndpoint(lat, lon) {
+		const indianLand = pointOnIndianLand(lon, lat);
+		const land = indianLand || pointOnAtlasLand(lon, lat);
+		const water = !land;
+		let mask = 0;
+		if (land) mask |= ENDPOINT_REGION_BITS.land;
+		if (indianLand) mask |= ENDPOINT_REGION_BITS.india;
+		if (water && lat >= -30 && lat <= 30 && lon >= 30 && lon <= 120) mask |= ENDPOINT_REGION_BITS.indian_ocean;
+		if (water && lat >= 0 && lat <= 30 && lon >= 77.5 && lon <= 100) mask |= ENDPOINT_REGION_BITS.bob;
+		if (water && lat >= 0 && lat <= 30 && lon >= 45 && lon < 77.5) mask |= ENDPOINT_REGION_BITS.arabian;
+		return mask;
 	}
 
-	function buildGenesisRegions() {
-		genesisRegions = CORE.tracks.map((unused, index) => classifyGenesis(index));
+	function buildEndpointRegions() {
+		genesisRegions = CORE.tracks.map((unused, index) => {
+			const row = track(index);
+			return classifyEndpoint(Number(row[T.gen_lat_x1000]) / 1000, Number(row[T.gen_lon_x1000]) / 1000);
+		});
+		lysisRegions = CORE.tracks.map((unused, index) => {
+			const row = track(index);
+			return classifyEndpoint(Number(row[T.end_lat_x1000]) / 1000, Number(row[T.end_lon_x1000]) / 1000);
+		});
 	}
 
-	function genesisRegionPass(index) {
-		return state.genesisRegion === 'all' || genesisRegions[index] === state.genesisRegion;
+	function endpointRegionPass(index) {
+		const genesisPass = state.genesisRegion === 'all' || Boolean(genesisRegions[index] & ENDPOINT_REGION_BITS[state.genesisRegion]);
+		const lysisPass = state.lysisRegion === 'all' || Boolean(lysisRegions[index] & ENDPOINT_REGION_BITS[state.lysisRegion]);
+		return genesisPass && lysisPass;
+	}
+
+	function endpointRegionLabel(mask) {
+		if (mask & ENDPOINT_REGION_BITS.india) return ENDPOINT_REGION_LABELS.india;
+		if (mask & ENDPOINT_REGION_BITS.bob) return ENDPOINT_REGION_LABELS.bob;
+		if (mask & ENDPOINT_REGION_BITS.arabian) return ENDPOINT_REGION_LABELS.arabian;
+		if (mask & ENDPOINT_REGION_BITS.land) return 'Other land';
+		if (mask & ENDPOINT_REGION_BITS.indian_ocean) return ENDPOINT_REGION_LABELS.indian_ocean;
+		return 'Other water';
 	}
 
 	function climatePass(index) {
@@ -661,7 +685,7 @@
 
 	function filterSignature() {
 		const percentiles = FILTER_METRIC_KEYS.map(key => `${key}:${state.percentileMins[key]}`).join(',');
-		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.bsiso, state.enso, state.stateIndex, state.stateMin, state.search].join('|');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.lysisRegion, state.bsiso, state.enso, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
 	function parsedSearch() {
@@ -706,7 +730,7 @@
 			if (exactDateStart == null && !monthPass(index)) continue;
 			if (!state.classes.has(row[T.category])) continue;
 			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
-			if (!matchPass(index) || !qcPass(index) || !genesisRegionPass(index) || !climatePass(index) || !statePass(index)) continue;
+			if (!matchPass(index) || !qcPass(index) || !endpointRegionPass(index) || !climatePass(index) || !statePass(index)) continue;
 			if (query) {
 				if (exactDateStart != null && (row[T.end_ms] < exactDateStart || row[T.start_ms] > exactDateEnd)) continue;
 				if (exactDateStart == null && exactYear != null && row[T.start_year] !== exactYear) continue;
@@ -791,6 +815,7 @@
 		$('#mlaMatch').value = state.match;
 		$('#mlaQc').value = state.qc;
 		$('#mlaGenesisRegion').value = state.genesisRegion;
+		$('#mlaLysisRegion').value = state.lysisRegion;
 		$('#mlaBsiso').value = state.bsiso;
 		$('#mlaEnso').value = state.enso;
 		$('#mlaState').value = state.stateIndex < 0 ? '' : String(state.stateIndex);
@@ -859,6 +884,7 @@
 		state.match = 'any';
 		state.qc = 'any';
 		state.genesisRegion = 'all';
+		state.lysisRegion = 'all';
 		state.bsiso = 'all';
 		state.enso = 'all';
 		state.stateIndex = -1;
@@ -940,6 +966,7 @@
 		$('#mlaMatch').addEventListener('change', event => { state.match = event.target.value; applyFilters(); });
 		$('#mlaQc').addEventListener('change', event => { state.qc = event.target.value; applyFilters(); });
 		$('#mlaGenesisRegion').addEventListener('change', event => { state.genesisRegion = event.target.value; applyFilters(); });
+		$('#mlaLysisRegion').addEventListener('change', event => { state.lysisRegion = event.target.value; applyFilters(); });
 		$('#mlaBsiso').addEventListener('change', event => { state.bsiso = event.target.value; applyFilters(); });
 		$('#mlaEnso').addEventListener('change', event => { state.enso = event.target.value; applyFilters(); });
 		$('#mlaState').addEventListener('change', event => {
@@ -1079,6 +1106,7 @@
 		});
 		if (state.match !== 'any') parameters.set('match', state.match);
 		if (state.genesisRegion !== 'all') parameters.set('genesis', state.genesisRegion);
+		if (state.lysisRegion !== 'all') parameters.set('lysis', state.lysisRegion);
 		if (state.bsiso !== 'all') parameters.set('bsiso', state.bsiso);
 		if (state.enso !== 'all') parameters.set('enso', state.enso);
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
@@ -1134,7 +1162,8 @@
 		});
 		if (parameters.has('pmin') && !parameters.has(`p${state.metric}`)) state.percentileMins[state.metric] = clamp(Number(parameters.get('pmin')) || 0, 0, 100);
 		if (['any', 'unmatched', 'high', 'credible', 'named'].includes(parameters.get('match'))) state.match = parameters.get('match');
-		state.genesisRegion = Object.hasOwn(GENESIS_REGION_LABELS, parameters.get('genesis')) ? parameters.get('genesis') : 'all';
+		state.genesisRegion = Object.hasOwn(ENDPOINT_REGION_LABELS, parameters.get('genesis')) ? parameters.get('genesis') : 'all';
+		state.lysisRegion = Object.hasOwn(ENDPOINT_REGION_LABELS, parameters.get('lysis')) ? parameters.get('lysis') : 'all';
 		state.bsiso = ['-1', '0', '1', '2', '3', '4', '5', '6', '7', '8'].includes(parameters.get('bsiso')) ? parameters.get('bsiso') : 'all';
 		state.enso = ['-1', '0', '1', '2'].includes(parameters.get('enso')) ? parameters.get('enso') : 'all';
 		const overIndex = CORE.state_slugs.indexOf(parameters.get('over'));
@@ -2314,6 +2343,8 @@
 			['Peak 24 h rain', `${fmt(row[T.peak_precip_x10] / 10, 1)} mm`],
 			['Linked path', `${fmt(row[T.distance_km])} km`],
 			['Peak q850', `${fmt(row[T.peak_q850_x10] / 10, 1)} g kg⁻¹`],
+			['Genesis region', endpointRegionLabel(genesisRegions[index])],
+			['Lysis region', endpointRegionLabel(lysisRegions[index])],
 			['BSISO-1 at genesis', bsisoLabel(index)],
 			['ENSO at genesis', ensoLabel(index)]
 		];
@@ -3047,7 +3078,10 @@
 				duration_hours: row[T.duration_hours],
 				genesis_latitude: row[T.gen_lat_x1000] / 1000,
 				genesis_longitude: row[T.gen_lon_x1000] / 1000,
-				genesis_region: GENESIS_REGION_LABELS[genesisRegions[index]],
+				genesis_region: endpointRegionLabel(genesisRegions[index]),
+				lysis_latitude: row[T.end_lat_x1000] / 1000,
+				lysis_longitude: row[T.end_lon_x1000] / 1000,
+				lysis_region: endpointRegionLabel(lysisRegions[index]),
 				bsiso1_phase_at_genesis: CLIMATE.bsiso.phase[index] < 0 ? null : CLIMATE.bsiso.phase[index],
 				bsiso1_amplitude_at_genesis: CLIMATE.bsiso.amplitude_x100[index] < 0 ? null : CLIMATE.bsiso.amplitude_x100[index] / 100,
 				enso_category_at_genesis: CLIMATE.enso.class[index] < 0 ? null : ['La Nina', 'Neutral', 'El Nino'][CLIMATE.enso.class[index]],
@@ -3130,6 +3164,7 @@
 				minimum_fixed_catalogue_percentiles: {...state.percentileMins},
 				continuity_screen: state.qc,
 				genesis_region: state.genesisRegion === 'all' ? null : state.genesisRegion,
+				lysis_region: state.lysisRegion === 'all' ? null : state.lysisRegion,
 				bsiso1_phase_at_genesis: state.bsiso === 'all' ? null : Number(state.bsiso),
 				enso_category_at_genesis: state.enso === 'all' ? null : Number(state.enso),
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
@@ -3241,7 +3276,7 @@
 		buildPathRuntime();
 		buildFallbackLabels();
 		buildSearchIndex();
-		buildGenesisRegions();
+		buildEndpointRegions();
 		buildFilterControls();
 		readUrl();
 		if (state.stateFill !== 'none') await ensureDetail();

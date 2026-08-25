@@ -14,7 +14,7 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - Cyclone names come from a physical-event match to NOAA IBTrACS v04r01 NI and WP best tracks. Low-confidence matches remain unnamed.
 - State fills use IMD 0.25-degree daily gridded rainfall. Each event's value is the area-mean daily rainfall averaged over UTC dates touched by its track.
 - The state/UT filter requires at least one hourly published centre inside the selected administrative boundary.
-- Genesis-region filters use the first published centre. Indian land uses the atlas state/UT polygons; the two ocean bins require a Natural Earth water point in 0–30 degrees north and 45–100 degrees east, split at 77.5 degrees east. Remaining locations are labelled Other.
+- Genesis and lysis filters use the first and last published centres respectively. Indian land uses the atlas state/UT polygons; All land uses the Natural Earth land mask. The Bay of Bengal and Arabian Sea require a water endpoint in 0–30 degrees north and 45–100 degrees east, split at 77.5 degrees east. Indian Ocean covers water endpoints in 30 degrees south–30 degrees north and 30–120 degrees east, including both named seas.
 - The map draws positions in the selected months.
 - A search in `YYYY-MM-DD` form highlights the part of every filtered track active on that UTC date and marks its position during the day. Adding an hour, for example `2016-07-16 12:00`, marks every active system at that exact catalogue hour.
 - Clicking an already-selected track chooses the nearest hourly centre, reports its UTC time and position, and opens the 850-hPa relative-vorticity background. A track-hour slider and ±1-hour buttons move the selected centre and chosen weather field together.
