@@ -31,6 +31,7 @@
 	let S;
 	let Q;
 	let paths;
+	let analogueShapeFeatures;
 	let segmentIndex;
 	let densityMonthCache = new Map();
 	let catalogueBounds;
@@ -437,6 +438,53 @@
 			bounds: {minLon: catalogueBounds.lonMin, maxLon: catalogueBounds.lonMax, minLat: catalogueBounds.latMin, maxLat: catalogueBounds.latMax}
 		});
 		densityMonthCache.clear();
+	}
+
+	function buildAnalogueShapeFeatures() {
+		if (analogueShapeFeatures) return analogueShapeFeatures;
+		analogueShapeFeatures = new Float32Array(CORE.tracks.length * 18);
+		paths.decoded.forEach((points, trackIndex) => {
+			const last = Math.max(0, points.length - 1);
+			for (let sample = 0; sample < 9; sample += 1) {
+				const position = last * sample / 8;
+				const lower = Math.floor(position), upper = Math.min(last, Math.ceil(position)), fraction = position - lower;
+				const latitude = points[lower][0] + fraction * (points[upper][0] - points[lower][0]);
+				const longitude = points[lower][1] + fraction * (points[upper][1] - points[lower][1]);
+				analogueShapeFeatures[trackIndex * 18 + sample * 2] = longitude;
+				analogueShapeFeatures[trackIndex * 18 + sample * 2 + 1] = latitude;
+			}
+		});
+		return analogueShapeFeatures;
+	}
+
+	function closestAnalogues(index, count) {
+		const features = buildAnalogueShapeFeatures();
+		const candidates = state.active.length > count ? state.active : CORE.tracks.map((_, candidate) => candidate);
+		const source = track(index);
+		const sourceMonth = new Date(Number(source[T.start_ms])).getUTCMonth() + 1;
+		const distances = [];
+		for (const candidate of candidates) {
+			if (candidate === index) continue;
+			let shapeDistance = 0;
+			for (let sample = 0; sample < 9; sample += 1) {
+				const lonA = features[index * 18 + sample * 2], latA = features[index * 18 + sample * 2 + 1];
+				const lonB = features[candidate * 18 + sample * 2], latB = features[candidate * 18 + sample * 2 + 1];
+				const dx = (lonA - lonB) * Math.cos((latA + latB) * Math.PI / 360), dy = latA - latB;
+				shapeDistance += (dx * dx + dy * dy) / 100;
+			}
+			const comparison = track(candidate);
+			const candidateMonth = new Date(Number(comparison[T.start_ms])).getUTCMonth() + 1;
+			const monthDifference = Math.min(Math.abs(sourceMonth - candidateMonth), 12 - Math.abs(sourceMonth - candidateMonth));
+			const durationDifference = Math.log(Math.max(1, Number(source[T.duration_hours])) / Math.max(1, Number(comparison[T.duration_hours])));
+			let distance = shapeDistance / 9
+				+ .35 * (monthDifference / 3) ** 2
+				+ .35 * durationDifference ** 2
+				+ .25 * ((Number(source[T.pct_deficit]) - Number(comparison[T.pct_deficit])) / 40) ** 2
+				+ .18 * ((Number(source[T.pct_precip]) - Number(comparison[T.pct_precip])) / 40) ** 2;
+			distances.push([candidate, Math.sqrt(distance)]);
+		}
+		distances.sort((first, second) => first[1] - second[1] || Number(atlasId(first[0])) - Number(atlasId(second[0])));
+		return distances.slice(0, count);
 	}
 
 	function buildDensityCells(cellSize, bounds, months) {
@@ -2549,11 +2597,13 @@
 		const focusedHour = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 && Number.isFinite(state.focusTimeMs)
 			? `<div class="mla-match-box"><h4>Selected track hour</h4><p><strong id="mlaDossierFocusTime">${esc(dateTime(state.focusTimeMs))}</strong><br><span id="mlaDossierFocusPosition">Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[index].length)} · ${fmt(paths.decoded[index][state.focusPointIndex][0], 2)}°N, ${fmt(paths.decoded[index][state.focusPointIndex][1], 2)}°E · ${pointIsObserved(index, state.focusPointIndex) ? 'observed centre' : 'interpolated centre'}</span></p></div>`
 			: '';
+		const analogues = closestAnalogues(index, 5);
 		node.innerHTML = `
 			<div class="mla-dossier-head"><div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			<p class="mla-dossier-empty">Peak class is ERA5-derived and uses IMD-equivalent wind thresholds. CS means Cyclonic Storm, not Saffir–Simpson Category 1 or an official agency classification.</p>
 			${focusedHour}
+			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" title="standardised analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
 			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
 			`;
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
