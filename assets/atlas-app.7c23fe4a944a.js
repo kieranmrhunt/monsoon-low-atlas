@@ -43,6 +43,7 @@
 	let toastTimer;
 	let pointerFrame = 0;
 	let evolutionFocusFrame = 0;
+	let evolutionChartDragging = false;
 	let pendingPointer = null;
 	let suppressUrl = false;
 	let lastAutoFitSignature = '';
@@ -1219,7 +1220,7 @@
 		$('#mlaDownloadFixes').addEventListener('click', downloadSelectedFixes);
 		root.addEventListener('click', event => {
 			const selector = event.target.closest('[data-select-track]');
-			if (selector) selectTrack(Number(selector.dataset.selectTrack), {openExplore: selector.dataset.openExplore === 'true', fit: true});
+			if (selector) selectTrack(Number(selector.dataset.selectTrack), {openExplore: selector.dataset.openExplore === 'true', fit: selector.dataset.keepMap !== 'true'});
 		});
 	}
 
@@ -1606,13 +1607,6 @@
 		else if (state.selected != null) message = 'Move the track-hour slider or click the selected track again to choose an hour.';
 		else if (weatherDefinition) message = 'Select a track, then choose an hour for the weather field.';
 		$('#mlaFocusTime').textContent = message;
-		const dossierTime = $('#mlaDossierFocusTime');
-		const dossierPosition = $('#mlaDossierFocusPosition');
-		if (dossierTime && dossierPosition && state.selected != null && Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 && Number.isFinite(state.focusTimeMs)) {
-			const point = paths.decoded[state.selected][state.focusPointIndex];
-			dossierTime.textContent = dateTime(state.focusTimeMs);
-			dossierPosition.textContent = `Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[state.selected].length)} · ${fmt(point[0], 2)}°N, ${fmt(point[1], 2)}°E · ${pointIsObserved(state.selected, state.focusPointIndex) ? 'observed centre' : 'interpolated centre'}`;
-		}
 	}
 
 	function createFrameScheduler(render) {
@@ -2606,16 +2600,12 @@
 			['BSISO-1 at genesis', bsisoLabel(index)],
 			['ENSO at genesis', ensoLabel(index)]
 		];
-		const focusedHour = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 && Number.isFinite(state.focusTimeMs)
-			? `<div class="mla-match-box"><h4>Selected track hour</h4><p><strong id="mlaDossierFocusTime">${esc(dateTime(state.focusTimeMs))}</strong><br><span id="mlaDossierFocusPosition">Position ${fmt(state.focusPointIndex + 1)} of ${fmt(paths.decoded[index].length)} · ${fmt(paths.decoded[index][state.focusPointIndex][0], 2)}°N, ${fmt(paths.decoded[index][state.focusPointIndex][1], 2)}°E · ${pointIsObserved(index, state.focusPointIndex) ? 'observed centre' : 'interpolated centre'}</span></p></div>`
-			: '';
 		const analogues = closestAnalogues(index, 5);
 		node.innerHTML = `
 			<div class="mla-dossier-head"><div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			<p class="mla-dossier-empty">Peak class is ERA5-derived and uses IMD-equivalent wind thresholds. CS means Cyclonic Storm, not Saffir–Simpson Category 1 or an official agency classification.</p>
-			${focusedHour}
-			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" title="track, intensity and impact analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
+			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" data-keep-map="true" title="track, intensity and impact analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
 			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download track points</button></div>
 			`;
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
@@ -2912,7 +2902,7 @@
 		const summary = `${fmt(hours.length)} hourly positions · ${definition.title} ${fmt(Math.min(...linePoints.map(point => point.value)), 1)}–${fmt(Math.max(...linePoints.map(point => point.value)), 1)} ${definition.unit} · peak 24 h rain ${fmt(Math.max(...rainPoints.map(point => point.value)), 1)} mm.`;
 		const readout = $('#mlaLifeReadout');
 		readout.textContent = summary;
-		function showPoint(event) {
+		function pointIndexFromEvent(event) {
 			const rectangle = canvas.getBoundingClientRect();
 			const targetHour = xMin + clamp((event.clientX - rectangle.left - padding.left) / Math.max(1, rectangle.width - padding.left - padding.right), 0, 1) * (xMax - xMin);
 			let low = 0;
@@ -2921,13 +2911,43 @@
 				const middle = Math.floor((low + high) / 2);
 				if (hours[middle] < targetHour) low = middle + 1; else high = middle;
 			}
-			const index = low > 0 && Math.abs(hours[low - 1] - targetHour) < Math.abs(hours[low] - targetHour) ? low - 1 : low;
+			return low > 0 && Math.abs(hours[low - 1] - targetHour) < Math.abs(hours[low] - targetHour) ? low - 1 : low;
+		}
+		function showPoint(event) {
+			const index = pointIndexFromEvent(event);
 			readout.textContent = `${timeLabel(hours[index])} from genesis · ${definition.title} ${fmt(lineSeries.values[index], 1)} ${definition.unit} · 24 h rain ${fmt(rainSeries.values[index], 1)} mm.`;
 		}
-		canvas.onpointermove = showPoint;
-		canvas.onpointerdown = showPoint;
-		canvas.onpointerleave = () => { readout.textContent = summary; };
-		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars for ${systemLabel(trackIndex)}${Number.isFinite(sliderHour) ? `; dashed slider-time marker at ${timeLabel(sliderHour)} from genesis` : ''}`);
+		function scrubPoint(event) {
+			const index = pointIndexFromEvent(event);
+			showPoint(event);
+			setTrackPointFocus(trackIndex, index, {activateWeather: false, noSeek: true, noUrl: true});
+			scheduleSliderWeather();
+		}
+		canvas.onpointermove = event => { if (evolutionChartDragging) scrubPoint(event); else showPoint(event); };
+		canvas.onpointerdown = event => {
+			evolutionChartDragging = true;
+			canvas.setPointerCapture(event.pointerId);
+			scrubPoint(event);
+		};
+		canvas.onpointerup = event => {
+			if (!evolutionChartDragging) return;
+			scrubPoint(event);
+			evolutionChartDragging = false;
+			if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+			commitTrackHourSlider();
+		};
+		canvas.onpointercancel = () => { evolutionChartDragging = false; };
+		canvas.onpointerleave = () => { if (!evolutionChartDragging) readout.textContent = summary; };
+		canvas.onkeydown = event => {
+			if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
+			event.preventDefault();
+			let index = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
+			if (event.key === 'Home') index = 0;
+			else if (event.key === 'End') index = hours.length - 1;
+			else index += (['ArrowRight', 'PageDown'].includes(event.key) ? 1 : -1) * (event.key.startsWith('Page') ? 8 : 1);
+			setTrackPointFocus(trackIndex, clamp(index, 0, hours.length - 1), {activateWeather: false});
+		};
+		canvas.setAttribute('aria-label', `${definition.title} line with 24-hour rainfall bars for ${systemLabel(trackIndex)}${Number.isFinite(sliderHour) ? `; dashed slider-time marker at ${timeLabel(sliderHour)} from genesis` : ''}; drag the marker or use arrow keys to change time`);
 		return {hours, lineValues: lineSeries.values, rainValues: rainSeries.values, summary};
 	}
 
