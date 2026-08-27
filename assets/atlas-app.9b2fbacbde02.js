@@ -459,12 +459,11 @@
 
 	function closestAnalogues(index, count) {
 		const features = buildAnalogueShapeFeatures();
-		const candidates = state.active.length > count ? state.active : CORE.tracks.map((_, candidate) => candidate);
 		const source = track(index);
-		const sourceMonth = new Date(Number(source[T.start_ms])).getUTCMonth() + 1;
 		const distances = [];
-		for (const candidate of candidates) {
-			if (candidate === index) continue;
+		for (let candidate = 0; candidate < CORE.tracks.length; candidate += 1) {
+			const comparison = track(candidate);
+			if (candidate === index || comparison[T.start_year] === source[T.start_year]) continue;
 			let shapeDistance = 0;
 			for (let sample = 0; sample < 9; sample += 1) {
 				const lonA = features[index * 18 + sample * 2], latA = features[index * 18 + sample * 2 + 1];
@@ -472,19 +471,32 @@
 				const dx = (lonA - lonB) * Math.cos((latA + latB) * Math.PI / 360), dy = latA - latB;
 				shapeDistance += (dx * dx + dy * dy) / 100;
 			}
-			const comparison = track(candidate);
-			const candidateMonth = new Date(Number(comparison[T.start_ms])).getUTCMonth() + 1;
-			const monthDifference = Math.min(Math.abs(sourceMonth - candidateMonth), 12 - Math.abs(sourceMonth - candidateMonth));
 			const durationDifference = Math.log(Math.max(1, Number(source[T.duration_hours])) / Math.max(1, Number(comparison[T.duration_hours])));
+			const pathDifference = Math.log(Math.max(10, Number(source[T.distance_km])) / Math.max(10, Number(comparison[T.distance_km])));
+			const intensityDistance = ['pct_deficit', 'pct_vort', 'pct_wind', 'pct_mslp_depth'].reduce((sum, field) => sum + ((Number(source[T[field]]) - Number(comparison[T[field]])) / 30) ** 2, 0) / 4;
+			const precipitationDifference = (Number(source[T.pct_precip]) - Number(comparison[T.pct_precip])) / 35;
+			const rainDaysDifference = Math.log(Math.max(1, Number(source[T.rain_days])) / Math.max(1, Number(comparison[T.rain_days])));
+			const stateRainDifference = Math.log(Math.max(1, Number(source[T.top_state_mean_x10])) / Math.max(1, Number(comparison[T.top_state_mean_x10])));
+			const impactRegionPenalty = source[T.top_state_idx] === comparison[T.top_state_idx] ? 0 : 1;
 			let distance = shapeDistance / 9
-				+ .35 * (monthDifference / 3) ** 2
-				+ .35 * durationDifference ** 2
-				+ .25 * ((Number(source[T.pct_deficit]) - Number(comparison[T.pct_deficit])) / 40) ** 2
-				+ .18 * ((Number(source[T.pct_precip]) - Number(comparison[T.pct_precip])) / 40) ** 2;
+				+ .40 * intensityDistance
+				+ .16 * durationDifference ** 2
+				+ .16 * pathDifference ** 2
+				+ .22 * precipitationDifference ** 2
+				+ .10 * rainDaysDifference ** 2
+				+ .08 * stateRainDifference ** 2
+				+ .06 * impactRegionPenalty;
 			distances.push([candidate, Math.sqrt(distance)]);
 		}
 		distances.sort((first, second) => first[1] - second[1] || Number(atlasId(first[0])) - Number(atlasId(second[0])));
-		return distances.slice(0, count);
+		const analogues = [], years = new Set();
+		for (const match of distances) {
+			const year = track(match[0])[T.start_year];
+			if (years.has(year)) continue;
+			years.add(year); analogues.push(match);
+			if (analogues.length === count) break;
+		}
+		return analogues;
 	}
 
 	function buildDensityCells(cellSize, bounds, months) {
@@ -2603,8 +2615,8 @@
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			<p class="mla-dossier-empty">Peak class is ERA5-derived and uses IMD-equivalent wind thresholds. CS means Cyclonic Storm, not Saffir–Simpson Category 1 or an official agency classification.</p>
 			${focusedHour}
-			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" title="standardised analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
-			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download fixes</button></div>
+			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" title="track, intensity and impact analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
+			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download track points</button></div>
 			`;
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
@@ -3231,8 +3243,8 @@
 		mslp: {label: 'Minimum MSLP', unit: 'hPa', decimals: 1, value: index => track(index)[T.min_mslp_x10] / 10, descending: false},
 		q850: {label: 'q850', unit: 'g kg⁻¹', decimals: 1, value: index => track(index)[T.peak_q850_x10] / 10, descending: true},
 		rh850: {label: 'RH850', unit: '%', decimals: 1, value: index => track(index)[T.peak_rh850_x10] / 10, descending: true},
-		observedPositions: {label: 'Observed positions', unit: 'fixes', decimals: 0, value: index => track(index)[T.observed_positions], descending: true, note: 'Detector-supported hourly positions only'},
-		qualifyingPositions: {label: 'Mature detections', unit: 'fixes', decimals: 0, value: index => track(index)[T.qualifying_positions], descending: true, note: 'Positions passing the mature-physics gate'},
+		observedPositions: {label: 'Observed positions', unit: 'track points', decimals: 0, value: index => track(index)[T.observed_positions], descending: true, note: 'Detector-supported hourly positions only'},
+		qualifyingPositions: {label: 'Mature detections', unit: 'track points', decimals: 0, value: index => track(index)[T.qualifying_positions], descending: true, note: 'Positions passing the mature-physics gate'},
 		lowestCoverage: {label: 'Observed coverage', unit: '%', decimals: 0, value: index => CORE.qc[index][Q.coverage_pct], descending: false, note: 'Lowest detector-observed fraction of the hourly event span'},
 		posteriorShare: {label: 'Posterior-position share', unit: '%', decimals: 1, value: index => track(index)[T.posterior_fraction_x1000] / 10, descending: true, note: 'Supported interpolated centres as a fraction of hourly positions'},
 		missingRun: {label: 'Longest supported missing run', unit: 'h', decimals: 0, value: index => track(index)[T.max_missing_run_hours], descending: true, note: 'Longest consecutive run without an observed detector fix'},
@@ -3463,7 +3475,7 @@
 
 	async function downloadSelectedFixes() {
 		if (state.selected == null) { toast('Select a system first'); return; }
-		await ensureDetail('Opening selected-track fixes…');
+		await ensureDetail('Opening selected track points…');
 		const index = state.selected;
 		const row = track(index);
 		const series = DETAIL.series[index];
@@ -3492,7 +3504,7 @@
 			];
 		});
 		const csv = [headers.map(csvCell).join(','), ...rows.map(values => values.map(csvCell).join(','))].join('\n');
-		downloadBlob(`monsoon-low-atlas-track-${atlasId(index)}-fixes.csv`, csv, 'text/csv;charset=utf-8');
+		downloadBlob(`monsoon-low-atlas-track-${atlasId(index)}-track-points.csv`, csv, 'text/csv;charset=utf-8');
 		toast(`Exported ${fmt(rows.length)} hourly positions`);
 	}
 
