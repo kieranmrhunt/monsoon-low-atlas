@@ -1,0 +1,27 @@
+{
+  "schema": "lps-v5.5-release-completion-audit-v1",
+  "status": "pass",
+  "completed_at_utc": "2026-08-27T20:04:35+00:00",
+  "catalogue": {
+    "rows": 287773,
+    "events": 1678,
+    "observed_rows": 244113,
+    "posterior_rows": 43660,
+    "sha256": "65e69f71587539967192be0c0f539c843cde3d9819950642d7331e2b336fde73",
+    "schema_columns": 56
+  },
+  "checks": {
+    "all_positions_present": true,
+    "all_required_physics_present": true,
+    "every_event_has_complete_hourly_axis": true,
+    "one_row_per_event_time": true,
+    "event_identity_matches_track_identity": true,
+    "maximum_hourly_speed_within_20_ms": true,
+    "maximum_observed_centre_residual_within_125_km": true,
+    "upstream_final_release_qa_passed": true,
+    "public_schema_excludes_internal_identity_provenance": true,
+    "public_schema_is_exact_allowlisted_projection": true,
+    "csv_and_parquet_schema_and_row_count_match": true,
+    "public_package_contains_only_csv_gz_and_parquet": true
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "lps-v5.5-atlas-release-qa-v1",
+  "status": "pass",
+  "completed_at_utc": "2026-08-27T20:03:43.833811+00:00",
+  "source_qa_sha256": "f73336abb9046aa6af8b3f63c4357fc819c8aa87b627891a3967d43ee4e70667",
+  "checks": {
+    "no_duplicate_event_time_rows": true,
+    "every_event_hourly_complete": true,
+    "all_physics_complete": true,
+    "wind_metric_complete": true,
+    "published_speed_at_most_20ms": true,
+    "observed_centre_residual_at_most_125km": true,
+    "all_2025_source_months_present": true,
+    "gulab_shaheen_one_complete_lifecycle": true,
+    "september_2025_lobe_switch_reconciled": true,
+    "development_primary_frequency_pass": true,
+    "locked_validation_primary_frequency_pass": true,
+    "full_2015_2025_primary_frequency_pass": true,
+    "full_2015_2025_exact_frequency_pass": true,
+    "year_2025_matches_19_event_ledger": true
+  },
+  "statistics": {
+    "rows": 287773,
+    "events": 1678,
+    "observed_rows": 244113,
+    "minimum_time": "1940-05-17 01:00:00",
+    "maximum_time": "2025-12-03 10:00:00"
+  },
+  "frequency_2015_2025_per_year": {
+    "catalogue": {
+      "total": 13.818181818181818,
+      "low_type": 9.454545454545455,
+      "depression_or_stronger": 4.363636363636363,
+      "depression": 2.090909090909091,
+      "deep_depression": 1.5454545454545454,
+      "cyclonic_storm_or_stronger": 0.7272727272727273
+    },
+    "imd": {
+      "total": 13.545454545454545,
+      "low_type": 8.909090909090908,
+      "depression_or_stronger": 4.636363636363637,
+      "depression": 2.3636363636363638,
+      "deep_depression": 1.4545454545454546,
+      "cyclonic_storm_or_stronger": 0.8181818181818182
+    }
+  }
+}

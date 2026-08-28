@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""Build compact browser assets from the LPS v5.4.2 catalogue."""
+"""Build compact browser assets from a validated LPS v5 catalogue."""
 
 from __future__ import annotations
 
 import argparse
 import base64
+import calendar
 import gzip
 import hashlib
 import json
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+from scipy import sparse
+from shapely.geometry import Polygon, box
+from shapely.ops import unary_union
 
 
 TRACK_FIELDS = [
@@ -67,26 +72,20 @@ SERIES_FIELDS = [
     "category",
 ]
 
-PARQUET_COLUMNS = [
+BASE_PARQUET_COLUMNS = [
     "track_id",
-    "event_id",
-    "continuity_parent_track_id",
-    "continuity_segment_number",
     "time",
     "lon",
     "lat",
     "position_source",
-    "candidate_diagnostics_available",
     "imd_category",
     "max_vort_smoothed",
     "precip_24hr",
-    "max_wind",
     "min_mslp",
     "pressure_deficit_hpa",
     "q850_mean_gkg",
     "rh850_mean_pct",
     "t850_mean_k",
-    "passes_mature_physics",
 ]
 
 
@@ -100,9 +99,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--protocol-amendment", required=True, type=Path)
     parser.add_argument("--template-core", required=True, type=Path)
     parser.add_argument("--ibtracs-crosswalk", type=Path)
-    parser.add_argument("--rainfall-data", required=True, type=Path)
+    parser.add_argument(
+        "--selection-table",
+        type=Path,
+        help="Optional internal event-level selection table used only for the atlas's aggregated qualifying-position diagnostic",
+    )
+    rainfall = parser.add_mutually_exclusive_group(required=True)
+    rainfall.add_argument("--rainfall-data", type=Path)
+    rainfall.add_argument("--rainfall-grd-dir", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser.parse_args()
+
+
+def catalogue_version(path: Path, metadata: dict) -> tuple[str, str]:
+    raw = str(metadata.get("version", "")).strip().removeprefix("v")
+    if not raw:
+        match = re.search(r"lps_v(\d+(?:\.\d+)+)", path.name)
+        if not match:
+            raise ValueError("Cannot infer catalogue version")
+        raw = match.group(1)
+    return raw, f"v{raw}"
 
 
 def sha256(path: Path) -> str:
@@ -209,6 +225,136 @@ def state_jjas_climatology(
         pooled = np.concatenate(chunks) if chunks else np.array([], dtype=float)
         climatology.append(int(round(float(np.mean(pooled)))) if len(pooled) else -1)
     return climatology, coverage
+
+
+def state_geometry(item: dict):
+    polygons = []
+    for ring in item.get("rings", []):
+        if len(ring) < 4:
+            continue
+        polygon = Polygon(ring)
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        if not polygon.is_empty:
+            polygons.append(polygon)
+    if not polygons:
+        raise ValueError(f"No usable rings for state {item.get('id')}")
+    return unary_union(polygons)
+
+
+def state_grid_weights(template: dict) -> tuple[sparse.csr_matrix, list[bool]]:
+    """Area-fraction weights for the native 0.25-degree IMD rainfall grid."""
+    latitudes = np.arange(6.5, 38.5 + 0.001, 0.25)
+    longitudes = np.arange(66.5, 100.0 + 0.001, 0.25)
+    state_items = {item["id"]: item for item in template["geo"]["states"]}
+    rows: list[int] = []
+    columns: list[int] = []
+    values: list[float] = []
+    available: list[bool] = []
+    template_available = template.get("state_available", [True] * len(template["state_slugs"]))
+    for state_index, (slug, expected_available) in enumerate(
+        zip(template["state_slugs"], template_available)
+    ):
+        if not expected_available:
+            available.append(False)
+            continue
+        geometry = state_geometry(state_items[slug])
+        west, south, east, north = geometry.bounds
+        lon_indexes = np.flatnonzero(
+            (longitudes + 0.125 >= west) & (longitudes - 0.125 <= east)
+        )
+        lat_indexes = np.flatnonzero(
+            (latitudes + 0.125 >= south) & (latitudes - 0.125 <= north)
+        )
+        for lat_index in lat_indexes:
+            latitude = float(latitudes[lat_index])
+            for lon_index in lon_indexes:
+                longitude = float(longitudes[lon_index])
+                cell = box(
+                    longitude - 0.125,
+                    latitude - 0.125,
+                    longitude + 0.125,
+                    latitude + 0.125,
+                )
+                overlap = geometry.intersection(cell).area / cell.area
+                if overlap <= 0:
+                    continue
+                rows.append(state_index)
+                columns.append(int(lat_index * len(longitudes) + lon_index))
+                values.append(float(overlap * math.cos(math.radians(latitude))))
+        has_cells = any(row == state_index for row in rows)
+        if not has_cells:
+            raise ValueError(f"No IMD grid-cell overlap for state {slug}")
+        available.append(True)
+    matrix = sparse.csr_matrix(
+        (values, (rows, columns)),
+        shape=(len(template["state_slugs"]), len(latitudes) * len(longitudes)),
+        dtype=np.float64,
+    )
+    return matrix, available
+
+
+def state_rainfall_from_grd(
+    directory: Path,
+    template: dict,
+    coverage_start: int = 1940,
+    coverage_end: int = 2025,
+) -> tuple[list[dict[int, np.ndarray]], list[bool], list[int], list[int], str]:
+    """Read the local IMD archive and return daily state means in 0.1 mm."""
+    weights, available = state_grid_weights(template)
+    state_series: list[dict[int, np.ndarray]] = [dict() for unused in template["state_slugs"]]
+    climatology_total = np.zeros(len(state_series), dtype=np.float64)
+    climatology_count = np.zeros(len(state_series), dtype=np.int64)
+    archive_digest = hashlib.sha256()
+    for year in range(1901, coverage_end + 1):
+        path = directory / f"{year}.grd"
+        raw = path.read_bytes()
+        days = 366 if calendar.isleap(year) else 365
+        expected_values = days * 135 * 129
+        values = np.frombuffer(raw, dtype="<f4")
+        if len(values) != expected_values:
+            raise ValueError(
+                f"Unexpected IMD grid size for {year}: {len(values)} != {expected_values}"
+            )
+        archive_digest.update(f"{year}:".encode("ascii"))
+        archive_digest.update(hashlib.sha256(raw).digest())
+        rainfall = values.reshape(days, 135, 129).transpose(0, 2, 1).reshape(days, -1)
+        valid = np.isfinite(rainfall) & (rainfall >= 0)
+        numerator = weights @ np.where(valid, rainfall, 0.0).T
+        denominator = weights @ valid.astype(np.float32).T
+        means = np.divide(
+            np.asarray(numerator, dtype=float),
+            np.asarray(denominator, dtype=float),
+            out=np.full((len(state_series), days), np.nan, dtype=float),
+            where=np.asarray(denominator) > 0,
+        )
+        first = datetime(year, 6, 1).timetuple().tm_yday - 1
+        last = datetime(year, 9, 30).timetuple().tm_yday
+        season = means[:, first:last]
+        finite_season = np.isfinite(season)
+        climatology_total += np.nansum(season, axis=1)
+        climatology_count += finite_season.sum(axis=1)
+        if coverage_start <= year <= coverage_end:
+            for state_index, is_available in enumerate(available):
+                if is_available:
+                    state_series[state_index][year] = means[state_index] * 10.0
+    climatology = np.divide(
+        climatology_total,
+        climatology_count,
+        out=np.full(len(state_series), np.nan),
+        where=climatology_count > 0,
+    )
+    climatology_x10 = [
+        int(round(value * 10.0)) if math.isfinite(value) else -1
+        for value in climatology
+    ]
+    return (
+        state_series,
+        available,
+        climatology_x10,
+        [1901, coverage_end],
+        archive_digest.hexdigest(),
+    )
 
 
 def mean_state_rainfall(
@@ -343,15 +489,30 @@ def main() -> None:
     completion_audit = json.loads(args.completion_audit.read_text(encoding="utf-8"))
     protocol_amendment = json.loads(args.protocol_amendment.read_text(encoding="utf-8"))
     template = read_gzip_json(args.template_core)
-    rainfall = read_dashboard_data(args.rainfall_data)
-    rainfall_series, state_available = state_rainfall_series(
-        rainfall,
-        template["state_slugs"],
-    )
-    state_jjas_mean_x10, state_jjas_coverage = state_jjas_climatology(
-        rainfall,
-        template["state_slugs"],
-    )
+    version, version_tag = catalogue_version(args.parquet, metadata)
+    if args.rainfall_data:
+        rainfall = read_dashboard_data(args.rainfall_data)
+        rainfall_series, state_available = state_rainfall_series(
+            rainfall,
+            template["state_slugs"],
+        )
+        state_jjas_mean_x10, state_jjas_coverage = state_jjas_climatology(
+            rainfall,
+            template["state_slugs"],
+        )
+        rainfall_source = rainfall["meta"]["source"]
+        rainfall_baseline = rainfall["meta"]["baseline"]
+        rainfall_input_sha = sha256(args.rainfall_data)
+    else:
+        (
+            rainfall_series,
+            state_available,
+            state_jjas_mean_x10,
+            state_jjas_coverage,
+            rainfall_input_sha,
+        ) = state_rainfall_from_grd(args.rainfall_grd_dir, template)
+        rainfall_source = "India Meteorological Department 0.25-degree daily gridded rainfall"
+        rainfall_baseline = "All available daily grids, 1901-2025"
     ibtracs = (
         json.loads(args.ibtracs_crosswalk.read_text(encoding="utf-8"))
         if args.ibtracs_crosswalk
@@ -359,17 +520,17 @@ def main() -> None:
     )
     if ibtracs and ibtracs.get("schema") != "lps-ibtracs-v04r01-crosswalk-v1":
         raise ValueError("Unsupported IBTrACS crosswalk schema")
-    if ibtracs and ibtracs.get("catalogue_version") != "v5.4.2":
-        raise ValueError("IBTrACS crosswalk does not match the v5.4.2 catalogue")
-    if release.get("schema") != "lps-v5.4.2-release-manifest-v1":
+    if ibtracs and ibtracs.get("catalogue_version") != version_tag:
+        raise ValueError(f"IBTrACS crosswalk does not match the {version_tag} catalogue")
+    if release.get("schema") != f"lps-{version_tag}-release-manifest-v1":
         raise ValueError("Unsupported release manifest")
-    if metadata.get("version") != "5.4.2" or qa_release.get("status") != "pass":
-        raise ValueError("v5.4.2 metadata or final QA does not report a passing release")
+    if str(metadata.get("version", "")).removeprefix("v") != version or qa_release.get("status") != "pass":
+        raise ValueError(f"{version_tag} metadata or final QA does not report a passing release")
     if not metadata.get("qa", {}).get("all_release_gates_passed"):
-        raise ValueError("v5.4.2 metadata does not report all release gates passing")
+        raise ValueError(f"{version_tag} metadata does not report all release gates passing")
     if completion_audit.get("status") != "pass":
-        raise ValueError("v5.4.2 completion audit does not report a passing release")
-    if (
+        raise ValueError(f"{version_tag} completion audit does not report a passing release")
+    if version_tag == "v5.4.2" and (
         protocol_amendment.get("scientific_change") is not False
         or protocol_amendment.get("catalogue_changed") is not False
     ):
@@ -378,10 +539,63 @@ def main() -> None:
     if source_sha != release["catalogue"]["sha256"] or source_sha != metadata["sha256"]:
         raise ValueError("Parquet SHA-256 does not match the release documents")
 
-    table = pq.read_table(args.parquet, columns=PARQUET_COLUMNS)
+    schema_names = set(pq.ParquetFile(args.parquet).schema_arrow.names)
+    wind_field = (
+        "p95_anomaly_wind_125km_ms"
+        if "p95_anomaly_wind_125km_ms" in schema_names
+        else "max_wind"
+    )
+    event_category_field = (
+        "event_peak_imd_category"
+        if "event_peak_imd_category" in schema_names
+        else "imd_category"
+    )
+    qualifying_field = None
+    if "v55_release_domain_qualifying_positions" in schema_names:
+        qualifying_field = "v55_release_domain_qualifying_positions"
+    elif "passes_mature_physics" in schema_names:
+        qualifying_field = "passes_mature_physics"
+    columns = list(BASE_PARQUET_COLUMNS)
+    for column in (wind_field, event_category_field, qualifying_field):
+        if column is not None and column not in columns:
+            columns.append(column)
+    table = pq.read_table(args.parquet, columns=columns)
     data = table.to_pandas()
+    # v5.5's public table intentionally has one event identifier and exposes no
+    # tracker-audit Boolean.  The aliases below are in-memory compatibility
+    # columns for the shared v5.4.2/v5.5 asset builder only.
+    data["event_id"] = data["track_id"]
+    data["continuity_parent_track_id"] = data["track_id"]
+    data["continuity_segment_number"] = 0
+    data["candidate_diagnostics_available"] = data["position_source"].eq("observed")
+    if qualifying_field is None and args.selection_table is not None:
+        selection_names = set(pq.ParquetFile(args.selection_table).schema_arrow.names)
+        selection_columns = ["track_id", "release_domain_qualifying_positions"]
+        if "core_selected" in selection_names:
+            selection_columns.append("core_selected")
+        selection = pq.read_table(
+            args.selection_table,
+            columns=selection_columns,
+        ).to_pandas()
+        if "core_selected" in selection:
+            selection = selection.loc[selection["core_selected"].astype(bool)].copy()
+        if selection["track_id"].duplicated().any():
+            raise ValueError("Selection table has duplicate event identifiers")
+        if set(selection["track_id"]) != set(data["track_id"]):
+            raise ValueError("Selection table event identifiers differ from the public catalogue")
+        qualifying_field = "v55_release_domain_qualifying_positions"
+        qualifying = selection.set_index("track_id")[
+            "release_domain_qualifying_positions"
+        ]
+        data[qualifying_field] = data["track_id"].map(qualifying)
+    data["atlas_wind"] = pd.to_numeric(data[wind_field], errors="coerce")
+    data["atlas_event_category"] = pd.to_numeric(data[event_category_field], errors="coerce")
     data["time"] = pd.to_datetime(data["time"], utc=True)
     data.sort_values(["continuity_parent_track_id", "time", "track_id"], kind="mergesort", inplace=True)
+    if event_category_field == "imd_category":
+        data["atlas_event_category"] = data.groupby(
+            "continuity_parent_track_id", sort=False
+        )["imd_category"].transform("max")
     data["month"] = data["time"].dt.month
 
     expected = release["catalogue"]
@@ -395,7 +609,7 @@ def main() -> None:
         data["track_id"].eq(data["continuity_parent_track_id"])
         & data["track_id"].eq(data["event_id"])
     ).all():
-        raise ValueError("v5.4.2 physical-event identities are not aligned")
+        raise ValueError(f"{version_tag} physical-event identities are not aligned")
     if data.duplicated(["track_id", "time"]).any():
         raise ValueError("Duplicate publication-segment/time rows found")
     if data.duplicated(["continuity_parent_track_id", "time"]).any():
@@ -412,7 +626,7 @@ def main() -> None:
     physics = [
         "max_vort_smoothed",
         "precip_24hr",
-        "max_wind",
+        "atlas_wind",
         "min_mslp",
         "pressure_deficit_hpa",
         "q850_mean_gkg",
@@ -425,6 +639,8 @@ def main() -> None:
         raise ValueError("Observed rows are missing the persistent IMD-equivalent class")
     if data.loc[~diagnostics, "imd_category"].notna().any():
         raise ValueError("Interpolated rows unexpectedly carry an observed-support class")
+    if data["atlas_event_category"].isna().any():
+        raise ValueError("Rows are missing the event peak intensity category")
     groups = {
         int(parent_id): group.copy()
         for parent_id, group in data.groupby("continuity_parent_track_id", sort=False)
@@ -470,7 +686,7 @@ def main() -> None:
 
         metrics = {
             "vort": float(group["max_vort_smoothed"].max()),
-            "wind": float(group["max_wind"].max()),
+            "wind": float(group["atlas_wind"].max()),
             "deficit": float(group["pressure_deficit_hpa"].max()),
             "mslp": float(group["min_mslp"].min()),
             "precip": float(group["precip_24hr"].max()),
@@ -499,8 +715,14 @@ def main() -> None:
                 "max_gap_hours": float(np.nanmax(step_hours)) if len(step_hours) else 0,
                 "segment_count": int(group["track_id"].nunique()),
                 "observed_positions": int(observed_mask.sum()),
-                "qualifying_positions": int(
-                    group.loc[observed_mask, "passes_mature_physics"].fillna(0).gt(0).sum()
+                "qualifying_positions": (
+                    int(round(float(group[qualifying_field].iloc[0])))
+                    if qualifying_field == "v55_release_domain_qualifying_positions"
+                    else int(
+                        group.loc[observed_mask, qualifying_field].fillna(0).gt(0).sum()
+                    )
+                    if qualifying_field is not None
+                    else int(observed_mask.sum())
                 ),
                 "posterior_fraction": float((~observed_mask).mean()),
                 "occupancy_fraction": float(observed_mask.mean()),
@@ -542,7 +764,7 @@ def main() -> None:
         for month in sorted(set(int(value) for value in group["month"])):
             month_mask |= 1 << (month - 1)
 
-        category_raw = int(round(finite(cached["observed"]["imd_category"].max(), 1)))
+        category_raw = int(round(finite(group["atlas_event_category"].iloc[0], 1)))
         category = min(6, max(1, category_raw))
         occupancy = cached["occupancy_fraction"]
         posterior_fraction = cached["posterior_fraction"]
@@ -646,7 +868,7 @@ def main() -> None:
             [
                 month_of_peak(group, "precip_24hr"),
                 month_of_peak(group, "max_vort_smoothed"),
-                month_of_peak(group, "max_wind"),
+                month_of_peak(group, "atlas_wind"),
                 month_of_peak(group, "min_mslp", minimum=True),
                 month_of_peak(group, "pressure_deficit_hpa"),
             ]
@@ -660,7 +882,7 @@ def main() -> None:
                 hours,
                 scaled_series(group["precip_24hr"], 10),
                 scaled_series(group["max_vort_smoothed"], 10),
-                scaled_series(group["max_wind"], 10),
+                scaled_series(group["atlas_wind"], 10),
                 scaled_series(group["min_mslp"], 10),
                 scaled_series(group["pressure_deficit_hpa"], 10),
                 scaled_series(group["q850_mean_gkg"], 10),
@@ -688,6 +910,7 @@ def main() -> None:
     coverage_start = data["time"].min().isoformat().replace("+00:00", "Z")
     coverage_end = data["time"].max().isoformat().replace("+00:00", "Z")
     built_utc = datetime.now(timezone.utc).isoformat()
+    release_stem = f"lps-{version_tag}-era5-1940-2025-core"
     crosswalk: list[dict | None] = []
     matched_sids: set[str] = set()
     for row in tracks:
@@ -703,7 +926,7 @@ def main() -> None:
     }
     core = {
         "meta": {
-            "title": "LPS v5.4.2 ERA5 South Asian low-pressure-system catalogue",
+            "title": f"LPS {version_tag} ERA5 South Asian low-pressure-system catalogue",
             "rows": int(len(data)),
             "observed_rows": int(diagnostics.sum()),
             "posterior_rows": int((~diagnostics).sum()),
@@ -719,11 +942,11 @@ def main() -> None:
             "lat_min": round(float(data["lat"].min()), 4),
             "lat_max": round(float(data["lat"].max()), 4),
             "row_grain": "One row per hourly physical-event position/time: observed detector fix or supported interpolated centre.",
-            "identity_grain": "track_id is one hourly-complete physical event; event_id and continuity_parent_track_id are identical aliases.",
-            "source_dataset": "ERA5-derived LPS v5.4.2 catalogue",
-            "catalogue_version": "v5.4.2",
+            "identity_grain": "track_id is one hourly-complete physical event and the only identifier in the public files.",
+            "source_dataset": f"ERA5-derived LPS {version_tag} catalogue",
+            "catalogue_version": version_tag,
             "schema": release["schema"],
-            "atlas_version": "3.5.0",
+            "atlas_version": version_tag,
             "built_utc": built_utc,
             "catalogue_completed_utc": release["publication"]["published_on"],
             "default_complete_end_year": 2025,
@@ -735,12 +958,12 @@ def main() -> None:
             "protocol_amendment_sha256": sha256(args.protocol_amendment),
             "sources": {
                 "live_atlas": "https://kieranmrhunt.github.io/monsoon-low-atlas/",
-                "release_summary": "data/lps-v5.4.2-era5-1940-2025-core.release-manifest.json",
-                "metadata": "data/lps-v5.4.2-era5-1940-2025-core.metadata.json",
-                "qa": "data/lps-v5.4.2-era5-1940-2025-core.qa.json",
-                "completion_audit": "data/lps-v5.4.2-era5-1940-2025-core.completion-audit.json",
-                "protocol_amendment": "data/lps-v5.4.2-era5-1940-2025-core.protocol-amendment-5.json",
-                "quality_report": "data/lps-v5.4.2-era5-1940-2025-core.quality-report.md",
+                "release_summary": f"data/{release_stem}.release-manifest.json",
+                "metadata": f"data/{release_stem}.metadata.json",
+                "qa": f"data/{release_stem}.qa.json",
+                "completion_audit": f"data/{release_stem}.completion-audit.json",
+                "protocol_amendment": f"data/{release_stem}.calibration-protocol.json",
+                "quality_report": f"data/{release_stem}.quality-report.md",
                 "ibtracs": "https://www.ncei.noaa.gov/products/international-best-track-archive",
                 "state_rainfall": "https://kieranmrhunt.github.io/imd-rainfall-dashboard/",
             },
@@ -781,11 +1004,11 @@ def main() -> None:
         "state_mean_x10": state_mean_rows,
         "state_pct": state_percentiles.tolist(),
         "state_rainfall": {
-            "source": rainfall["meta"]["source"],
+            "source": rainfall_source,
             "units": "mm day-1",
             "statistic": "Area-mean daily rainfall averaged over UTC calendar days touched by each LPS physical event.",
             "coverage": [1940, 2025],
-            "baseline": rainfall["meta"]["baseline"],
+            "baseline": rainfall_baseline,
             "jjas_climatology_x10": state_jjas_mean_x10,
             "jjas_climatology_period": state_jjas_coverage,
             "jjas_climatology_months": [6, 7, 8, 9],
@@ -801,8 +1024,8 @@ def main() -> None:
     detail_name, detail_raw, detail_gzip = dump_hashed(detail, "atlas-detail", args.output_dir)
     manifest = {
         "built_utc": built_utc,
-        "catalogue_version": "v5.4.2",
-        "state_rainfall_sha256": sha256(args.rainfall_data),
+        "catalogue_version": version_tag,
+        "state_rainfall_sha256": rainfall_input_sha,
         "core": core_name,
         "detail": detail_name,
         "core_uncompressed_bytes": core_raw,
@@ -834,9 +1057,12 @@ def main() -> None:
             ),
         },
     }
-    (args.output_dir / "atlas-build-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (args.output_dir / "atlas-build-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
     if manifest["qa"]["publication_splits"] != 0:
-        raise ValueError("v5.4.2 physical events should not contain publication splits")
+        raise ValueError(f"{version_tag} physical events should not contain publication splits")
     if not release["continuity"]["complete_hourly_spans"]:
         raise ValueError("Release manifest does not report complete hourly spans")
     if int(release["continuity"]["non_hourly_steps"]) != 0:

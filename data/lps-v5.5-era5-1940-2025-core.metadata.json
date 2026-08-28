@@ -1,0 +1,41 @@
+{
+  "version": "5.5",
+  "catalogue": "lps_v5.5-era5-1940-2025-core.parquet",
+  "doi": "10.5281/zenodo.22134418",
+  "concept_doi": "10.5281/zenodo.22078693",
+  "description": "ERA5 South Asian low-pressure-system catalogue with hourly-complete physical-event identities, globally calibrated existence rules, and background-removed circulation intensity",
+  "format": "Apache Parquet",
+  "sha256": "65e69f71587539967192be0c0f539c843cde3d9819950642d7331e2b336fde73",
+  "schema_columns": 56,
+  "rows": {
+    "total": 287773,
+    "observed": 244113,
+    "posterior": 43660,
+    "posterior_fraction": 0.1517178543541555
+  },
+  "tracks": {
+    "physical_events": 1678
+  },
+  "time_coverage": {
+    "start": "1940-05-17 01:00:00",
+    "end": "2025-12-03 10:00:00"
+  },
+  "identity": {
+    "track_id": "one hourly-complete physical event and the only public event identifier; use for plotting, counts, matching and climatology"
+  },
+  "calibration": {
+    "existence": "global pressure, vorticity, duration, persistence and trajectory-coherence rules",
+    "intensity": "persistent 95th-percentile background-removed 10-m wind anomaly within 125 km",
+    "authoritative_frequency_reference": "official IMD southwest-monsoon reports for 2015-2025",
+    "historical_mooley_shukla_status": "soft contextual diagnostic only",
+    "precipitation_used": false
+  },
+  "qa": {
+    "all_release_gates_passed": true,
+    "duplicate_track_times": 0,
+    "hourly_step_violations": 0,
+    "required_physics_null_count": 0,
+    "maximum_hourly_speed_ms": 19.9602822148865,
+    "maximum_observed_centre_residual_km": 124.869445910963
+  }
+}

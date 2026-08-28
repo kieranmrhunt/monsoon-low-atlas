@@ -1,0 +1,14 @@
+{
+  "schema": "lps-v5.5-calibration-protocol-pointer-v1",
+  "status": "frozen",
+  "scientific_change": true,
+  "catalogue_changed": true,
+  "source_path": "lps-v5.3-continuity-framework/production/v5.5/CALIBRATION_PROTOCOL.md",
+  "source_sha256": "2c69e871ff97f6b1a9e0b03b63d40ee7976a8b953934d2f0dd0cb50c7c54ef3c",
+  "population": "lifecycle overlaps June-September and at least one observed centre enters 65-100 E, 0-32 N; genesis is not used",
+  "development_years": "2020-2025",
+  "locked_validation_years": "2015-2019",
+  "acceptance_tolerance": "25 percent for total, low-type and depression-or-stronger means in each split",
+  "historical_mooley_shukla_status": "soft contextual diagnostic only",
+  "precipitation_used_for_selection_or_intensity": false
+}

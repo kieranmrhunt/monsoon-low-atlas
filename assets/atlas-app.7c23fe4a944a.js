@@ -65,7 +65,7 @@
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
 		vort: {label: 'vorticity', title: 'Smoothed vorticity', pct: 'pct_vort', raw: 'peak_vort_x10', series: 'vort_smooth_x10', divisor: 10, unit: '10⁻⁵ s⁻¹', colour: '#233f78', direction: 1, peakMonth: 1},
-		wind: {label: 'maximum-wind', title: 'Maximum wind', pct: 'pct_wind', raw: 'peak_wind_x10', series: 'max_wind_x10', divisor: 10, unit: 'm s⁻¹', colour: '#08736f', direction: 1, peakMonth: 2},
+		wind: {label: 'circulation-wind', title: 'Circulation wind', pct: 'pct_wind', raw: 'peak_wind_x10', series: 'max_wind_x10', divisor: 10, unit: 'm s⁻¹', colour: '#08736f', direction: 1, peakMonth: 2},
 		mslp: {label: 'MSLP-depth', title: 'Minimum MSLP', pct: 'pct_mslp_depth', raw: 'min_mslp_x10', series: 'mslp_x10', divisor: 10, unit: 'hPa', colour: '#64224f', direction: -1, peakMonth: 3},
 		rain: {label: 'rainfall', title: '24 h precipitation', pct: 'pct_precip', raw: 'peak_precip_x10', series: 'precip24_x10', divisor: 10, unit: 'mm', colour: '#c3931d', direction: 1, peakMonth: 0},
 		q: {label: 'q850', title: 'q850', raw: 'peak_q850_x10', series: 'q850_x10', divisor: 10, unit: 'g kg⁻¹', colour: '#4360a0', direction: 1},
@@ -2590,7 +2590,7 @@
 			['Duration', durationText(row[T.duration_hours])],
 			['Hourly positions', fmt(row[T.n_rows])],
 			['Pressure deficit', `${fmt(row[T.peak_deficit_x10] / 10, 1)} hPa`],
-			['Maximum wind', `${fmt(row[T.peak_wind_x10] / 10, 1)} m s⁻¹`],
+			['Circulation wind', `${fmt(row[T.peak_wind_x10] / 10, 1)} m s⁻¹`],
 			['Minimum MSLP', `${fmt(row[T.min_mslp_x10] / 10, 1)} hPa`],
 			['Peak 24 h rain', `${fmt(row[T.peak_precip_x10] / 10, 1)} mm`],
 			['Linked path', `${fmt(row[T.distance_km])} km`],
@@ -3164,7 +3164,7 @@
 				fmt(evolution.lineValues[item.index], 2),
 				fmt(evolution.rainValues[item.index], 2)
 			]);
-			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Physics is resampled at each published v5.4.2 centre.');
+			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Physics is resampled at each published v5.5 centre.');
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
@@ -3257,7 +3257,7 @@
 		distance: {label: 'Linked path length', unit: 'km', decimals: 0, value: index => track(index)[T.distance_km], descending: true, note: 'Great-circle distance summed along hourly centres'},
 		meanSpeed: {label: 'Mean translation speed', unit: 'm s⁻¹', decimals: 1, value: index => track(index)[T.distance_km] * 1000 / Math.max(3600, track(index)[T.duration_hours] * 3600), descending: true, note: 'Path length divided by elapsed event duration'},
 		deficit: {label: 'Pressure deficit', unit: 'hPa', decimals: 1, value: index => track(index)[T.peak_deficit_x10] / 10, descending: true},
-		wind: {label: 'Maximum wind', unit: 'm s⁻¹', decimals: 1, value: index => track(index)[T.peak_wind_x10] / 10, descending: true},
+		wind: {label: 'Circulation wind', unit: 'm s⁻¹', decimals: 1, value: index => track(index)[T.peak_wind_x10] / 10, descending: true},
 		rain: {label: '24 h precipitation', unit: 'mm', decimals: 1, value: index => track(index)[T.peak_precip_x10] / 10, descending: true, note: 'Largest trailing 24-hour track-centred diagnostic'},
 		vort: {label: 'Smoothed vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => track(index)[T.peak_vort_x10] / 10, descending: true},
 		mslp: {label: 'Minimum MSLP', unit: 'hPa', decimals: 1, value: index => track(index)[T.min_mslp_x10] / 10, descending: false},
@@ -3481,9 +3481,9 @@
 			url: window.location.href,
 			caveats: [
 				'Atlas-derived IMD-style class is not official IMD grade.',
-				'Every v5.4.2 physical event is continuous at hourly resolution with physics resampled at every published centre.',
+				'Every v5.5 physical event is continuous at hourly resolution with physics resampled at every published centre.',
 				'Cyclone names use credible NOAA IBTrACS v04r01 associations; state means use IMD 0.25-degree daily rainfall over active track dates.',
-				'Interpolated positions meet the published v5.4.2 gap-support contract.'
+				'Interpolated positions meet the published v5.5 gap-support contract.'
 			]
 		};
 	}
@@ -3503,7 +3503,7 @@
 		const interpolated = new Uint8Array(points.length);
 		for (const range of CORE.posterior_runs[index] || []) interpolated.fill(1, Number(range[0]), Number(range[1]) + 1);
 		const valueAt = (field, pointIndex, divisor) => series[S[field]][pointIndex] == null ? '' : series[S[field]][pointIndex] / (divisor || 1);
-		const headers = ['physical_event_id', 'time_utc', 'hours_since_genesis', 'latitude', 'longitude', 'position_source', 'precip_24h_mm', 'vorticity_1e-5_s-1', 'max_wind_ms', 'mslp_hpa', 'pressure_deficit_hpa', 'q850_gkg', 'rh850_pct', 't850_k', 'atlas_class'];
+		const headers = ['physical_event_id', 'time_utc', 'hours_since_genesis', 'latitude', 'longitude', 'position_source', 'precip_24h_mm', 'vorticity_1e-5_s-1', 'circulation_wind_p95_125km_ms', 'mslp_hpa', 'pressure_deficit_hpa', 'q850_gkg', 'rh850_pct', 't850_k', 'atlas_class'];
 		const rows = series[S.hours_since_genesis].map((hour, pointIndex) => {
 			return [
 			atlasId(index),

@@ -1,0 +1,72 @@
+{
+  "schema": "lps-v5.5-release-manifest-v1",
+  "status": "published_release",
+  "catalogue": {
+    "path": "lps-v5.3-continuity-framework/production/v5.5/public-release/lps_v5.5-era5-1940-2025-core.parquet",
+    "sha256": "65e69f71587539967192be0c0f539c843cde3d9819950642d7331e2b336fde73",
+    "bytes": 61169647,
+    "coverage": "1940-2025",
+    "rows": 287773,
+    "observed_rows": 244113,
+    "posterior_rows": 43660,
+    "physical_events": 1678,
+    "schema_columns": 56
+  },
+  "csv": {
+    "path": "lps-v5.3-continuity-framework/production/v5.5/public-release/lps_v5.5-era5-1940-2025-core.csv.gz",
+    "sha256": "2c4df1fbd71d981701ff9ad0de493e3087b328549c91e112ab69d34562ea57dd",
+    "bytes": 87297344
+  },
+  "identity_semantics": {
+    "track_id": "one hourly-complete, globally selected physical event and the only public event identifier",
+    "population": "genesis is not used; an IMD-comparison event is counted once at peak class when an observed centre enters 65-100 E, 0-32 N during June-September"
+  },
+  "continuity": {
+    "complete_hourly_spans": true,
+    "non_hourly_steps": 0,
+    "duplicate_track_times": 0,
+    "maximum_hourly_speed_ms": 19.9602822148865,
+    "maximum_observed_centre_residual_km": 124.869445910963,
+    "selected_reconciled_events": 111
+  },
+  "selection": {
+    "input_physical_events": 7852,
+    "selected_physical_events": 1678,
+    "rejected_physical_events": 6174,
+    "minimum_supported_hours": 12,
+    "minimum_contiguous_supported_hours": 12,
+    "minimum_observed_span_hours": 72,
+    "minimum_observed_positions": 36,
+    "minimum_release_domain_qualifying_positions": 3,
+    "precipitation_used": false
+  },
+  "intensity": {
+    "metric": "95th percentile 10-m wind anomaly within 125 km after subtracting the mean 300-500 km background vector",
+    "persistence_hours": 6,
+    "thresholds_ms": {
+      "depression": 10.864504601961277,
+      "deep_depression": 14.212801616020542,
+      "cyclonic_storm": 18.83486906837853,
+      "severe_cyclonic_storm": 26.590403390652043,
+      "very_severe_or_extremely_severe": 35.45387118753606,
+      "super_cyclonic_storm": 66.47600847663011
+    }
+  },
+  "qa": {
+    "source_path": "lps-v5.3-continuity-framework/production/v5.5/final_qa/final_release_qa.json",
+    "source_sha256": "f73336abb9046aa6af8b3f63c4357fc819c8aa87b627891a3967d43ee4e70667",
+    "status": "pass",
+    "development_primary_frequency_pass": true,
+    "locked_validation_primary_frequency_pass": true,
+    "full_2015_2025_primary_frequency_pass": true,
+    "full_2015_2025_exact_frequency_pass": true
+  },
+  "publication": {
+    "published_on": "2026-08-28",
+    "zenodo_status": "published",
+    "zenodo_record": "https://zenodo.org/records/22134418",
+    "zenodo_doi": "10.5281/zenodo.22134418",
+    "zenodo_concept_doi": "10.5281/zenodo.22078693",
+    "previous_releases_preserved": true
+  }
+}

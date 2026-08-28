@@ -7,8 +7,10 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 ## Scientific conventions
 
 - `track_id` identifies one hourly-complete, strength-qualified physical event and is the atlas grain for plotting, counts, matching, and climatology.
-- `event_id` and `continuity_parent_track_id` are identical aliases of `track_id` in v5.4.2.
+- The public v5.5 files use `track_id` as their single event identifier; internal linker, family and compatibility identifiers are deliberately omitted.
 - Complete ERA5 physics is resampled at every published centre, including supported interpolated positions.
+- v5.5 intensity uses the persistent 95th percentile of the background-removed 10-m wind within 125 km; the mean 300–500 km wind vector is removed before calculating the percentile.
+- Event existence and intensity are calibrated against official IMD southwest-monsoon reports. Precipitation, IBTrACS and genesis location do not select events.
 - Pressure deficit, vorticity, wind, minimum MSLP depth, and 24 h precipitation have independent catalogue-percentile filters that can be combined.
 - Peak classes are persistent ERA5-derived IMD-equivalent classes, not official IMD classifications. In particular, CS means Cyclonic Storm (34–47 kt), not Saffir–Simpson Category 1.
 - Cyclone names come from a physical-event match to NOAA IBTrACS v04r01 NI and WP best tracks. Low-confidence matches remain unnamed.
@@ -30,7 +32,7 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 
 The atlas remains a static GitHub Pages site. Monthly weather videos live on the public JASMIN GWS and are fetched directly by the browser with CORS. Each video frame is one UTC ERA5 hour; the browser seeks to the frame selected by the track-hour slider.
 
-`data/vorticity-active-months.csv` contains the 622 months touched by at least one released event. The Slurm array script renders only those months; its third argument chooses the field:
+`data/vorticity-active-months.csv` contains the 613 months touched by at least one released v5.5 event. The Slurm array script renders only those months; its third argument chooses the field:
 
 ```bash
 sbatch scripts/build_vorticity_videos.slurm data/vorticity-active-months.csv path/to/atlas-weather-v5.4.2-r2 vorticity
@@ -57,7 +59,7 @@ Download the [APCC BSISO index](https://download.apcc21.org/BSISO/BSISO.INDEX.NO
 
 ```bash
 python scripts/build_climate_filter_asset.py \
-  --core assets/atlas-core.14e01a61e44d.json.gz \
+  --core assets/atlas-core.daccb568d55a.json.gz \
   --bsiso path/to/BSISO.INDEX.NORM.LY.data \
   --oni path/to/oni.ascii.txt \
   --output-dir assets
@@ -67,31 +69,33 @@ Set the resulting hashed filename as `climate` in the JSON configuration at the 
 
 ## Full catalogue archive
 
-The Data tab links to the versioned Zenodo dataset through the `zenodo` value in the JSON configuration at the bottom of `index.html`. The Zenodo package contains only the full compressed CSV and typed Parquet catalogue. Its rendered Description carries the construction summary and a grouped one-sentence guide to all 319 columns.
+The Data tab links to the versioned Zenodo dataset through the `zenodo` value in the JSON configuration at the bottom of `index.html`. The Zenodo package contains only the full compressed CSV and typed Parquet catalogue. Its rendered Description carries the construction summary and a grouped guide to all 56 public columns. Detector ranking, object segmentation, linker, gap-support, reconciliation, legacy and duplicated centre-audit fields remain in the reproducible internal catalogue rather than the general-user release.
 
 ## Rebuild the catalogue assets
 
-`scripts/build_ibtracs_crosswalk.py` creates an auditable physical-event-to-IBTrACS match using observed detector fixes only. Official basin CSVs are build inputs and are not deployed. `scripts/build_v542_assets.py` verifies the source hash and release audits, links state rainfall, and writes hashed core/detail assets plus `atlas-build-manifest.json`. Both scripts require pandas, NumPy, and pyarrow.
+`scripts/build_ibtracs_crosswalk.py` creates an auditable physical-event-to-IBTrACS match using observed detector fixes only. Official basin CSVs are build inputs and are not deployed. `scripts/build_v55_assets.py` verifies the source hash and release audits, derives state rainfall from the local native IMD 0.25-degree daily grids, and writes hashed core/detail assets plus `atlas-build-manifest.json`. These downstream joins do not modify catalogue selection. The scripts require pandas, NumPy, SciPy, Shapely and pyarrow.
 
 ```powershell
 python scripts/build_ibtracs_crosswalk.py `
-  --parquet lps_v5.4.2-era5-1940-2025-core.parquet `
+  --parquet lps_v5.5-era5-1940-2025-core.parquet `
   --ibtracs ibtracs.NI.list.v04r01.csv `
   --ibtracs ibtracs.WP.list.v04r01.csv `
-  --output data/lps-v5.4.2-ibtracs-v04r01-crosswalk.json
+  --catalogue-version v5.5 `
+  --output data/lps-v5.5-ibtracs-v04r01-crosswalk.json
 ```
 
 ```powershell
-python scripts/build_v542_assets.py `
-  --parquet lps_v5.4.2-era5-1940-2025-core.parquet `
-  --release-manifest data/lps-v5.4.2-era5-1940-2025-core.release-manifest.json `
-  --metadata data/lps-v5.4.2-era5-1940-2025-core.metadata.json `
-  --qa data/lps-v5.4.2-era5-1940-2025-core.qa.json `
-  --completion-audit data/lps-v5.4.2-era5-1940-2025-core.completion-audit.json `
-  --protocol-amendment data/lps-v5.4.2-era5-1940-2025-core.protocol-amendment-5.json `
+python scripts/build_v55_assets.py `
+  --parquet lps_v5.5-era5-1940-2025-core.parquet `
+  --release-manifest data/lps-v5.5-era5-1940-2025-core.release-manifest.json `
+  --metadata data/lps-v5.5-era5-1940-2025-core.metadata.json `
+  --qa data/lps-v5.5-era5-1940-2025-core.qa.json `
+  --completion-audit data/lps-v5.5-era5-1940-2025-core.completion-audit.json `
+  --protocol-amendment data/lps-v5.5-era5-1940-2025-core.calibration-protocol.json `
   --template-core assets/atlas-core.<previous-hash>.json.gz `
-  --ibtracs-crosswalk data/lps-v5.4.2-ibtracs-v04r01-crosswalk.json `
-  --rainfall-data path/to/imd-rainfall-dashboard/data/dashboard_data.js `
+  --ibtracs-crosswalk data/lps-v5.5-ibtracs-v04r01-crosswalk.json `
+  --selection-table path/to/calibrated_event_selection.parquet `
+  --rainfall-grd-dir ~/ncas/data/IMD-gauge `
   --output-dir assets
 ```
 
@@ -112,6 +116,6 @@ The panel labels describe Natural Earth cartographic worldview products; they ar
 ```bash
 python scripts/build_soi_boundary_asset.py \
   --archive path/to/Outline_of_India.zip \
-  --core assets/atlas-core.14e01a61e44d.json.gz \
+  --core assets/atlas-core.daccb568d55a.json.gz \
   --output-dir assets
 ```

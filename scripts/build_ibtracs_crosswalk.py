@@ -239,20 +239,36 @@ def confidence(best: dict, margin: float) -> str:
 def main() -> None:
     args = parse_args()
     version = catalogue_version(args.parquet, args.catalogue_version)
+    schema_names = set(pq.ParquetFile(args.parquet).schema_arrow.names)
+    identity_field = (
+        "continuity_parent_track_id"
+        if "continuity_parent_track_id" in schema_names
+        else "track_id"
+    )
+    observed_field = (
+        "candidate_diagnostics_available"
+        if "candidate_diagnostics_available" in schema_names
+        else "position_source"
+    )
     table = pq.read_table(
         args.parquet,
         columns=[
-            "continuity_parent_track_id",
+            identity_field,
             "time",
             "lat",
             "lon",
-            "candidate_diagnostics_available",
+            observed_field,
         ],
     )
     catalogue = table.to_pandas()
     catalogue["time"] = pd.to_datetime(catalogue["time"], utc=True)
-    catalogue = catalogue.loc[catalogue["candidate_diagnostics_available"].astype(bool)].copy()
-    catalogue.sort_values(["continuity_parent_track_id", "time"], kind="mergesort", inplace=True)
+    observed = (
+        catalogue[observed_field].astype(bool)
+        if observed_field == "candidate_diagnostics_available"
+        else catalogue[observed_field].astype(str).str.lower().eq("observed")
+    )
+    catalogue = catalogue.loc[observed].copy()
+    catalogue.sort_values([identity_field, "time"], kind="mergesort", inplace=True)
 
     storms = read_ibtracs(args.ibtracs)
     storms_by_year: dict[int, set[int]] = defaultdict(set)
@@ -264,7 +280,7 @@ def main() -> None:
 
     matches: dict[str, dict] = {}
     track_start: dict[str, int] = {}
-    for track_id, group in catalogue.groupby("continuity_parent_track_id", sort=False):
+    for track_id, group in catalogue.groupby(identity_field, sort=False):
         times_ns = group["time"].to_numpy(dtype="datetime64[ns]").astype("int64")
         latitudes = group["lat"].to_numpy(dtype=float)
         longitudes = group["lon"].to_numpy(dtype=float)
@@ -325,7 +341,7 @@ def main() -> None:
         }
 
     qa = {
-        "catalogue_parent_events": int(catalogue["continuity_parent_track_id"].nunique()),
+        "catalogue_parent_events": int(catalogue[identity_field].nunique()),
         "ibtracs_storms_considered": len(storms),
         "matched_tracks": len(matches),
         "high_confidence": sum(match["confidence"] == "high" for match in matches.values()),
@@ -341,7 +357,7 @@ def main() -> None:
         "catalogue_version": version,
         "source": "NOAA NCEI IBTrACS v04r01 NI and WP basin CSVs",
         "method": {
-            "positions": "Observed LPS detector fixes only, grouped by continuity_parent_track_id; interpolated positions are excluded.",
+            "positions": "Observed LPS detector fixes only, grouped by the public track_id event identifier; interpolated positions are excluded.",
             "maximum_time_delta_hours": MAX_TIME_DELTA_HOURS,
             "maximum_median_separation_km": MAX_MEDIAN_KM,
             "maximum_p90_separation_km": MAX_P90_KM,

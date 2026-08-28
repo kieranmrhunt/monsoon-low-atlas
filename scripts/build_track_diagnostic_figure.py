@@ -4,7 +4,7 @@
 Chart contract
 --------------
 Question: Which spatial, seasonal, intensity and lifecycle structures are
-most useful for a compact introduction to the public v5.4.2 catalogue?
+most useful for a compact introduction to the public v5.5 catalogue?
 Grain: one physical event for panels a-c; one event per normalised-life bin
 before cross-event aggregation for panel d.
 Metrics: unique-track count per 1-degree cell, genesis month by peak atlas class,
@@ -34,11 +34,11 @@ ATLAS_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ATLAS_ROOT.parent
 DEFAULT_DATA = (
     WORKSPACE_ROOT
-    / "lps-v5.3-continuity-framework/production/v5.4.2/zenodo-release"
-    / "lps_v5.4.2-era5-1940-2025-core.parquet"
+    / "lps-v5.3-continuity-framework/production/v5.5/public-release"
+    / "lps_v5.5-era5-1940-2025-core.parquet"
 )
-DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.14e01a61e44d.json.gz"
-DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.4.2-track-diagnostics.png"
+DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.daccb568d55a.json.gz"
+DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.5-track-diagnostics.png"
 
 PAPER = "#fffaf0"
 INK = "#282119"
@@ -103,9 +103,9 @@ def load_data(path: Path) -> pd.DataFrame:
         "time",
         "lon",
         "lat",
-        "imd_category",
+        "event_peak_imd_category",
         "pressure_deficit_hpa",
-        "max_wind",
+        "p95_anomaly_wind_125km_ms",
         "precip_24hr",
         "rh850_mean_pct",
         "max_vort_smoothed",
@@ -119,8 +119,8 @@ def event_summary(frame: pd.DataFrame) -> pd.DataFrame:
     summary = pd.DataFrame(
         {
             "genesis_time": group["time"].first(),
-            "peak_class": group["imd_category"].max(),
-            "peak_wind": group["max_wind"].max(),
+            "peak_class": group["event_peak_imd_category"].first(),
+            "peak_wind": group["p95_anomaly_wind_125km_ms"].max(),
             "peak_deficit": group["pressure_deficit_hpa"].max(),
         }
     )
@@ -277,8 +277,8 @@ def build_figure(frame: pd.DataFrame, summary: pd.DataFrame, geography: dict) ->
             linewidths=0,
             label=label,
         )
-    ax.set(xlabel=r"Peak maximum wind (m s$^{-1}$)", ylabel="Peak pressure deficit (hPa)")
-    ax.set_title("(c) Peak wind and pressure deficit", loc="left")
+    ax.set(xlabel=r"Peak circulation wind (m s$^{-1}$)", ylabel="Peak pressure deficit (hPa)")
+    ax.set_title("(c) Circulation wind and pressure deficit", loc="left")
     ax.legend(ncol=3, loc="upper left", handletextpad=0.35, columnspacing=1.0)
     style_axis(ax)
 
@@ -340,8 +340,8 @@ def main() -> None:
     configure_style(args.font)
     frame = load_data(args.data)
     summary = event_summary(frame)
-    if len(summary) != 2_980 or not summary.index.is_unique:
-        raise ValueError(f"Expected 2,980 unique physical events, found {len(summary):,}")
+    if len(summary) != 1_678 or not summary.index.is_unique:
+        raise ValueError(f"Expected 1,678 unique physical events, found {len(summary):,}")
     required = summary[["peak_wind", "peak_deficit", "peak_class"]]
     if not np.isfinite(required.to_numpy(dtype=float)).all():
         raise ValueError("Non-finite event summary values would make the figure incomplete")
@@ -350,7 +350,7 @@ def main() -> None:
     geography = load_geography(args.core)
     figure = build_figure(frame, summary, geography)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(args.output, dpi=190, metadata={"Software": "matplotlib", "Title": "LPS v5.4.2 track diagnostics"})
+    figure.savefig(args.output, dpi=190, metadata={"Software": "matplotlib", "Title": "LPS v5.5 track diagnostics"})
     plt.close(figure)
     print(f"Wrote {args.output} from {len(summary):,} physical events and {len(frame):,} hourly positions")
 
