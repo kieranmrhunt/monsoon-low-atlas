@@ -24,12 +24,11 @@
 	});
 	const COMPOSITE_PALETTES = Object.freeze({
 		terrain_r: ['#ffffff', '#dfd6d4', '#bfada9', '#9f847e', '#805c54', '#a08566', '#c0ae77', '#e0d788', '#fdff99', '#bdf28c', '#7de57f', '#3dd872', '#00cb6a', '#00abcb', '#0a86ec', '#1f5bc1', '#333399'],
-		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f'],
-		theta_e: ['#0d0887', '#310597', '#4c02a1', '#6600a7', '#7e03a8', '#9511a1', '#aa2395', '#bc3587', '#cc4778', '#da5a6a', '#e66c5c', '#f0804e', '#f89540', '#fdac33', '#fdc527', '#f8df25', '#f0f921']
+		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f']
 	});
 	const COMPOSITE_SECTION_DEFINITIONS = Object.freeze({
 		relative_vorticity: {label: 'Relative vorticity', unit: '10⁻⁵ s⁻¹', minimum: -20, maximum: 20, palette: 'vorticity'},
-		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 380, palette: 'theta_e'}
+		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 370, palette: 'vorticity', topPressure: 125}
 	});
 
 	let CORE;
@@ -3327,7 +3326,15 @@
 		const plot = {left: 48, top: 13, width: Math.max(80, width - 121), height: Math.max(80, height - 58)};
 		const palette = COMPOSITE_PALETTES[definition.palette];
 		const cellWidth = plot.width / unpacked.columns;
-		const centreY = pressureLevels.map(pressure => plot.top + Math.log(Number(pressure) / 100) / Math.log(10) * plot.height);
+		const topPressure = Number(definition.topPressure || Math.min(...pressureLevels.map(Number)));
+		const visibleRows = pressureLevels
+			.map((pressure, index) => ({pressure: Number(pressure), index}))
+			.filter(row => row.pressure >= topPressure);
+		if (!visibleRows.length) return;
+		const bottomPressure = Math.max(...visibleRows.map(row => row.pressure));
+		const pressureSpan = Math.log(bottomPressure / topPressure);
+		const pressureY = pressure => plot.top + Math.log(Number(pressure) / topPressure) / pressureSpan * plot.height;
+		const centreY = visibleRows.map(row => pressureY(row.pressure));
 		const edges = [plot.top + plot.height];
 		for (let index = 0; index < centreY.length - 1; index++) edges.push((centreY[index] + centreY[index + 1]) / 2);
 		edges.push(plot.top);
@@ -3335,11 +3342,12 @@
 		context.beginPath();
 		context.rect(plot.left, plot.top, plot.width, plot.height);
 		context.clip();
-		for (let row = 0; row < unpacked.rows; row++) {
+		for (let row = 0; row < visibleRows.length; row++) {
 			const y0 = Math.min(edges[row], edges[row + 1]);
 			const cellHeight = Math.abs(edges[row + 1] - edges[row]);
+			const sourceRow = visibleRows[row].index;
 			for (let column = 0; column < unpacked.columns; column++) {
-				const value = unpacked.values[row * unpacked.columns + column];
+				const value = unpacked.values[sourceRow * unpacked.columns + column];
 				if (!Number.isFinite(value)) continue;
 				context.fillStyle = compositePaletteColour(palette, (value - definition.minimum) / (definition.maximum - definition.minimum));
 				context.fillRect(plot.left + column * cellWidth, y0, cellWidth + .7, cellHeight + .7);
@@ -3357,8 +3365,11 @@
 		context.font = `10px ${CANVAS_FONT}`;
 		context.textBaseline = 'middle';
 		context.textAlign = 'right';
-		for (const pressure of [1000, 850, 700, 500, 300, 200, 100]) {
-			const y = plot.top + Math.log(pressure / 100) / Math.log(10) * plot.height;
+		const pressureTicks = topPressure > 100
+			? [1000, 850, 700, 500, 300, 200, 125]
+			: [1000, 850, 700, 500, 300, 200, 100];
+		for (const pressure of pressureTicks.filter(value => value >= topPressure && value <= bottomPressure)) {
+			const y = pressureY(pressure);
 			context.beginPath(); context.moveTo(plot.left - 4, y); context.lineTo(plot.left, y); context.strokeStyle = css('--mla-line-strong', '#b9aa97'); context.stroke();
 			context.fillText(String(pressure), plot.left - 6, y);
 		}
@@ -3444,8 +3455,9 @@
 			const field = asset.section[sectionKey];
 			const definition = COMPOSITE_SECTION_DEFINITIONS[sectionKey];
 			drawSectionComposite(field, asset.grid.pressure_hpa, definition);
-			$('#mlaSectionComposite').setAttribute('aria-label', `${definition.label} storm-centred zonal vertical section through zero relative latitude for ${systemLabel(selectedIndex)}; dashed line is zero relative longitude`);
-			$('#mlaSectionCompositeStatus').textContent = `${definition.label} · ${fmt(field.samples)}/${fmt(field.requested_samples)} lifecycle snapshots · ${field.source}`;
+			const pressureNote = definition.topPressure ? ` · 1000–${definition.topPressure} hPa` : '';
+			$('#mlaSectionComposite').setAttribute('aria-label', `${definition.label} storm-centred zonal vertical section through zero relative latitude for ${systemLabel(selectedIndex)}; dashed line is zero relative longitude${definition.topPressure ? '; 100 hPa is omitted from this display' : ''}`);
+			$('#mlaSectionCompositeStatus').textContent = `${definition.label} · ${fmt(field.samples)}/${fmt(field.requested_samples)} lifecycle snapshots${pressureNote} · fixed ${definition.minimum}–${definition.maximum} ${definition.unit} · ${field.source}`;
 		} else {
 			emptyChart('mlaSectionComposite', 'No vertical section is available');
 			$('#mlaSectionCompositeStatus').textContent = 'No vertical section is available for this system.';
@@ -3460,7 +3472,7 @@
 				return [COMPOSITE_SECTION_DEFINITIONS[key].label, `${field.samples}/${field.requested_samples} lifecycle snapshots`, field.source];
 			})
 		];
-		$('#mlaCompositeData').innerHTML = accessibleTable(['Field', 'Coverage', 'Source'], availabilityRows, `${asset.method.precipitation} ${asset.method.vertical}`);
+		$('#mlaCompositeData').innerHTML = accessibleTable(['Field', 'Coverage', 'Source'], availabilityRows, `${asset.method.precipitation} ${asset.method.vertical} The θₑ display omits 100 hPa and uses a fixed 330–370 K blue–white–red scale.`);
 	}
 
 	function seriesValues(index, key) {
