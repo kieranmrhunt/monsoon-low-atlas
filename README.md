@@ -24,7 +24,7 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - Exact-hour searches collapse centres separated by less than 150 km so near-duplicate contemporaneous systems do not obscure one another. During selected-track point focus, the selected centre is always retained, interpolated companion centres are omitted, and observation-supported companions are decluttered at 750 km. These display rules do not alter the catalogue or exported subset.
 - Clicking an already-selected track chooses the nearest hourly centre, reports its UTC time and position, and opens the 850-hPa relative-vorticity background. The track-hour slider and ±1-hour buttons move the selected centre but do not switch a weather field on; if the user has already selected a weather field, its frame follows the chosen hour.
 - When a selected system has an accepted IBTrACS association, its matched best track is the dashed green line; the map checkbox can hide that overlay independently.
-- Weather backgrounds are visual context layers, not additional catalogue diagnostics. The menu offers positive ERA5 850-hPa relative vorticity and trailing 24-hour accumulated precipitation at 0.25°, plus RH500 derived from 3-hourly ERA5 temperature and specific humidity and interpolated to the hourly slider at 1°. Subset tracks are hidden by default while a weather field is active and can be restored with the map checkbox.
+- Weather backgrounds are visual context layers, not additional catalogue diagnostics. The menu offers positive ERA5 850-hPa relative vorticity and trailing 24-hour accumulated precipitation at 0.25°, plus RH500 derived from 3-hourly ERA5 temperature and specific humidity and interpolated to the hourly slider at 1°. Precipitation uses a terrain-inspired kiwi–mango–berry sequential ramp, with near-zero amounts transparent. Subset tracks are hidden by default while a weather field is active and can be restored with the map checkbox.
 - Selected-system composites use unrotated storm-relative geographic coordinates: every contributing field is translated so its contemporaneous published centre lies at relative longitude 0°, relative latitude 0°, with north left at the top. The fields are not rotated into the direction of travel.
 - Each precipitation footprint is the lifecycle mean of UTC-day accumulations on a ±10°, 0.25° grid. A touched UTC day's centre is the published position closest to 12 UTC on that day. ERA5 uses hourly mean total precipitation rate accumulated over the day; IMERG Final Run is offered when at least one local contributing day is available (V06 `precipitationCal` or V07 `precipitation`), with its partial temporal coverage reported in the atlas.
 - Each vertical composite is a zonal section through 0° relative latitude, averaged over nine equally spaced lifecycle snapshots and interpolated to 27 pressure levels from 1000 to 100 hPa. The controls switch between ERA5 relative vorticity and equivalent potential temperature calculated from temperature and specific humidity following Bolton (1980). The archive retains every pressure level; the atlas θₑ view omits the anomalously warm 100-hPa level and uses a fixed 330–370 K blue–white–red scale, while relative vorticity retains 100 hPa. Local JASMIN ERA5 model-level analyses supply 1979 onward; the public ARCO ERA5 pressure-level archive supplies earlier snapshots.
@@ -39,7 +39,7 @@ The atlas remains a static GitHub Pages site. Monthly weather videos live on the
 
 ```bash
 sbatch scripts/build_vorticity_videos.slurm data/vorticity-active-months.csv path/to/atlas-weather-v5.4.2-r2 vorticity
-sbatch scripts/build_vorticity_videos.slurm data/vorticity-active-months.csv path/to/atlas-weather-v5.4.2-r4 precipitation
+sbatch scripts/build_vorticity_videos.slurm data/vorticity-active-months.csv path/to/atlas-weather-v5.4.2-r5 precipitation
 sbatch scripts/build_vorticity_videos.slurm data/vorticity-active-months.csv path/to/atlas-weather-v5.4.2-r2 rh500
 ```
 
@@ -48,7 +48,7 @@ After the array finishes, validate every expected month and write the public man
 ```bash
 python scripts/build_vorticity_videos.py \
   --field precipitation \
-  --output-dir path/to/atlas-weather-v5.4.2-r4 \
+  --output-dir path/to/atlas-weather-v5.4.2-r5 \
   --month-manifest data/vorticity-active-months.csv \
   --container webm \
   --finalize

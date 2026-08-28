@@ -52,7 +52,7 @@ FIELD_SPECS = {
 	},
 	"precipitation": {
 		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/hourly_precip_SA"),
-		"schema": "monsoon-low-atlas-precipitation-video-v3",
+		"schema": "monsoon-low-atlas-precipitation-video-v4",
 		"source_label": "ERA5 hourly_precip_SA",
 		"field_label": "ERA5 trailing 24-hour accumulated precipitation",
 		"units": "mm",
@@ -61,10 +61,10 @@ FIELD_SPECS = {
 		"dimensions": (240, 184),
 		"positive_only": True,
 		"colour_stops": (
-			(0.0, (247, 252, 253)), (1.0, (204, 236, 230)),
-			(5.0, (102, 194, 164)), (10.0, (35, 139, 69)),
-			(25.0, (34, 94, 168)), (50.0, (84, 39, 143)),
-			(100.0, (62, 0, 92)), (150.0, (46, 0, 72)),
+			(0.0, (255, 255, 247)), (1.0, (215, 242, 227)),
+			(5.0, (121, 203, 151)), (10.0, (205, 222, 78)),
+			(25.0, (246, 190, 61)), (50.0, (240, 126, 72)),
+			(100.0, (213, 68, 128)), (150.0, (83, 42, 120)),
 		),
 		"alpha_full": 10.0,
 		"alpha_threshold": 0.1,
