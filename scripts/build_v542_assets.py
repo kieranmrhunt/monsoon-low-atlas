@@ -59,16 +59,50 @@ TRACK_FIELDS = [
     "rain_days",
 ]
 
+PHYSICAL_SERIES = [
+    # Browser field, public-catalogue field, integer scale.
+    ("max_vort_x10", "max_vort", 10),
+    ("mean_vort_x10", "mean_vort", 10),
+    ("vort_smooth_x10", "max_vort_smoothed", 10),
+    ("vort850_x10", "mean_vort_850", 10),
+    ("vort700_x10", "mean_vort_700", 10),
+    ("vort500_x10", "mean_vort_500", 10),
+    ("vort_deep_x10", "mean_vort_deep", 10),
+    ("circulation_wind_x10", "atlas_wind", 10),
+    ("max_wind_x10", "max_wind", 10),
+    ("mean_wind_x10", "mean_wind", 10),
+    ("background_u_x10", "background_u_300_500km_ms", 10),
+    ("background_v_x10", "background_v_300_500km_ms", 10),
+    ("mslp_x10", "min_mslp", 10),
+    ("ring_mslp_x10", "ring_mslp_p60", 10),
+    ("pressure_deficit_x10", "pressure_deficit_hpa", 10),
+    ("closed_isobars", "closed_isobars_2hpa_actual", 1),
+    ("precip1_x100", "precip_1hr", 100),
+    ("precip24_x10", "precip_24hr", 10),
+    ("q850_x10", "q850_mean_gkg", 10),
+    ("q700_x10", "q700_mean_gkg", 10),
+    ("q500_x10", "q500_mean_gkg", 10),
+    ("q_deep_x10", "q_deep_mean_gkg", 10),
+    ("rh850_x10", "rh850_mean_pct", 10),
+    ("rh700_x10", "rh700_mean_pct", 10),
+    ("rh500_x10", "rh500_mean_pct", 10),
+    ("rh_deep_x10", "rh_deep_mean_pct", 10),
+    ("t850_x10", "t850_mean_k", 10),
+    ("t700_x10", "t700_mean_k", 10),
+    ("t500_x10", "t500_mean_k", 10),
+    ("t850_inner_anomaly_x100", "t850_inner_minus_annulus_k", 100),
+    ("t700_inner_anomaly_x100", "t700_inner_minus_annulus_k", 100),
+    ("t500_inner_anomaly_x100", "t500_inner_minus_annulus_k", 100),
+    ("t_inner_anomaly_deep_x100", "t_inner_minus_annulus_deep_k", 100),
+    ("t850_minus_t500_x10", "t850_minus_t500_k", 10),
+    ("t700_minus_t500_x10", "t700_minus_t500_k", 10),
+    ("orography_m", "orography_m", 1),
+    ("land_fraction_pct_x10", "land_fraction", 1000),
+]
+
 SERIES_FIELDS = [
     "hours_since_genesis",
-    "precip24_x10",
-    "vort_smooth_x10",
-    "max_wind_x10",
-    "mslp_x10",
-    "pressure_deficit_x10",
-    "q850_x10",
-    "rh850_x10",
-    "t850_x10",
+    *(field for field, _source, _scale in PHYSICAL_SERIES),
     "category",
 ]
 
@@ -79,13 +113,11 @@ BASE_PARQUET_COLUMNS = [
     "lat",
     "position_source",
     "imd_category",
-    "max_vort_smoothed",
-    "precip_24hr",
-    "min_mslp",
-    "pressure_deficit_hpa",
-    "q850_mean_gkg",
-    "rh850_mean_pct",
-    "t850_mean_k",
+    *dict.fromkeys(
+        source
+        for _field, source, _scale in PHYSICAL_SERIES
+        if source != "atlas_wind"
+    ),
 ]
 
 
@@ -631,16 +663,9 @@ def main() -> None:
         & (data["position_source"].eq("interpolated") == ~diagnostics)
     ).all():
         raise ValueError("Position source and observed-diagnostics flag disagree")
-    physics = [
-        "max_vort_smoothed",
-        "precip_24hr",
-        "atlas_wind",
-        "min_mslp",
-        "pressure_deficit_hpa",
-        "q850_mean_gkg",
-        "rh850_mean_pct",
-        "t850_mean_k",
-    ]
+    physics = list(
+        dict.fromkeys(source for _field, source, _scale in PHYSICAL_SERIES)
+    )
     if data[physics].isna().any().any():
         raise ValueError("Published rows are missing required final-centre physics")
     if data.loc[diagnostics, "imd_category"].isna().any():
@@ -892,14 +917,10 @@ def main() -> None:
         detail_series.append(
             [
                 hours,
-                scaled_series(group["precip_24hr"], 10),
-                scaled_series(group["max_vort_smoothed"], 10),
-                scaled_series(group["atlas_wind"], 10),
-                scaled_series(group["min_mslp"], 10),
-                scaled_series(group["pressure_deficit_hpa"], 10),
-                scaled_series(group["q850_mean_gkg"], 10),
-                scaled_series(group["rh850_mean_pct"], 10),
-                scaled_series(group["t850_mean_k"], 10),
+                *[
+                    scaled_series(group[source], scale)
+                    for _field, source, scale in PHYSICAL_SERIES
+                ],
                 scaled_series(group["imd_category"].clip(upper=6), 1),
             ]
         )
@@ -1056,6 +1077,7 @@ def main() -> None:
                 data.duplicated(["continuity_parent_track_id", "time"]).sum()
             ),
             "all_rows_have_final_centre_physics": bool(not data[physics].isna().any().any()),
+            "physical_evolution_series": len(PHYSICAL_SERIES),
             "state_rainfall_columns": int(sum(state_available)),
             "tracks_with_state_rainfall": int(
                 np.any(state_matrix >= 0, axis=1).sum()

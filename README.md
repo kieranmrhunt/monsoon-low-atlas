@@ -95,7 +95,7 @@ The Data tab links to the versioned Zenodo dataset through the `zenodo` value in
 
 ## Rebuild the catalogue assets
 
-`scripts/build_ibtracs_crosswalk.py` creates an auditable physical-event-to-IBTrACS match using observed detector fixes only. Official basin CSVs are build inputs and are not deployed. Because v5.5.1 changes classification only and preserves every v5.5 event ID and observed position exactly, the atlas reuses the audited v5.5 crosswalk. `scripts/build_v55_assets.py` verifies the source hash and release audits, derives state rainfall from the local native IMD 0.25-degree daily grids, and writes hashed core/detail assets plus `atlas-build-manifest.json`. These downstream joins do not modify catalogue selection. The scripts require pandas, NumPy, SciPy, Shapely and pyarrow.
+`scripts/build_ibtracs_crosswalk.py` creates an auditable physical-event-to-IBTrACS match using observed detector fixes only. Official basin CSVs are build inputs and are not deployed. Because v5.5.1 changes classification only and preserves every v5.5 event ID and observed position exactly, the atlas reuses the audited v5.5 crosswalk. `scripts/build_v55_assets.py` verifies the source hash and release audits, derives state rainfall from the local native IMD 0.25-degree daily grids, and writes hashed core/detail assets plus `atlas-build-manifest.json`. The detail asset carries all 37 public physical diagnostics for the grouped selected-system and subset-evolution controls and is fetched lazily. These downstream joins do not modify catalogue selection. The scripts require pandas, NumPy, SciPy, Shapely and pyarrow.
 
 ```powershell
 python scripts/build_ibtracs_crosswalk.py `
