@@ -22,6 +22,15 @@
 		precipitation: {label: 'trailing 24 h precipitation', keyMin: '0', keyMax: '150 mm'},
 		rh500: {label: '500-hPa relative humidity', keyMin: '0', keyMax: '100%'}
 	});
+	const COMPOSITE_PALETTES = Object.freeze({
+		terrain_r: ['#ffffff', '#dfd6d4', '#bfada9', '#9f847e', '#805c54', '#a08566', '#c0ae77', '#e0d788', '#fdff99', '#bdf28c', '#7de57f', '#3dd872', '#00cb6a', '#00abcb', '#0a86ec', '#1f5bc1', '#333399'],
+		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f'],
+		theta_e: ['#0d0887', '#310597', '#4c02a1', '#6600a7', '#7e03a8', '#9511a1', '#aa2395', '#bc3587', '#cc4778', '#da5a6a', '#e66c5c', '#f0804e', '#f89540', '#fdac33', '#fdc527', '#f8df25', '#f0f921']
+	});
+	const COMPOSITE_SECTION_DEFINITIONS = Object.freeze({
+		relative_vorticity: {label: 'Relative vorticity', unit: '10⁻⁵ s⁻¹', minimum: -20, maximum: 20, palette: 'vorticity'},
+		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 380, palette: 'theta_e'}
+	});
 
 	let CORE;
 	let CLIMATE;
@@ -61,6 +70,10 @@
 	let weatherFrameContext = null;
 	let weatherEncodedCanvas = null;
 	let weatherEncodedContext = null;
+	let compositeLoadSerial = 0;
+	const compositeCache = new Map();
+	const compositePromises = new Map();
+	const compositeErrors = new Map();
 
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
@@ -128,6 +141,8 @@
 		extremeMetric: 'duration',
 		extremeEligibility: 'all',
 		evolutionMetric: 'deficit',
+		compositePrecipSource: 'era5',
+		compositeSectionVariable: 'relative_vorticity',
 		profileMetrics: new Set(DEFAULT_PROFILE_METRICS)
 	};
 
@@ -365,6 +380,36 @@
 			})();
 		}
 		return detailPromise;
+	}
+
+	async function ensureStormComposite(trackIndex, force) {
+		ensureAtlasConfig();
+		if (!atlasConfig.compositeBase) throw new Error('Storm-centred composite service is not configured');
+		const trackId = atlasId(trackIndex);
+		if (force) {
+			compositeCache.delete(trackId);
+			compositePromises.delete(trackId);
+			compositeErrors.delete(trackId);
+		}
+		if (compositeCache.has(trackId)) return compositeCache.get(trackId);
+		if (!compositePromises.has(trackId)) {
+			const base = String(atlasConfig.compositeBase).replace(/\/$/, '');
+			const promise = fetchJsonAsset(`${base}/tracks/track-${trackId}.json.gz`, `storm-centred composite for event ${trackId}`)
+				.then(asset => {
+					if (asset.schema !== 'monsoon-low-atlas-storm-composite-v1' || Number(asset.track_id) !== Number(trackId)) throw new Error('Composite asset does not match the selected physical event');
+					compositeCache.set(trackId, asset);
+					while (compositeCache.size > 30) compositeCache.delete(compositeCache.keys().next().value);
+					compositeErrors.delete(trackId);
+					return asset;
+				})
+				.catch(error => {
+					compositeErrors.set(trackId, error);
+					throw error;
+				})
+				.finally(() => compositePromises.delete(trackId));
+			compositePromises.set(trackId, promise);
+		}
+		return compositePromises.get(trackId);
 	}
 
 	function decodePolyline(value) {
@@ -1211,6 +1256,15 @@
 		$('#mlaExtremeMetric').addEventListener('change', event => { state.extremeMetric = event.target.value; renderExtremes(); });
 		$('#mlaExtremeEligibility').addEventListener('change', event => { state.extremeEligibility = event.target.value; renderExtremes(); });
 		$('#mlaEvolutionMetric').addEventListener('change', event => { state.evolutionMetric = event.target.value; renderLifeCharts(); writeUrl('replace'); });
+		$('#mlaCompositePrecipSource').addEventListener('change', event => { state.compositePrecipSource = event.target.value; renderStormComposites(); writeUrl('replace'); });
+		$('#mlaCompositeSectionVariable').addEventListener('change', event => { state.compositeSectionVariable = event.target.value; renderStormComposites(); writeUrl('replace'); });
+		$('#mlaRetryComposite').addEventListener('click', () => {
+			if (state.selected == null) return;
+			const trackId = atlasId(state.selected);
+			compositeErrors.delete(trackId);
+			ensureStormComposite(state.selected, true).then(renderStormComposites).catch(renderStormComposites);
+			renderStormComposites();
+		});
 		$('#mlaLoadProfile').addEventListener('click', () => ensureDetail('Opening detailed subset series…').then(renderLifeCharts).catch(showFatal));
 		$('#mlaCopyLink').addEventListener('click', copyViewLink);
 		$('#mlaQuickExport').addEventListener('click', downloadSummaries);
@@ -1285,6 +1339,8 @@
 		if (state.weatherTracks) parameters.set('weathertracks', '1');
 		if (state.focusSource === 'point' && Number.isFinite(state.focusTimeMs)) parameters.set('time', new Date(state.focusTimeMs).toISOString().slice(0, 13));
 		if (state.evolutionMetric !== 'deficit') parameters.set('evolve', state.evolutionMetric);
+		if (state.compositePrecipSource !== 'era5') parameters.set('compositeprecip', state.compositePrecipSource);
+		if (state.compositeSectionVariable !== 'relative_vorticity') parameters.set('compositesection', state.compositeSectionVariable);
 		const profileMetrics = PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key));
 		if (profileMetrics.join(',') !== DEFAULT_PROFILE_METRICS.join(',')) parameters.set('profiles', profileMetrics.join(','));
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
@@ -1342,6 +1398,8 @@
 		if (['none', 'vorticity', 'precipitation', 'rh500'].includes(parameters.get('weather'))) state.weatherLayer = parameters.get('weather');
 		state.weatherTracks = parameters.get('weathertracks') === '1';
 		if (METRICS[parameters.get('evolve')] && parameters.get('evolve') !== 'rain') state.evolutionMetric = parameters.get('evolve');
+		if (['era5', 'imerg'].includes(parameters.get('compositeprecip'))) state.compositePrecipSource = parameters.get('compositeprecip');
+		if (Object.hasOwn(COMPOSITE_SECTION_DEFINITIONS, parameters.get('compositesection'))) state.compositeSectionVariable = parameters.get('compositesection');
 		const profileMetrics = (parameters.get('profiles') || '').split(',').filter(key => PROFILE_METRIC_KEYS.includes(key));
 		if (profileMetrics.length) state.profileMetrics = new Set(profileMetrics);
 		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 16);
@@ -3134,6 +3192,277 @@
 		return `${note ? `<p>${esc(note)}</p>` : ''}<div class="mla-table-wrap"><table class="mla-table"><thead><tr>${headers.map(value => `<th>${esc(value)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 	}
 
+	function compositePaletteColour(stops, fraction) {
+		const position = clamp(fraction, 0, 1) * (stops.length - 1);
+		const lower = Math.floor(position);
+		const upper = Math.min(stops.length - 1, Math.ceil(position));
+		const mix = position - lower;
+		const parse = colour => [1, 3, 5].map(index => parseInt(colour.slice(index, index + 2), 16));
+		const first = parse(stops[lower]);
+		const second = parse(stops[upper]);
+		return `rgb(${first.map((channel, index) => Math.round(channel + (second[index] - channel) * mix)).join(',')})`;
+	}
+
+	function unpackCompositeField(field) {
+		if (!field || !Array.isArray(field.shape) || field.shape.length !== 2 || !Array.isArray(field.data)) return null;
+		const values = new Float32Array(field.data.length);
+		for (let index = 0; index < field.data.length; index++) values[index] = field.data[index] == null ? NaN : Number(field.data[index]) * Number(field.scale || 1);
+		return {values, rows: Number(field.shape[0]), columns: Number(field.shape[1])};
+	}
+
+	function drawCompositeColourBar(context, palette, minimum, maximum, unit, x, y, height) {
+		const width = 12;
+		for (let step = 0; step < Math.ceil(height); step++) {
+			const fraction = 1 - step / Math.max(1, height - 1);
+			context.fillStyle = compositePaletteColour(palette, fraction);
+			context.fillRect(x, y + step, width, 1.2);
+		}
+		context.strokeStyle = css('--mla-line-strong', '#b9aa97');
+		context.lineWidth = 1;
+		context.strokeRect(x, y, width, height);
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.font = `10px ${CANVAS_FONT}`;
+		context.textAlign = 'left';
+		context.textBaseline = 'middle';
+		for (const value of [maximum, (minimum + maximum) / 2, minimum]) {
+			const tickY = y + (maximum - value) / (maximum - minimum) * height;
+			context.beginPath();
+			context.moveTo(x + width, tickY);
+			context.lineTo(x + width + 4, tickY);
+			context.stroke();
+			context.fillText(fmt(value, Math.abs(value) < 10 && value % 1 ? 1 : 0), x + width + 6, tickY);
+		}
+		context.save();
+		context.translate(x + width + 39, y + height / 2);
+		context.rotate(-Math.PI / 2);
+		context.textAlign = 'center';
+		context.fillText(unit, 0, 0);
+		context.restore();
+	}
+
+	function drawCompositeXAxes(context, plot, yLabel) {
+		const ink = css('--mla-ink', '#282119');
+		const line = css('--mla-line-strong', '#b9aa97');
+		context.strokeStyle = line;
+		context.lineWidth = 1;
+		context.strokeRect(plot.left, plot.top, plot.width, plot.height);
+		context.fillStyle = ink;
+		context.font = `10px ${CANVAS_FONT}`;
+		context.textBaseline = 'top';
+		for (const value of [-10, -5, 0, 5, 10]) {
+			const x = plot.left + (value + 10) / 20 * plot.width;
+			context.beginPath();
+			context.moveTo(x, plot.top + plot.height);
+			context.lineTo(x, plot.top + plot.height + 4);
+			context.stroke();
+			context.textAlign = value === -10 ? 'left' : value === 10 ? 'right' : 'center';
+			context.fillText(String(value).replace('-', '−'), x, plot.top + plot.height + 6);
+		}
+		context.textAlign = 'center';
+		context.fillText('Relative longitude (°)', plot.left + plot.width / 2, plot.top + plot.height + 25);
+		context.save();
+		context.translate(12, plot.top + plot.height / 2);
+		context.rotate(-Math.PI / 2);
+		context.textBaseline = 'top';
+		context.fillText(yLabel, 0, 0);
+		context.restore();
+	}
+
+	function drawPrecipitationComposite(field) {
+		const unpacked = unpackCompositeField(field);
+		const drawing = setupChart('mlaPrecipComposite');
+		if (!drawing || !unpacked) return;
+		const {context, width, height} = drawing;
+		const plot = {left: 46, top: 13, width: Math.max(80, width - 119), height: Math.max(80, height - 58)};
+		const palette = COMPOSITE_PALETTES.terrain_r;
+		const minimum = 0;
+		const maximum = 60;
+		const cellWidth = plot.width / unpacked.columns;
+		const cellHeight = plot.height / unpacked.rows;
+		context.save();
+		context.beginPath();
+		context.rect(plot.left, plot.top, plot.width, plot.height);
+		context.clip();
+		for (let row = 0; row < unpacked.rows; row++) {
+			const y = plot.top + (unpacked.rows - row - 1) * cellHeight;
+			for (let column = 0; column < unpacked.columns; column++) {
+				const value = unpacked.values[row * unpacked.columns + column];
+				if (!Number.isFinite(value)) continue;
+				context.fillStyle = compositePaletteColour(palette, (value - minimum) / (maximum - minimum));
+				context.fillRect(plot.left + column * cellWidth, y, cellWidth + .7, cellHeight + .7);
+			}
+		}
+		context.restore();
+		context.strokeStyle = 'rgba(40,33,25,.22)';
+		context.lineWidth = 1;
+		context.setLineDash([3, 4]);
+		for (const value of [-5, 0, 5]) {
+			const x = plot.left + (value + 10) / 20 * plot.width;
+			const y = plot.top + (10 - value) / 20 * plot.height;
+			context.beginPath(); context.moveTo(x, plot.top); context.lineTo(x, plot.top + plot.height); context.stroke();
+			context.beginPath(); context.moveTo(plot.left, y); context.lineTo(plot.left + plot.width, y); context.stroke();
+		}
+		context.setLineDash([]);
+		const centreX = plot.left + plot.width / 2;
+		const centreY = plot.top + plot.height / 2;
+		context.beginPath(); context.arc(centreX, centreY, 4.6, 0, Math.PI * 2); context.fillStyle = '#fff'; context.fill();
+		context.beginPath(); context.arc(centreX, centreY, 2.8, 0, Math.PI * 2); context.fillStyle = '#19140f'; context.fill();
+		drawCompositeXAxes(context, plot, 'Relative latitude (°)');
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.font = `10px ${CANVAS_FONT}`;
+		context.textBaseline = 'middle';
+		context.textAlign = 'right';
+		for (const value of [-10, -5, 0, 5, 10]) {
+			const y = plot.top + (10 - value) / 20 * plot.height;
+			context.fillText(String(value).replace('-', '−'), plot.left - 6, y);
+		}
+		drawCompositeColourBar(context, palette, minimum, maximum, 'mm day⁻¹', plot.left + plot.width + 14, plot.top, plot.height);
+	}
+
+	function drawSectionComposite(field, pressureLevels, definition) {
+		const unpacked = unpackCompositeField(field);
+		const drawing = setupChart('mlaSectionComposite');
+		if (!drawing || !unpacked || !Array.isArray(pressureLevels)) return;
+		const {context, width, height} = drawing;
+		const plot = {left: 48, top: 13, width: Math.max(80, width - 121), height: Math.max(80, height - 58)};
+		const palette = COMPOSITE_PALETTES[definition.palette];
+		const cellWidth = plot.width / unpacked.columns;
+		const centreY = pressureLevels.map(pressure => plot.top + Math.log(Number(pressure) / 100) / Math.log(10) * plot.height);
+		const edges = [plot.top + plot.height];
+		for (let index = 0; index < centreY.length - 1; index++) edges.push((centreY[index] + centreY[index + 1]) / 2);
+		edges.push(plot.top);
+		context.save();
+		context.beginPath();
+		context.rect(plot.left, plot.top, plot.width, plot.height);
+		context.clip();
+		for (let row = 0; row < unpacked.rows; row++) {
+			const y0 = Math.min(edges[row], edges[row + 1]);
+			const cellHeight = Math.abs(edges[row + 1] - edges[row]);
+			for (let column = 0; column < unpacked.columns; column++) {
+				const value = unpacked.values[row * unpacked.columns + column];
+				if (!Number.isFinite(value)) continue;
+				context.fillStyle = compositePaletteColour(palette, (value - definition.minimum) / (definition.maximum - definition.minimum));
+				context.fillRect(plot.left + column * cellWidth, y0, cellWidth + .7, cellHeight + .7);
+			}
+		}
+		context.restore();
+		const centreX = plot.left + plot.width / 2;
+		context.strokeStyle = 'rgba(25,20,15,.68)';
+		context.lineWidth = 1.2;
+		context.setLineDash([4, 4]);
+		context.beginPath(); context.moveTo(centreX, plot.top); context.lineTo(centreX, plot.top + plot.height); context.stroke();
+		context.setLineDash([]);
+		drawCompositeXAxes(context, plot, 'Pressure (hPa)');
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.font = `10px ${CANVAS_FONT}`;
+		context.textBaseline = 'middle';
+		context.textAlign = 'right';
+		for (const pressure of [1000, 850, 700, 500, 300, 200, 100]) {
+			const y = plot.top + Math.log(pressure / 100) / Math.log(10) * plot.height;
+			context.beginPath(); context.moveTo(plot.left - 4, y); context.lineTo(plot.left, y); context.strokeStyle = css('--mla-line-strong', '#b9aa97'); context.stroke();
+			context.fillText(String(pressure), plot.left - 6, y);
+		}
+		drawCompositeColourBar(context, palette, definition.minimum, definition.maximum, definition.unit, plot.left + plot.width + 14, plot.top, plot.height);
+	}
+
+	function compositeOptionLabel(key) {
+		return key === 'imerg' ? 'IMERG' : key === 'era5' ? 'ERA5' : key;
+	}
+
+	function renderStormComposites() {
+		if ($('#mlaPanelExplore').hidden) return;
+		const precipControl = $('#mlaCompositePrecipSource');
+		const sectionControl = $('#mlaCompositeSectionVariable');
+		const retry = $('#mlaRetryComposite');
+		if (state.selected == null) {
+			compositeLoadSerial++;
+			precipControl.disabled = true;
+			sectionControl.disabled = true;
+			retry.hidden = true;
+			emptyChart('mlaPrecipComposite', 'Select a system to load its storm-centred footprint');
+			emptyChart('mlaSectionComposite', 'Select a system to load its storm-centred section');
+			$('#mlaPrecipCompositeStatus').textContent = 'Select a system to load its precipitation footprint.';
+			$('#mlaSectionCompositeStatus').textContent = 'Select a system to load its vertical structure.';
+			$('#mlaCompositeData').textContent = 'Select a system to inspect composite provenance.';
+			return;
+		}
+		const selectedIndex = state.selected;
+		const trackId = atlasId(selectedIndex);
+		const asset = compositeCache.get(trackId);
+		const loadError = compositeErrors.get(trackId);
+		if (!asset && loadError) {
+			precipControl.disabled = true;
+			sectionControl.disabled = true;
+			retry.hidden = false;
+			emptyChart('mlaPrecipComposite', 'Composite unavailable; retry when ready');
+			emptyChart('mlaSectionComposite', 'Composite unavailable; retry when ready');
+			const message = loadError && loadError.message ? loadError.message : String(loadError);
+			$('#mlaPrecipCompositeStatus').textContent = message;
+			$('#mlaSectionCompositeStatus').textContent = message;
+			$('#mlaCompositeData').innerHTML = `<p>${esc(message)}</p>`;
+			return;
+		}
+		if (!asset) {
+			precipControl.disabled = true;
+			sectionControl.disabled = true;
+			retry.hidden = true;
+			emptyChart('mlaPrecipComposite', 'Loading storm-centred precipitation…');
+			emptyChart('mlaSectionComposite', 'Loading storm-centred vertical structure…');
+			$('#mlaPrecipCompositeStatus').textContent = 'Loading the selected physical event…';
+			$('#mlaSectionCompositeStatus').textContent = 'Loading the selected physical event…';
+			$('#mlaCompositeData').textContent = 'Loading composite provenance…';
+			const serial = ++compositeLoadSerial;
+			ensureStormComposite(selectedIndex).then(() => {
+				if (serial === compositeLoadSerial && state.selected === selectedIndex) renderStormComposites();
+			}).catch(() => {
+				if (serial === compositeLoadSerial && state.selected === selectedIndex) renderStormComposites();
+			});
+			return;
+		}
+		compositeLoadSerial++;
+		retry.hidden = true;
+		const precipKeys = ['era5', 'imerg'].filter(key => asset.precipitation && asset.precipitation[key]);
+		precipControl.innerHTML = precipKeys.map(key => `<option value="${key}">${esc(compositeOptionLabel(key))}</option>`).join('');
+		const precipKey = precipKeys.includes(state.compositePrecipSource) ? state.compositePrecipSource : precipKeys[0];
+		precipControl.disabled = precipKeys.length < 2;
+		if (precipKey) {
+			precipControl.value = precipKey;
+			const field = asset.precipitation[precipKey];
+			drawPrecipitationComposite(field);
+			$('#mlaPrecipComposite').setAttribute('aria-label', `${compositeOptionLabel(precipKey)} storm-centred mean daily precipitation for ${systemLabel(selectedIndex)}; track centre is at zero relative longitude and latitude`);
+			$('#mlaPrecipCompositeStatus').textContent = `${compositeOptionLabel(precipKey)} · ${fmt(field.samples)}/${fmt(field.requested_samples)} UTC days · ${fmt(100 * field.spatial_coverage_fraction)}% footprint coverage · fixed 0–60 mm day⁻¹ scale`;
+		} else {
+			emptyChart('mlaPrecipComposite', 'No daily precipitation source is available');
+			$('#mlaPrecipCompositeStatus').textContent = 'No daily precipitation source is available for this system.';
+		}
+		const sectionKeys = Object.keys(COMPOSITE_SECTION_DEFINITIONS).filter(key => asset.section && asset.section[key]);
+		sectionControl.innerHTML = sectionKeys.map(key => `<option value="${key}">${esc(COMPOSITE_SECTION_DEFINITIONS[key].label)}</option>`).join('');
+		const sectionKey = sectionKeys.includes(state.compositeSectionVariable) ? state.compositeSectionVariable : sectionKeys[0];
+		sectionControl.disabled = sectionKeys.length < 2;
+		if (sectionKey) {
+			sectionControl.value = sectionKey;
+			const field = asset.section[sectionKey];
+			const definition = COMPOSITE_SECTION_DEFINITIONS[sectionKey];
+			drawSectionComposite(field, asset.grid.pressure_hpa, definition);
+			$('#mlaSectionComposite').setAttribute('aria-label', `${definition.label} storm-centred zonal vertical section through zero relative latitude for ${systemLabel(selectedIndex)}; dashed line is zero relative longitude`);
+			$('#mlaSectionCompositeStatus').textContent = `${definition.label} · ${fmt(field.samples)}/${fmt(field.requested_samples)} lifecycle snapshots · ${field.source}`;
+		} else {
+			emptyChart('mlaSectionComposite', 'No vertical section is available');
+			$('#mlaSectionCompositeStatus').textContent = 'No vertical section is available for this system.';
+		}
+		const availabilityRows = [
+			...precipKeys.map(key => {
+				const field = asset.precipitation[key];
+				return [compositeOptionLabel(key), `${field.samples}/${field.requested_samples} UTC days`, field.source];
+			}),
+			...sectionKeys.map(key => {
+				const field = asset.section[key];
+				return [COMPOSITE_SECTION_DEFINITIONS[key].label, `${field.samples}/${field.requested_samples} lifecycle snapshots`, field.source];
+			})
+		];
+		$('#mlaCompositeData').innerHTML = accessibleTable(['Field', 'Coverage', 'Source'], availabilityRows, `${asset.method.precipitation} ${asset.method.vertical}`);
+	}
+
 	function seriesValues(index, key) {
 		if (!DETAIL) return null;
 		const definition = METRICS[key];
@@ -3146,6 +3475,7 @@
 
 	function renderLifeCharts() {
 		if ($('#mlaPanelExplore').hidden) return;
+		renderStormComposites();
 		const profileButton = $('#mlaLoadProfile');
 		if (state.selected == null) {
 			emptyChart('mlaLifeChart', 'Select a system to view raw meteorology');

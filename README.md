@@ -25,6 +25,9 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - Clicking an already-selected track chooses the nearest hourly centre, reports its UTC time and position, and opens the 850-hPa relative-vorticity background. The track-hour slider and ±1-hour buttons move the selected centre but do not switch a weather field on; if the user has already selected a weather field, its frame follows the chosen hour.
 - When a selected system has an accepted IBTrACS association, its matched best track is the dashed green line; the map checkbox can hide that overlay independently.
 - Weather backgrounds are visual context layers, not additional catalogue diagnostics. The menu offers positive ERA5 850-hPa relative vorticity at 0.25°, trailing 24-hour accumulated precipitation at 1°, and RH500 derived from 3-hourly ERA5 temperature and specific humidity and interpolated to the hourly slider at 1°. Subset tracks are hidden by default while a weather field is active and can be restored with the map checkbox.
+- Selected-system composites use unrotated storm-relative geographic coordinates: every contributing field is translated so its contemporaneous published centre lies at relative longitude 0°, relative latitude 0°, with north left at the top. The fields are not rotated into the direction of travel.
+- Each precipitation footprint is the lifecycle mean of UTC-day accumulations on a ±10°, 0.25° grid. A touched UTC day's centre is the published position closest to 12 UTC on that day. ERA5 uses hourly mean total precipitation rate accumulated over the day; IMERG Final Run is offered when at least one local contributing day is available (V06 `precipitationCal` or V07 `precipitation`), with its partial temporal coverage reported in the atlas.
+- Each vertical composite is a zonal section through 0° relative latitude, averaged over nine equally spaced lifecycle snapshots and interpolated to 27 pressure levels from 1000 to 100 hPa. The controls switch between ERA5 relative vorticity and equivalent potential temperature calculated from temperature and specific humidity following Bolton (1980). Local JASMIN ERA5 model-level analyses supply 1979 onward; the public ARCO ERA5 pressure-level archive supplies earlier snapshots.
 - Climate filters are evaluated at genesis. BSISO-1 uses the APCC daily index during May–October (amplitude below 1 is inactive); ENSO uses the NOAA CPC three-month ONI anomaly centred on the genesis month. Missing and out-of-season values remain explicitly selectable.
 - The split build loads compressed catalogue payloads from `assets/*.json.gz` and decompresses them in modern browsers.
 
@@ -52,6 +55,25 @@ python scripts/build_vorticity_videos.py \
 ```
 
 Repeat finalization for each field. Deploy the common directory at the `weatherBase` URL in `index.html`, or use a field-specific entry in `weatherBases`; the videos live below `vorticity/`, `precipitation/` and `rh500/`.
+
+## Storm-centred composite archive
+
+The atlas loads one small gzipped JSON asset only after a user selects a system. The archive therefore adds no bulk transfer to initial page load. It is generated one system per Slurm array task from the v5.5.1 public Parquet catalogue; the submission helper defaults to 200 simultaneous tasks:
+
+```bash
+bash scripts/submit_storm_composites.sh
+```
+
+After every task finishes, validate all assets against the catalogue and create the archive manifest:
+
+```bash
+python scripts/build_storm_composite.py \
+  --catalogue ../lps-v5.3-continuity-framework/production/v5.5.1/public-release/lps_v5.5.1-era5-1940-2025-core.parquet \
+  --output path/to/atlas-composites-v5.5.1-r1 \
+  --manifest
+```
+
+Serve that directory from a CORS-enabled public GWS and set `compositeBase` in the JSON configuration at the bottom of `index.html`. Assets live at `tracks/track-<track_id>.json.gz`; the manifest records catalogue completeness, source availability, warnings and checksums.
 
 ## Rebuild the climate-filter asset
 
