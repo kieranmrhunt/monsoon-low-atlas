@@ -30,6 +30,8 @@
 		relative_vorticity: {label: 'Relative vorticity', unit: '10⁻⁵ s⁻¹', minimum: -20, maximum: 20, palette: 'vorticity'},
 		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 370, palette: 'vorticity', topPressure: 125}
 	});
+	const COMPOSITE_TICK_FONT_SIZE = 12;
+	const COMPOSITE_LABEL_FONT_SIZE = 13;
 
 	let CORE;
 	let CLIMATE;
@@ -2620,6 +2622,10 @@
 
 	function renderDossier() {
 		const node = $('#mlaDossier');
+		const hasSelection = state.selected != null;
+		$('#mlaExploreEvolutionGrid').classList.toggle('has-selection', hasSelection);
+		$('#mlaSelectedEvolutionCard').hidden = !hasSelection;
+		$('#mlaCompositeCard').hidden = !hasSelection;
 		if (state.selected == null) {
 			if (!state.active.length) {
 				node.innerHTML = '<div class="mla-dossier-head"><div><h3>No matching systems</h3><p class="mla-dossier-sub">Adjust or reset the active filters.</p></div></div>';
@@ -3209,34 +3215,32 @@
 		return {values, rows: Number(field.shape[0]), columns: Number(field.shape[1])};
 	}
 
-	function drawCompositeColourBar(context, palette, minimum, maximum, unit, x, y, height) {
-		const width = 12;
-		for (let step = 0; step < Math.ceil(height); step++) {
-			const fraction = 1 - step / Math.max(1, height - 1);
+	function drawCompositeColourBar(context, palette, minimum, maximum, unit, x, y, width) {
+		const height = 12;
+		for (let step = 0; step < Math.ceil(width); step++) {
+			const fraction = step / Math.max(1, width - 1);
 			context.fillStyle = compositePaletteColour(palette, fraction);
-			context.fillRect(x, y + step, width, 1.2);
+			context.fillRect(x + step, y, 1.2, height);
 		}
 		context.strokeStyle = css('--mla-line-strong', '#b9aa97');
 		context.lineWidth = 1;
 		context.strokeRect(x, y, width, height);
 		context.fillStyle = css('--mla-ink', '#282119');
-		context.font = `10px ${CANVAS_FONT}`;
-		context.textAlign = 'left';
-		context.textBaseline = 'middle';
-		for (const value of [maximum, (minimum + maximum) / 2, minimum]) {
-			const tickY = y + (maximum - value) / (maximum - minimum) * height;
+		context.font = `${COMPOSITE_TICK_FONT_SIZE}px ${CANVAS_FONT}`;
+		context.textBaseline = 'top';
+		for (const value of [minimum, (minimum + maximum) / 2, maximum]) {
+			const fraction = (value - minimum) / (maximum - minimum);
+			const tickX = x + fraction * width;
 			context.beginPath();
-			context.moveTo(x + width, tickY);
-			context.lineTo(x + width + 4, tickY);
+			context.moveTo(tickX, y + height);
+			context.lineTo(tickX, y + height + 4);
 			context.stroke();
-			context.fillText(fmt(value, Math.abs(value) < 10 && value % 1 ? 1 : 0), x + width + 6, tickY);
+			context.textAlign = value === minimum ? 'left' : value === maximum ? 'right' : 'center';
+			context.fillText(fmt(value, Math.abs(value) < 10 && value % 1 ? 1 : 0), tickX, y + height + 6);
 		}
-		context.save();
-		context.translate(x + width + 39, y + height / 2);
-		context.rotate(-Math.PI / 2);
+		context.font = `${COMPOSITE_LABEL_FONT_SIZE}px ${CANVAS_FONT}`;
 		context.textAlign = 'center';
-		context.fillText(unit, 0, 0);
-		context.restore();
+		context.fillText(unit, x + width / 2, y + height + 27);
 	}
 
 	function drawCompositeXAxes(context, plot, yLabel) {
@@ -3246,7 +3250,7 @@
 		context.lineWidth = 1;
 		context.strokeRect(plot.left, plot.top, plot.width, plot.height);
 		context.fillStyle = ink;
-		context.font = `10px ${CANVAS_FONT}`;
+		context.font = `${COMPOSITE_TICK_FONT_SIZE}px ${CANVAS_FONT}`;
 		context.textBaseline = 'top';
 		for (const value of [-10, -5, 0, 5, 10]) {
 			const x = plot.left + (value + 10) / 20 * plot.width;
@@ -3257,10 +3261,11 @@
 			context.textAlign = value === -10 ? 'left' : value === 10 ? 'right' : 'center';
 			context.fillText(String(value).replace('-', '−'), x, plot.top + plot.height + 6);
 		}
+		context.font = `${COMPOSITE_LABEL_FONT_SIZE}px ${CANVAS_FONT}`;
 		context.textAlign = 'center';
-		context.fillText('Relative longitude (°)', plot.left + plot.width / 2, plot.top + plot.height + 25);
+		context.fillText('Relative longitude (°)', plot.left + plot.width / 2, plot.top + plot.height + 27);
 		context.save();
-		context.translate(12, plot.top + plot.height / 2);
+		context.translate(14, plot.top + plot.height / 2);
 		context.rotate(-Math.PI / 2);
 		context.textBaseline = 'top';
 		context.fillText(yLabel, 0, 0);
@@ -3272,7 +3277,10 @@
 		const drawing = setupChart('mlaPrecipComposite');
 		if (!drawing || !unpacked) return;
 		const {context, width, height} = drawing;
-		const plot = {left: 46, top: 13, width: Math.max(80, width - 119), height: Math.max(80, height - 58)};
+		const availableWidth = Math.max(80, width - 66);
+		const availableHeight = Math.max(80, height - 119);
+		const plotSize = Math.min(availableWidth, availableHeight);
+		const plot = {left: 52 + (availableWidth - plotSize) / 2, top: 14, width: plotSize, height: plotSize};
 		const palette = COMPOSITE_PALETTES.terrain_r;
 		const minimum = 0;
 		const maximum = 60;
@@ -3308,14 +3316,14 @@
 		context.beginPath(); context.arc(centreX, centreY, 2.8, 0, Math.PI * 2); context.fillStyle = '#19140f'; context.fill();
 		drawCompositeXAxes(context, plot, 'Relative latitude (°)');
 		context.fillStyle = css('--mla-ink', '#282119');
-		context.font = `10px ${CANVAS_FONT}`;
+		context.font = `${COMPOSITE_TICK_FONT_SIZE}px ${CANVAS_FONT}`;
 		context.textBaseline = 'middle';
 		context.textAlign = 'right';
 		for (const value of [-10, -5, 0, 5, 10]) {
 			const y = plot.top + (10 - value) / 20 * plot.height;
 			context.fillText(String(value).replace('-', '−'), plot.left - 6, y);
 		}
-		drawCompositeColourBar(context, palette, minimum, maximum, 'mm day⁻¹', plot.left + plot.width + 14, plot.top, plot.height);
+		drawCompositeColourBar(context, palette, minimum, maximum, 'mm day⁻¹', plot.left, plot.top + plot.height + 51, plot.width);
 	}
 
 	function drawSectionComposite(field, pressureLevels, definition) {
@@ -3323,7 +3331,7 @@
 		const drawing = setupChart('mlaSectionComposite');
 		if (!drawing || !unpacked || !Array.isArray(pressureLevels)) return;
 		const {context, width, height} = drawing;
-		const plot = {left: 48, top: 13, width: Math.max(80, width - 121), height: Math.max(80, height - 58)};
+		const plot = {left: 58, top: 14, width: Math.max(80, width - 72), height: Math.max(80, height - 119)};
 		const palette = COMPOSITE_PALETTES[definition.palette];
 		const cellWidth = plot.width / unpacked.columns;
 		const topPressure = Number(definition.topPressure || Math.min(...pressureLevels.map(Number)));
@@ -3362,7 +3370,7 @@
 		context.setLineDash([]);
 		drawCompositeXAxes(context, plot, 'Pressure (hPa)');
 		context.fillStyle = css('--mla-ink', '#282119');
-		context.font = `10px ${CANVAS_FONT}`;
+		context.font = `${COMPOSITE_TICK_FONT_SIZE}px ${CANVAS_FONT}`;
 		context.textBaseline = 'middle';
 		context.textAlign = 'right';
 		const pressureTicks = topPressure > 100
@@ -3373,7 +3381,7 @@
 			context.beginPath(); context.moveTo(plot.left - 4, y); context.lineTo(plot.left, y); context.strokeStyle = css('--mla-line-strong', '#b9aa97'); context.stroke();
 			context.fillText(String(pressure), plot.left - 6, y);
 		}
-		drawCompositeColourBar(context, palette, definition.minimum, definition.maximum, definition.unit, plot.left + plot.width + 14, plot.top, plot.height);
+		drawCompositeColourBar(context, palette, definition.minimum, definition.maximum, definition.unit, plot.left, plot.top + plot.height + 51, plot.width);
 	}
 
 	function compositeOptionLabel(key) {

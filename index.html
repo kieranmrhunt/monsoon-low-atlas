@@ -358,7 +358,8 @@
 .mla-chart { display: block; width: 100%; height: 300px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card-strong); }
 #mlaLifeChart { cursor: ew-resize; touch-action: pan-y; }
 .mla-evolution-card { align-self: start; }
-.mla-explore-evolution-grid { grid-template-areas: "selected subset" "composite subset"; align-items: start; }
+.mla-explore-evolution-grid { grid-template-areas: "subset subset"; align-items: start; }
+.mla-explore-evolution-grid.has-selection { grid-template-areas: "selected subset" "composite subset"; }
 .mla-selected-evolution { grid-area: selected; }
 .mla-subset-evolution { grid-area: subset; }
 .mla-composite-card { grid-area: composite; padding: 13px; }
@@ -374,7 +375,6 @@
 .mla-composite-chart { display: block; width: 100%; height: auto; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card-strong); }
 #mlaPrecipComposite { aspect-ratio: 1 / 1; }
 #mlaSectionComposite { aspect-ratio: .52 / 1; }
-.mla-composite-status { min-height: 19px; margin: 7px 2px 0; color: var(--mla-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .mla-profile-controls { margin: 10px 0; padding: 9px 0; border-top: 1px solid var(--mla-line); border-bottom: 1px solid var(--mla-line); }
 .mla-profile-controls .mla-label { display: block; margin-bottom: 6px; }
 .mla-profile-stack { display: grid; gap: 8px; }
@@ -464,7 +464,8 @@
 	.mla-composite-grid,
 	.mla-method-grid,
 	.mla-cohort-grid { grid-template-columns: 1fr; }
-	.mla-explore-evolution-grid { grid-template-areas: "selected" "composite" "subset"; }
+	.mla-explore-evolution-grid { grid-template-areas: "subset"; }
+	.mla-explore-evolution-grid.has-selection { grid-template-areas: "selected" "composite" "subset"; }
 	.mla-composite-title { display: block; }
 	.mla-composite-panel + .mla-composite-panel { border-left: 0; border-top: 1px solid var(--mla-line); padding: 14px 0 0; }
 	#mlaSectionComposite { width: min(100%, 220px); aspect-ratio: .52 / 1; margin-inline: auto; }
@@ -715,15 +716,15 @@
 					<p class="mla-dossier-empty">Select a track on the map or from a table to open its dossier.</p>
 				</aside>
 			</div>
-			<div class="mla-chart-grid mla-explore-evolution-grid" style="margin-top:14px">
-				<section class="mla-card mla-chart-card mla-evolution-card mla-selected-evolution"><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Circulation wind (m s⁻¹)</option><option value="vort">Smoothed vorticity (10⁻⁵ s⁻¹)</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Bars: 24 h rainfall. Drag the dashed marker to move map and weather time.</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system; drag or use arrow keys to change time"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
-				<section class="mla-card mla-composite-card" aria-labelledby="mlaCompositeHeading">
+			<div class="mla-chart-grid mla-explore-evolution-grid" id="mlaExploreEvolutionGrid" style="margin-top:14px">
+				<section class="mla-card mla-chart-card mla-evolution-card mla-selected-evolution" id="mlaSelectedEvolutionCard" hidden><div class="mla-chart-head"><h3>Selected-system evolution</h3><label class="mla-field" for="mlaEvolutionMetric"><span class="mla-label">Line variable</span><select class="mla-select" id="mlaEvolutionMetric"><option value="deficit">Pressure deficit (hPa)</option><option value="wind">Circulation wind (m s⁻¹)</option><option value="vort">Smoothed vorticity (10⁻⁵ s⁻¹)</option><option value="mslp">Minimum MSLP (hPa)</option><option value="q">q850 (g kg⁻¹)</option><option value="rh">RH850 (%)</option></select></label></div><p>Bars: 24 h rainfall. Drag the dashed marker to move map and weather time.</p><canvas class="mla-chart" id="mlaLifeChart" role="img" tabindex="0" aria-label="Meteorological time series for the selected atlas system; drag or use arrow keys to change time"></canvas><p class="mla-chart-readout" id="mlaLifeReadout" role="status" aria-live="polite">Select a system to inspect its hourly evolution.</p><details class="mla-a11y-data"><summary>Accessible selected-system values</summary><div id="mlaLifeData"></div></details></section>
+				<section class="mla-card mla-composite-card" id="mlaCompositeCard" aria-labelledby="mlaCompositeHeading" hidden>
 					<div class="mla-composite-title"><div><h3 id="mlaCompositeHeading">Storm-centred composites</h3><p>Every contributing track centre is translated to relative longitude 0°, relative latitude 0°; north remains up.</p></div><button class="mla-btn mla-btn-small" id="mlaRetryComposite" type="button" hidden>Retry composites</button></div>
 					<div class="mla-composite-grid">
-						<section class="mla-composite-panel" aria-labelledby="mlaPrecipCompositeHeading"><div class="mla-composite-head"><h4 id="mlaPrecipCompositeHeading">Precipitation footprint</h4><label class="mla-field" for="mlaCompositePrecipSource"><span class="mla-label">Dataset</span><select class="mla-select" id="mlaCompositePrecipSource" disabled><option value="era5">ERA5</option></select></label></div><canvas class="mla-composite-chart" id="mlaPrecipComposite" role="img" aria-label="Storm-centred lifecycle precipitation footprint"></canvas><p class="mla-composite-status" id="mlaPrecipCompositeStatus" role="status" aria-live="polite">Select a system to load its precipitation footprint.</p></section>
-						<section class="mla-composite-panel" aria-labelledby="mlaSectionCompositeHeading"><div class="mla-composite-head"><h4 id="mlaSectionCompositeHeading">Vertical structure at 0° relative latitude</h4><label class="mla-field" for="mlaCompositeSectionVariable"><span class="mla-label">Variable</span><select class="mla-select" id="mlaCompositeSectionVariable" disabled><option value="relative_vorticity">Relative vorticity</option><option value="theta_e">Equivalent potential temperature (θₑ)</option></select></label></div><canvas class="mla-composite-chart" id="mlaSectionComposite" role="img" aria-label="Storm-centred zonal vertical cross-section through zero relative latitude"></canvas><p class="mla-composite-status" id="mlaSectionCompositeStatus" role="status" aria-live="polite">Select a system to load its vertical structure.</p></section>
+						<section class="mla-composite-panel" aria-labelledby="mlaPrecipCompositeHeading"><div class="mla-composite-head"><h4 id="mlaPrecipCompositeHeading">Precipitation footprint</h4><label class="mla-field" for="mlaCompositePrecipSource"><span class="mla-label">Dataset</span><select class="mla-select" id="mlaCompositePrecipSource" disabled><option value="era5">ERA5</option></select></label></div><canvas class="mla-composite-chart" id="mlaPrecipComposite" role="img" aria-label="Storm-centred lifecycle precipitation footprint"></canvas><p class="mla-sr-only" id="mlaPrecipCompositeStatus" role="status" aria-live="polite">Select a system to load its precipitation footprint.</p></section>
+						<section class="mla-composite-panel" aria-labelledby="mlaSectionCompositeHeading"><div class="mla-composite-head"><h4 id="mlaSectionCompositeHeading">Vertical structure at 0° relative latitude</h4><label class="mla-field" for="mlaCompositeSectionVariable"><span class="mla-label">Variable</span><select class="mla-select" id="mlaCompositeSectionVariable" disabled><option value="relative_vorticity">Relative vorticity</option><option value="theta_e">Equivalent potential temperature (θₑ)</option></select></label></div><canvas class="mla-composite-chart" id="mlaSectionComposite" role="img" aria-label="Storm-centred zonal vertical cross-section through zero relative latitude"></canvas><p class="mla-sr-only" id="mlaSectionCompositeStatus" role="status" aria-live="polite">Select a system to load its vertical structure.</p></section>
 					</div>
-					<details class="mla-a11y-data"><summary>Composite method and availability</summary><div id="mlaCompositeData">Select a system to inspect composite provenance.</div></details>
+					<div class="mla-sr-only" id="mlaCompositeData">Select a system to inspect composite provenance.</div>
 				</section>
 				<section class="mla-card mla-chart-card mla-evolution-card mla-subset-evolution"><h3>Subset evolution</h3><p>Coloured line and shading: subset median and IQR. Dotted line: mean across all 1,678 LPS events. Each system contributes once per life-fraction bin.</p><div class="mla-profile-controls"><span class="mla-label">Variables</span><div class="mla-chip-row" id="mlaProfileMetrics" aria-label="Subset evolution variables"></div></div><button class="mla-btn mla-btn-small" id="mlaLoadProfile" type="button">Load subset variables</button><div class="mla-profile-stack" id="mlaProfileStack"></div><details class="mla-a11y-data"><summary>Accessible subset summary</summary><div id="mlaProfileData"></div></details></section>
 			</div>
@@ -781,7 +782,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.6c7262721551.json.gz","detail":"assets/atlas-detail.7c6f5ec274e8.json.gz","climate":"assets/atlas-climate.799a60f9d8b4.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","zenodo":"https://doi.org/10.5281/zenodo.22142640","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r2","weatherBases":{"precipitation":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.4.2-r3"},"compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.5.1-r1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.77f46b2505de.js"></script>
+<script src="assets/atlas-app.bd416668ce41.js"></script>
 
 </body>
 </html>
