@@ -5,7 +5,7 @@ Each ERA5 hour is encoded as one video frame.  The atlas uses a fixed frame
 rate to map UTC hours to video time, which lets the track-hour slider seek to
 individual fields without publishing hundreds of thousands of images.
 
-Vorticity remains at 0.25 degrees. Precipitation and locally derived RH500 are
+Vorticity and precipitation remain at 0.25 degrees. Locally derived RH500 is
 coarsened to 1 degree. Precipitation is a trailing 24-hour accumulation using
 the preceding month's final 23 hours at month boundaries. The 3-hourly
 pressure-level inputs used for RH500 are linearly interpolated to hourly
@@ -52,13 +52,13 @@ FIELD_SPECS = {
 	},
 	"precipitation": {
 		"source_dir": Path("/home/users/kieran/ncas/data/era5-incompass/hourly_precip_SA"),
-		"schema": "monsoon-low-atlas-precipitation-video-v2",
+		"schema": "monsoon-low-atlas-precipitation-video-v3",
 		"source_label": "ERA5 hourly_precip_SA",
 		"field_label": "ERA5 trailing 24-hour accumulated precipitation",
 		"units": "mm",
-		"grid_degrees": 1.0,
-		"coarsen_factor": 4,
-		"dimensions": (60, 46),
+		"grid_degrees": 0.25,
+		"coarsen_factor": 1,
+		"dimensions": (240, 184),
 		"positive_only": True,
 		"colour_stops": (
 			(0.0, (247, 252, 253)), (1.0, (204, 236, 230)),
@@ -225,6 +225,36 @@ def interpolate_hourly(field: xr.DataArray, month: str) -> xr.DataArray:
 	return field.interp(time=target)
 
 
+def trailing_24_hour_sum(field: xr.DataArray, current_times: np.ndarray) -> xr.DataArray:
+	"""Return native-grid trailing sums without materialising a 24-step window.
+
+	The input begins with the preceding month's final 23 hours. An in-place
+	cumulative sum keeps native 0.25-degree processing comfortably within one
+	Slurm task's memory while remaining numerically equivalent to rolling(24).
+	"""
+	field = field.transpose("time", "latitude", "longitude").astype(np.float32).load()
+	values = np.asarray(field.values)
+	if values.shape[0] != len(current_times) + 23:
+		raise ValueError(
+			f"Trailing precipitation expected {len(current_times) + 23} input hours, "
+			f"found {values.shape[0]}"
+		)
+	np.cumsum(values, axis=0, dtype=np.float32, out=values)
+	trailing = values[23:].copy()
+	trailing[1:] -= values[:-24]
+	return xr.DataArray(
+		trailing,
+		dims=("time", "latitude", "longitude"),
+		coords={
+			"time": current_times,
+			"latitude": field.latitude.values,
+			"longitude": field.longitude.values,
+		},
+		attrs=field.attrs,
+		name=field.name,
+	)
+
+
 def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray, tuple[float, float, float, float], list[Path]]:
 	datasets = [xr.open_dataset(source)]
 	field = select_weather_field(datasets[0], field_name)
@@ -281,9 +311,11 @@ def atlas_field(source: Path, field_name: str, month: str) -> tuple[xr.DataArray
 	)
 	if field_name == "rh500":
 		field = interpolate_hourly(field, month).clip(min=0, max=100)
+		field.load()
 	elif field_name == "precipitation":
-		field = field.rolling(time=24, min_periods=24).sum().sel(time=current_times)
-	field.load()
+		field = trailing_24_hour_sum(field, current_times)
+	else:
+		field.load()
 	for dataset in datasets:
 		dataset.close()
 	return field, raster_bounds, sources

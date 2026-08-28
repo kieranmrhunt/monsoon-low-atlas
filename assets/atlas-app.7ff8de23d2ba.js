@@ -337,6 +337,26 @@
 		return atlasConfig;
 	}
 
+	async function loadVisitCounter() {
+		ensureAtlasConfig();
+		const counter = atlasConfig.visitCounter;
+		const container = $('#mlaVisitCounter');
+		const valueNode = $('#mlaVisitCount');
+		if (!counter || !counter.endpoint || !container || !valueNode) return;
+		try {
+			const endpoint = new URL(counter.endpoint);
+			if (counter.productionHost && window.location.hostname !== counter.productionHost) endpoint.searchParams.set('readOnly', 'true');
+			const response = await fetch(endpoint, {cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer'});
+			if (!response.ok) return;
+			const count = Number((await response.json()).value);
+			if (!Number.isSafeInteger(count) || count < 0) return;
+			valueNode.textContent = fmt(count);
+			container.hidden = false;
+		} catch (_) {
+			// A third-party counter must never delay or impair the atlas.
+		}
+	}
+
 	async function decodeJsonBytes(bytes) {
 		if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return JSON.parse(new TextDecoder().decode(bytes));
 		if (!('DecompressionStream' in window)) throw new Error('This browser needs DecompressionStream support. Please use a current Chrome, Edge, Firefox or Safari release.');
@@ -4014,6 +4034,7 @@
 		renderData();
 		$('#mlaLoading').hidden = true;
 		root.dataset.ready = 'true';
+		void loadVisitCounter();
 		writeUrl('replace');
 		boundaryPromise.then(boundary => {
 			if (!boundary) return;
