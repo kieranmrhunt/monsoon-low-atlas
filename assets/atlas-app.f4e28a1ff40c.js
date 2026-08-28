@@ -3615,7 +3615,7 @@
 		const stack = $('#mlaProfileStack');
 		stack.innerHTML = profileMetrics.map(key => {
 			const definition = METRICS[key];
-			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title}: filtered-subset median and interquartile range with all-LPS mean`)}"></canvas></div>`;
+			return `<div class="mla-profile-slab"><div class="mla-profile-slab-head"><strong>${esc(definition.title)}</strong><span id="mlaProfileMeta-${key}">${esc(definition.unit)}</span></div><canvas class="mla-chart mla-profile-chart" id="mlaProfileChart-${key}" role="img" tabindex="0" aria-label="${esc(`${definition.title}: filtered-subset mean and interquartile range with all-LPS mean`)}"></canvas></div>`;
 		}).join('');
 		const accessibleProfiles = [];
 		for (const key of profileMetrics) {
@@ -3627,7 +3627,7 @@
 			$(`#mlaProfileMeta-${key}`).textContent = `${definition.unit} · subset n ≤ ${fmt(maximumN)} · all LPS n ≤ ${fmt(allMaximumN)}`;
 			drawLinePlot(`mlaProfileChart-${key}`, [
 				{
-					name: 'Subset median',
+					name: 'Subset mean',
 					colour: definition.colour,
 					points: profile.points
 				},
@@ -3639,14 +3639,14 @@
 					points: allProfile.points.map(point => ({x: point.x, y: point.mean}))
 				}
 			], {
-				zero: definition.zero !== false,
+				zero: false,
 				xMin: 0,
 				xMax: 100,
 				xFormat: value => `${fmt(value)}%`,
 				yFormat: value => fmt(value, ['mslp', 'ringMslp', 'orography'].includes(key) ? 0 : 1)
 			});
 			accessibleProfiles.push(`<h4>${esc(`${definition.title} (${definition.unit})`)}</h4>${accessibleTable(
-				['Life fraction', 'Subset median', 'Subset Q1', 'Subset Q3', 'Subset systems', 'All-LPS mean', 'All-LPS systems'],
+				['Life fraction', 'Subset mean', 'Subset Q1', 'Subset Q3', 'Subset systems', 'All-LPS mean', 'All-LPS systems'],
 				profile.points.map((point, index) => [`${fmt(point.x)}%`, fmt(point.y, 2), fmt(point.low, 2), fmt(point.high, 2), point.n, fmt(allProfile.points[index].mean, 2), allProfile.points[index].n])
 			)}`);
 		}
@@ -3682,7 +3682,10 @@
 			});
 			perBin.forEach((items, bin) => { if (items.length) values[bin].push(items.reduce((sum, value) => sum + value, 0) / items.length); });
 		}
-		const points = bins.map((x, index) => ({x, y: median(values[index]), mean: mean(values[index]), low: quantile(values[index], .25), high: quantile(values[index], .75), n: values[index].length}));
+		const points = bins.map((x, index) => {
+			const average = mean(values[index]);
+			return {x, y: average, mean: average, low: quantile(values[index], .25), high: quantile(values[index], .75), n: values[index].length};
+		});
 		const result = {points, bins};
 		profileCache.set(cacheKey, result);
 		return result;
