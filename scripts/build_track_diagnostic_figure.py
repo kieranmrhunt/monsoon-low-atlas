@@ -4,7 +4,7 @@
 Chart contract
 --------------
 Question: Which spatial, seasonal, intensity and lifecycle structures are
-most useful for a compact introduction to the public v5.5 catalogue?
+most useful for a compact introduction to the public v5.5.1 catalogue?
 Grain: one physical event for panels a-c; one event per normalised-life bin
 before cross-event aggregation for panel d.
 Metrics: unique-track count per 1-degree cell, genesis month by peak atlas class,
@@ -34,11 +34,11 @@ ATLAS_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ATLAS_ROOT.parent
 DEFAULT_DATA = (
     WORKSPACE_ROOT
-    / "lps-v5.3-continuity-framework/production/v5.5/public-release"
-    / "lps_v5.5-era5-1940-2025-core.parquet"
+    / "lps-v5.3-continuity-framework/production/v5.5.1/public-release"
+    / "lps_v5.5.1-era5-1940-2025-core.parquet"
 )
-DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.daccb568d55a.json.gz"
-DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.5-track-diagnostics.png"
+DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.6c7262721551.json.gz"
+DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.5.1-track-diagnostics.png"
 
 PAPER = "#fffaf0"
 INK = "#282119"
@@ -350,7 +350,7 @@ def main() -> None:
     geography = load_geography(args.core)
     figure = build_figure(frame, summary, geography)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(args.output, dpi=190, metadata={"Software": "matplotlib", "Title": "LPS v5.5 track diagnostics"})
+    figure.savefig(args.output, dpi=190, metadata={"Software": "matplotlib", "Title": "LPS v5.5.1 track diagnostics"})
     plt.close(figure)
     print(f"Wrote {args.output} from {len(summary):,} physical events and {len(frame):,} hourly positions")
 

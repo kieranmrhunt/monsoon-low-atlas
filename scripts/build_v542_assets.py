@@ -520,7 +520,15 @@ def main() -> None:
     )
     if ibtracs and ibtracs.get("schema") != "lps-ibtracs-v04r01-crosswalk-v1":
         raise ValueError("Unsupported IBTrACS crosswalk schema")
-    if ibtracs and ibtracs.get("catalogue_version") != version_tag:
+    crosswalk_version = ibtracs.get("catalogue_version") if ibtracs else None
+    crosswalk_matches_catalogue = crosswalk_version == version_tag
+    # v5.5.1 changes classification only: physical-event identifiers,
+    # observed positions and geometry are byte-for-byte inherited from v5.5,
+    # so its already-audited physical-event crosswalk remains authoritative.
+    crosswalk_inherited_from_v55 = (
+        version_tag == "v5.5.1" and crosswalk_version == "v5.5"
+    )
+    if ibtracs and not (crosswalk_matches_catalogue or crosswalk_inherited_from_v55):
         raise ValueError(f"IBTrACS crosswalk does not match the {version_tag} catalogue")
     if release.get("schema") != f"lps-{version_tag}-release-manifest-v1":
         raise ValueError("Unsupported release manifest")
@@ -561,9 +569,9 @@ def main() -> None:
             columns.append(column)
     table = pq.read_table(args.parquet, columns=columns)
     data = table.to_pandas()
-    # v5.5's public table intentionally has one event identifier and exposes no
-    # tracker-audit Boolean.  The aliases below are in-memory compatibility
-    # columns for the shared v5.4.2/v5.5 asset builder only.
+    # v5.5 and later public tables intentionally have one event identifier and
+    # expose no tracker-audit Boolean.  The aliases below are in-memory
+    # compatibility columns for the shared v5 catalogue asset builder only.
     data["event_id"] = data["track_id"]
     data["continuity_parent_track_id"] = data["track_id"]
     data["continuity_segment_number"] = 0
@@ -637,7 +645,11 @@ def main() -> None:
         raise ValueError("Published rows are missing required final-centre physics")
     if data.loc[diagnostics, "imd_category"].isna().any():
         raise ValueError("Observed rows are missing the persistent IMD-equivalent class")
-    if data.loc[~diagnostics, "imd_category"].notna().any():
+    version_tuple = tuple(int(part) for part in version.split("."))
+    if version_tuple >= (5, 5, 1):
+        if data["imd_category"].isna().any():
+            raise ValueError("Hourly-classified rows are missing an IMD-equivalent class")
+    elif data.loc[~diagnostics, "imd_category"].notna().any():
         raise ValueError("Interpolated rows unexpectedly carry an observed-support class")
     if data["atlas_event_category"].isna().any():
         raise ValueError("Rows are missing the event peak intensity category")

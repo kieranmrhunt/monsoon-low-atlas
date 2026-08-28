@@ -1,0 +1,62 @@
+{
+  "schema": "lps-v5.5.1-release-manifest-v1",
+  "status": "published_release",
+  "catalogue": {
+    "path": "lps-v5.3-continuity-framework/production/v5.5.1/public-release/lps_v5.5.1-era5-1940-2025-core.parquet",
+    "sha256": "68e28388bb0e2311f77c1a26ee9da25dd83d31895f96578078b3bc655edcfb6e",
+    "bytes": 61156083,
+    "coverage": "1940-2025",
+    "rows": 287773,
+    "observed_rows": 244113,
+    "posterior_rows": 43660,
+    "physical_events": 1678,
+    "schema_columns": 58
+  },
+  "csv": {
+    "path": "lps-v5.3-continuity-framework/production/v5.5.1/public-release/lps_v5.5.1-era5-1940-2025-core.csv.gz",
+    "sha256": "654c9f4ce9c7ff1c9f24ec6be24f0eca8d8bde20fa1bcfc97606bae326ac9a84",
+    "bytes": 87913197
+  },
+  "identity_semantics": {
+    "track_id": "one hourly-complete physical event; unchanged from v5.5",
+    "population": "no genesis rule; v5.5 event population is frozen"
+  },
+  "continuity": {
+    "complete_hourly_spans": true,
+    "non_hourly_steps": 0,
+    "duplicate_track_times": 0,
+    "maximum_hourly_speed_ms": 19.9602822148865,
+    "maximum_observed_centre_residual_km": 124.869445910963
+  },
+  "intensity": {
+    "metric": "p95_anomaly_wind_125km_ms",
+    "wind_thresholds_ms": {
+      "depression": 10.864504601961277,
+      "deep_depression": 14.212801616020542,
+      "cyclonic_storm": 18.83486906837853,
+      "severe_cyclonic_storm": 26.590403390652043,
+      "very_severe_or_extremely_severe": 35.45387118753606,
+      "super_cyclonic_storm": 66.47600847663011
+    },
+    "persistence_hours": 6,
+    "persistence_rows": "all_hourly_published_centres",
+    "land_fraction_minimum": 0.95,
+    "land_depression_closed_isobars": 2,
+    "land_depression_circulation_ms": 8.745548,
+    "land_pressure_maximum_category": "depression"
+  },
+  "qa": {
+    "source_path": "lps-v5.3-continuity-framework/production/v5.5.1/final_release_qa.json",
+    "source_sha256": "afd00e983b3e7cdd6505b52bf1194b7ab66c495e64b80013b61b3ba135244c2d",
+    "status": "pass",
+    "full_2015_2025_frequency_pass": true
+  },
+  "publication": {
+    "published_on": "2026-08-28",
+    "zenodo_status": "published",
+    "zenodo_record": "https://doi.org/10.5281/zenodo.22142640",
+    "zenodo_doi": "10.5281/zenodo.22142640",
+    "zenodo_concept_doi": "10.5281/zenodo.22078693",
+    "previous_releases_preserved": true
+  }
+}

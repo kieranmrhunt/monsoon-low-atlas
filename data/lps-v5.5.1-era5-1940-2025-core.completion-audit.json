@@ -1,0 +1,24 @@
+{
+  "schema": "lps-v5.5.1-release-completion-audit-v1",
+  "status": "pass",
+  "completed_at_utc": "2026-08-28T10:33:53.857894+00:00",
+  "catalogue": {
+    "rows": 287773,
+    "events": 1678,
+    "observed_rows": 244113,
+    "posterior_rows": 43660,
+    "sha256": "68e28388bb0e2311f77c1a26ee9da25dd83d31895f96578078b3bc655edcfb6e",
+    "schema_columns": 58
+  },
+  "checks": {
+    "all_positions_present": true,
+    "all_required_physics_present": true,
+    "all_hourly_categories_present": true,
+    "all_actual_closed_isobar_counts_present": true,
+    "every_event_has_complete_hourly_axis": true,
+    "one_row_per_event_time": true,
+    "event_identity_and_geometry_exactly_match_v5.5": true,
+    "public_schema_is_exact_allowlisted_projection": true,
+    "public_package_contains_only_csv_gz_and_parquet": true
+  }
+}

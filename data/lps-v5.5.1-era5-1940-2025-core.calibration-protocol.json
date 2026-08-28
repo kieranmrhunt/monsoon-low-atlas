@@ -1,0 +1,12 @@
+{
+  "schema": "lps-v5.5.1-calibration-protocol-pointer-v1",
+  "status": "frozen",
+  "scientific_change": true,
+  "catalogue_identity_or_geometry_changed": false,
+  "source_path": "lps-v5.3-continuity-framework/production/v5.5.1/CALIBRATION_PROTOCOL.md",
+  "source_sha256": "43f5993f397b955868f9c2bc2a78bb1ed3fbd69d08a54c71e12831a13715c9d6",
+  "population": "first observed JJAS entry into 65-100 E, 0-32 N; genesis is not used",
+  "calibration_years": "2015-2025",
+  "acceptance_tolerance": "25 percent for full-period mean total, low, D, DD, CS+ and D+ counts",
+  "precipitation_used_for_selection_or_intensity": false
+}

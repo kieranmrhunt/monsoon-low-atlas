@@ -3164,7 +3164,7 @@
 				fmt(evolution.lineValues[item.index], 2),
 				fmt(evolution.rainValues[item.index], 2)
 			]);
-			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Physics is resampled at each published v5.5 centre.');
+			$('#mlaLifeData').innerHTML = accessibleTable(['Hours since genesis', `${definition.title} (${definition.unit})`, '24 h rain (mm)'], rows, 'Physics is resampled at each published v5.5.1 centre.');
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
@@ -3481,9 +3481,9 @@
 			url: window.location.href,
 			caveats: [
 				'Atlas-derived IMD-style class is not official IMD grade.',
-				'Every v5.5 physical event is continuous at hourly resolution with physics resampled at every published centre.',
+				'Every v5.5.1 physical event is continuous at hourly resolution with physics resampled at every published centre.',
 				'Cyclone names use credible NOAA IBTrACS v04r01 associations; state means use IMD 0.25-degree daily rainfall over active track dates.',
-				'Interpolated positions meet the published v5.5 gap-support contract.'
+				'Interpolated positions meet the published v5.5.1 gap-support contract.'
 			]
 		};
 	}
