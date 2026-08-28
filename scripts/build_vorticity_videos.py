@@ -492,7 +492,12 @@ def finalize_archive(args: argparse.Namespace) -> None:
 		if failed:
 			raise ValueError(f"Weather month {month} failed: {', '.join(failed)}")
 		metadata["source"] = f"{spec['source_label']}/{month}.nc"
-		metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+		metadata_text = json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+		metadata_temporary = metadata_path.with_name(
+			f".{metadata_path.name}.tmp-{os.getpid()}"
+		)
+		metadata_temporary.write_text(metadata_text, encoding="utf-8")
+		os.replace(metadata_temporary, metadata_path)
 		video.parent.chmod(0o2755)
 		video.chmod(0o644)
 		metadata_path.chmod(0o644)

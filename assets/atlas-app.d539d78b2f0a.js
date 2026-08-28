@@ -36,6 +36,8 @@
 	let CORE;
 	let CLIMATE;
 	let DETAIL;
+	let catalogueStartDate = '1940-01-01';
+	let catalogueEndDate = '2025-12-31';
 	let detailPromise;
 	let T;
 	let S;
@@ -141,9 +143,9 @@
 		timeMode: 'years',
 		yearMin: 1940,
 		yearMax: 2025,
-		dateMin: '1940-05-17',
+		dateMin: '1940-01-01',
 		dateMax: '2025-12-31',
-		months: new Set([6, 7, 8, 9]),
+		months: new Set(SEASON_MONTHS.all),
 		monthMode: 'active',
 		classes: new Set([1, 2, 3, 4, 5, 6]),
 		metric: 'deficit',
@@ -153,6 +155,7 @@
 		genesisRegion: 'all',
 		lysisRegion: 'all',
 		bsiso: 'all',
+		mjo: 'all',
 		enso: 'all',
 		stateIndex: -1,
 		stateMin: 0,
@@ -923,6 +926,7 @@
 	function climatePass(index) {
 		if (!CLIMATE) return true;
 		if (state.bsiso !== 'all' && CLIMATE.bsiso.phase[index] !== Number(state.bsiso)) return false;
+		if (state.mjo !== 'all' && CLIMATE.mjo.phase[index] !== Number(state.mjo)) return false;
 		if (state.enso !== 'all' && CLIMATE.enso.class[index] !== Number(state.enso)) return false;
 		return true;
 	}
@@ -958,7 +962,7 @@
 
 	function filterSignature() {
 		const percentiles = FILTER_METRIC_KEYS.map(key => `${key}:${state.percentileMins[key]}`).join(',');
-		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.lysisRegion, state.bsiso, state.enso, state.stateIndex, state.stateMin, state.search].join('|');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.lysisRegion, state.bsiso, state.mjo, state.enso, state.stateIndex, state.stateMin, state.search].join('|');
 	}
 
 	function parsedSearch() {
@@ -1100,6 +1104,7 @@
 		$('#mlaGenesisRegion').value = state.genesisRegion;
 		$('#mlaLysisRegion').value = state.lysisRegion;
 		$('#mlaBsiso').value = state.bsiso;
+		$('#mlaMjo').value = state.mjo;
 		$('#mlaEnso').value = state.enso;
 		$('#mlaState').value = state.stateIndex < 0 ? '' : String(state.stateIndex);
 		$('#mlaStateMin').value = state.stateMin;
@@ -1158,9 +1163,9 @@
 		state.timeMode = 'years';
 		state.yearMin = 1940;
 		state.yearMax = 2025;
-		state.dateMin = '1940-05-17';
-		state.dateMax = '2025-12-31';
-		state.months = new Set([6, 7, 8, 9]);
+		state.dateMin = catalogueStartDate;
+		state.dateMax = catalogueEndDate;
+		state.months = new Set(SEASON_MONTHS.all);
 		state.monthMode = 'active';
 		state.classes = new Set([1, 2, 3, 4, 5, 6]);
 		state.metric = 'deficit';
@@ -1170,6 +1175,7 @@
 		state.genesisRegion = 'all';
 		state.lysisRegion = 'all';
 		state.bsiso = 'all';
+		state.mjo = 'all';
 		state.enso = 'all';
 		state.stateIndex = -1;
 		state.stateMin = 0;
@@ -1189,8 +1195,8 @@
 	function setTimeMode(mode) {
 		if (mode === state.timeMode) return;
 		if (mode === 'dates') {
-			state.dateMin = state.yearMin === 1940 ? '1940-05-17' : `${state.yearMin}-01-01`;
-			state.dateMax = `${state.yearMax}-12-31`;
+			state.dateMin = state.yearMin === Number(catalogueStartDate.slice(0, 4)) ? catalogueStartDate : `${state.yearMin}-01-01`;
+			state.dateMax = state.yearMax === Number(catalogueEndDate.slice(0, 4)) ? catalogueEndDate : `${state.yearMax}-12-31`;
 		} else {
 			state.yearMin = Number(state.dateMin.slice(0, 4));
 			state.yearMax = Number(state.dateMax.slice(0, 4));
@@ -1215,7 +1221,7 @@
 			applyFilters();
 		});
 		$('#mlaDateMin').addEventListener('change', event => {
-			state.dateMin = event.target.value || '1940-05-17';
+			state.dateMin = event.target.value || catalogueStartDate;
 			if (state.dateMin > state.dateMax) {
 				state.dateMax = state.dateMin;
 				$('#mlaDateMax').value = state.dateMax;
@@ -1223,7 +1229,7 @@
 			applyFilters();
 		});
 		$('#mlaDateMax').addEventListener('change', event => {
-			state.dateMax = event.target.value || '2025-12-31';
+			state.dateMax = event.target.value || catalogueEndDate;
 			if (state.dateMax < state.dateMin) {
 				state.dateMin = state.dateMax;
 				$('#mlaDateMin').value = state.dateMin;
@@ -1252,6 +1258,7 @@
 		$('#mlaGenesisRegion').addEventListener('change', event => { state.genesisRegion = event.target.value; applyFilters(); });
 		$('#mlaLysisRegion').addEventListener('change', event => { state.lysisRegion = event.target.value; applyFilters(); });
 		$('#mlaBsiso').addEventListener('change', event => { state.bsiso = event.target.value; applyFilters(); });
+		$('#mlaMjo').addEventListener('change', event => { state.mjo = event.target.value; applyFilters(); });
 		$('#mlaEnso').addEventListener('change', event => { state.enso = event.target.value; applyFilters(); });
 		$('#mlaState').addEventListener('change', event => {
 			state.stateIndex = event.target.value === '' ? -1 : Number(event.target.value);
@@ -1389,7 +1396,7 @@
 		if (state.timeMode === 'dates') parameters.set('dates', `${state.dateMin},${state.dateMax}`);
 		else if (state.yearMin !== 1940 || state.yearMax !== 2025) parameters.set('years', `${state.yearMin}-${state.yearMax}`);
 		const months = [...state.months].sort((a, b) => a - b);
-		if (months.join(',') !== '6,7,8,9') parameters.set('months', months.join(','));
+		if (months.join(',') !== SEASON_MONTHS.all.join(',')) parameters.set('months', months.join(','));
 		if (state.monthMode !== 'active') parameters.set('month', state.monthMode);
 		const classes = [...state.classes].sort((a, b) => a - b);
 		if (classes.join(',') !== '1,2,3,4,5,6') parameters.set('class', classes.join(','));
@@ -1401,6 +1408,7 @@
 		if (state.genesisRegion !== 'all') parameters.set('genesis', state.genesisRegion);
 		if (state.lysisRegion !== 'all') parameters.set('lysis', state.lysisRegion);
 		if (state.bsiso !== 'all') parameters.set('bsiso', state.bsiso);
+		if (state.mjo !== 'all') parameters.set('mjo', state.mjo);
 		if (state.enso !== 'all') parameters.set('enso', state.enso);
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
 		if (state.search) parameters.set('q', state.search);
@@ -1460,6 +1468,7 @@
 		state.genesisRegion = Object.hasOwn(ENDPOINT_REGION_LABELS, parameters.get('genesis')) ? parameters.get('genesis') : 'all';
 		state.lysisRegion = Object.hasOwn(ENDPOINT_REGION_LABELS, parameters.get('lysis')) ? parameters.get('lysis') : 'all';
 		state.bsiso = ['-1', '0', '1', '2', '3', '4', '5', '6', '7', '8'].includes(parameters.get('bsiso')) ? parameters.get('bsiso') : 'all';
+		state.mjo = ['-1', '0', '1', '2', '3', '4', '5', '6', '7', '8'].includes(parameters.get('mjo')) ? parameters.get('mjo') : 'all';
 		state.enso = ['-1', '0', '1', '2'].includes(parameters.get('enso')) ? parameters.get('enso') : 'all';
 		const overIndex = CORE.state_slugs.indexOf(parameters.get('over'));
 		if (overIndex >= 0) state.stateIndex = overIndex;
@@ -1893,25 +1902,34 @@
 		if (rainfallMapCache && rainfallMapCache.key === key) return rainfallMapCache;
 		const totals = new Float64Array(CORE.states.length);
 		const weights = new Float64Array(CORE.states.length);
+		const climatologyTotals = new Float64Array(CORE.states.length);
+		const climatologyWeights = new Float64Array(CORE.states.length);
 		let systemDays = 0;
 		for (const index of indexes) {
 			const days = Math.max(1, Number(track(index)[T.rain_days]) || 1);
 			systemDays += days;
 			const values = DETAIL.state_mean_x10[index] || [];
+			const climatologyValues = DETAIL.state_climatology_mean_x10 && DETAIL.state_climatology_mean_x10[index] || [];
 			for (let stateIndex = 0; stateIndex < CORE.states.length; stateIndex++) {
 				const value = Number(values[stateIndex]);
-				if (value < 0 || !Number.isFinite(value)) continue;
-				totals[stateIndex] += value * days;
-				weights[stateIndex] += days;
+				if (value >= 0 && Number.isFinite(value)) {
+					totals[stateIndex] += value * days;
+					weights[stateIndex] += days;
+				}
+				const climatologyValue = Number(climatologyValues[stateIndex]);
+				if (climatologyValue >= 0 && Number.isFinite(climatologyValue)) {
+					climatologyTotals[stateIndex] += climatologyValue * days;
+					climatologyWeights[stateIndex] += days;
+				}
 			}
 		}
 		const means = Array.from(totals, (total, index) => weights[index] ? total / weights[index] / 10 : NaN);
-		const climatology = DETAIL.state_rainfall && DETAIL.state_rainfall.jjas_climatology_x10;
+		const climatology = Array.from(climatologyTotals, (total, index) => climatologyWeights[index] ? total / climatologyWeights[index] / 10 : NaN);
 		const values = anomaly
-			? means.map((value, index) => Number.isFinite(value) && climatology && Number(climatology[index]) > 0 ? value / (Number(climatology[index]) / 10) - 1 : NaN)
+			? means.map((value, index) => Number.isFinite(value) && Number(climatology[index]) > 0 ? value / Number(climatology[index]) - 1 : NaN)
 			: means;
 		const maximum = anomaly ? 1 : niceRainfallMaximum(Math.max(...values.filter(Number.isFinite)));
-		rainfallMapCache = {key, values, maximum, tracks: indexes.length, systemDays, mode: state.stateFill, anomaly, climatologyPeriod: DETAIL.state_rainfall && DETAIL.state_rainfall.jjas_climatology_period};
+		rainfallMapCache = {key, values, maximum, tracks: indexes.length, systemDays, mode: state.stateFill, anomaly, climatologyPeriod: DETAIL.state_rainfall && DETAIL.state_rainfall.climatology_period};
 		return rainfallMapCache;
 	}
 
@@ -1931,7 +1949,7 @@
 		const selection = summary.mode.startsWith('selected') ? systemLabel(state.selected) : `${fmt(summary.tracks)} filtered systems`;
 		const period = summary.climatologyPeriod ? `${summary.climatologyPeriod[0]}–${summary.climatologyPeriod[1]}` : 'all-record';
 		const description = summary.anomaly
-			? `IMD fractional anomaly relative to the ${period} JJAS daily state mean.`
+			? `IMD fractional anomaly relative to the ${period} calendar-month-matched daily state mean.`
 			: 'IMD area-mean daily rainfall.';
 		const heading = summary.anomaly ? 'Fractional anomaly' : 'Mean rainfall (mm day⁻¹)';
 		$('#mlaStateRainfallData').innerHTML = `<p>${esc(selection)} · ${fmt(summary.systemDays)} system-days · ${esc(description)}</p>${accessibleTable(['State / UT', heading], rows)}`;
@@ -2296,7 +2314,7 @@
 		}
 		const rainfall = stateRainfallSummary();
 		const rainfallLegend = rainfall && rainfall.anomaly
-			? `<span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallAnomalyColour(-1)}"></span>−1 fractional anomaly</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallAnomalyColour(0)}"></span>JJAS mean</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallAnomalyColour(1)}"></span>+1 or wetter</span>`
+			? `<span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallAnomalyColour(-1)}"></span>−1 fractional anomaly</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallAnomalyColour(0)}"></span>month-matched mean</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallAnomalyColour(1)}"></span>+1 or wetter</span>`
 			: rainfall
 				? `<span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallColour(0)}"></span>state rain 0</span><span class="mla-legend-item"><span class="mla-swatch" style="background:${rainfallColour(1)}"></span>${fmt(rainfall.maximum)} mm/day</span>`
 				: state.stateFill.startsWith('selected') ? '<span class="mla-legend-item">Select a system for state rainfall</span>' : '';
@@ -2318,7 +2336,7 @@
 		else if (layer !== 'none') drawPointLayer(drawing.context, drawing.projection, layer, indexes);
 		const pathLabel = layer === 'none' ? '' : ` · ${fmt(visiblePointCount(indexes))} selected-month positions`;
 		const rainfall = stateRainfallSummary();
-		const rainfallLabel = rainfall ? ` · IMD state ${rainfall.anomaly ? 'fractional JJAS anomaly' : 'mean'} across ${fmt(rainfall.systemDays)} system-days` : '';
+		const rainfallLabel = rainfall ? ` · IMD state ${rainfall.anomaly ? 'fractional climatology anomaly' : 'mean'} across ${fmt(rainfall.systemDays)} system-days` : '';
 		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'unique-track density' : layer === 'none' ? (state.selected == null ? 'no LPS subset layer' : 'selected system only') : layer;
 		$('#mlaMapStatus').textContent = `${fmt(indexes.length)} systems · ${layerLabel}${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		renderStateRainfallValues(rainfall);
@@ -2691,6 +2709,14 @@
 		return `Phase ${phase} (${fmt(amplitude / 100, 2)})`;
 	}
 
+	function mjoLabel(index) {
+		const phase = CLIMATE.mjo.phase[index];
+		const amplitude = CLIMATE.mjo.amplitude_x100[index];
+		if (phase < 0) return 'Unavailable';
+		if (phase === 0) return `Inactive (${fmt(amplitude / 100, 2)})`;
+		return `Phase ${phase} (${fmt(amplitude / 100, 2)})`;
+	}
+
 	function ensoLabel(index) {
 		const category = CLIMATE.enso.class[index];
 		if (category < 0) return 'Unavailable';
@@ -2738,6 +2764,7 @@
 			['Genesis region', endpointRegionLabel(genesisRegions[index])],
 			['Lysis region', endpointRegionLabel(lysisRegions[index])],
 			['BSISO-1 at genesis', bsisoLabel(index)],
+			['MJO RMM at genesis', mjoLabel(index)],
 			['ENSO at genesis', ensoLabel(index)]
 		];
 		const analogues = closestAnalogues(index, 5);
@@ -3175,29 +3202,12 @@
 		};
 	}
 
-	function drawGenesisMap() {
+	function drawTrackDensityMap() {
 		const drawing = setupChart('mlaGenesisChart');
 		if (!drawing) return;
 		const projection = fixedProjection(drawing.width, drawing.height, {lonMin: 52, lonMax: 108, latMin: -4, latMax: 36});
 		drawMapGeography(drawing.context, projection, drawing.width, drawing.height, {});
-		const cells = new Map();
-		for (const index of state.active) {
-			const row = track(index);
-			const lat = row[T.gen_lat_x1000] / 1000;
-			const lon = row[T.gen_lon_x1000] / 1000;
-			const key = `${Math.floor(lon * 2)},${Math.floor(lat * 2)}`;
-			cells.set(key, (cells.get(key) || 0) + 1);
-		}
-		const maximum = Math.max(1, ...cells.values());
-		for (const [key, value] of cells) {
-			const [lonCell, latCell] = key.split(',').map(Number);
-			const lon = lonCell / 2;
-			const lat = latCell / 2;
-			const topLeft = projection.project(lat + .5, lon);
-			const bottomRight = projection.project(lat, lon + .5);
-			drawing.context.fillStyle = rgba(ramp(Math.sqrt(value / maximum)), .82);
-			drawing.context.fillRect(topLeft[0], topLeft[1], Math.max(1, bottomRight[0] - topLeft[0]), Math.max(1, bottomRight[1] - topLeft[1]));
-		}
+		const maximum = Math.max(1, drawDensity(drawing.context, projection, state.active));
 		drawMapReferenceLines(drawing.context, projection);
 		const legendWidth = Math.min(280, drawing.width * .34);
 		const legendX = drawing.width - legendWidth - 18;
@@ -3209,7 +3219,7 @@
 		drawing.context.font = `11px ${CANVAS_FONT}`;
 		drawing.context.fillStyle = css('--mla-ink', '#282119');
 		drawing.context.textAlign = 'left';
-		drawing.context.fillText('Systems per 0.5° cell', legendX, legendY - 6);
+		drawing.context.fillText('Unique tracks per 0.5° cell', legendX, legendY - 6);
 		const tickValues = [...new Set([0, Math.max(1, Math.round(maximum / 4)), Math.max(1, Math.round(maximum / 2)), maximum])];
 		for (const value of tickValues) {
 			const x = legendX + Math.sqrt(value / maximum) * legendWidth;
@@ -3274,7 +3284,7 @@
 		classMatrix.forEach((row, index) => row.forEach((value, column) => { row[column] = value / exposure[index]; }));
 		drawHeatmap('mlaClassChart', decades.map((value, index) => `${String(value).slice(2)}s (${exposure[index]}y)`), ['L', 'D', 'DD', 'CS', 'SCS', 'VS+'], classMatrix, {left: 78, decimals: 1});
 		$('#mlaClassData').innerHTML = accessibleTable(['Decade', 'L/y', 'D/y', 'DD/y', 'CS/y', 'SCS/y', 'VS+/y'], decades.map((value, index) => [value, ...classMatrix[index].map(number => fmt(number, 2))]));
-		drawGenesisMap();
+		drawTrackDensityMap();
 	}
 
 	function accessibleTable(headers, rows, note) {
@@ -3600,7 +3610,7 @@
 			);
 			const headers = ['Hours since genesis', `${definition.title} (${definition.unit})`];
 			if (includeRain) headers.push('24 h rain (mm)');
-			$('#mlaLifeData').innerHTML = accessibleTable(headers, rows, 'Physics is resampled at each published v5.5.1 centre.');
+			$('#mlaLifeData').innerHTML = accessibleTable(headers, rows, `Physics is resampled at each published ${CORE.meta.catalogue_version} centre.`);
 		}
 		if (!DETAIL) {
 			profileButton.hidden = false;
@@ -3828,6 +3838,10 @@
 				lysis_region: endpointRegionLabel(lysisRegions[index]),
 				bsiso1_phase_at_genesis: CLIMATE.bsiso.phase[index] < 0 ? null : CLIMATE.bsiso.phase[index],
 				bsiso1_amplitude_at_genesis: CLIMATE.bsiso.amplitude_x100[index] < 0 ? null : CLIMATE.bsiso.amplitude_x100[index] / 100,
+				mjo_rmm_phase_at_genesis: CLIMATE.mjo.phase[index] < 0 ? null : CLIMATE.mjo.phase[index],
+				mjo_rmm_amplitude_at_genesis: CLIMATE.mjo.amplitude_x100[index] < 0 ? null : CLIMATE.mjo.amplitude_x100[index] / 100,
+				mjo_rmm1_at_genesis: CLIMATE.mjo.rmm1_x100[index] === -32768 ? null : CLIMATE.mjo.rmm1_x100[index] / 100,
+				mjo_rmm2_at_genesis: CLIMATE.mjo.rmm2_x100[index] === -32768 ? null : CLIMATE.mjo.rmm2_x100[index] / 100,
 				enso_category_at_genesis: CLIMATE.enso.class[index] < 0 ? null : ['La Nina', 'Neutral', 'El Nino'][CLIMATE.enso.class[index]],
 				oni_anomaly_c_at_genesis: CLIMATE.enso.oni_x100[index] === -32768 ? null : CLIMATE.enso.oni_x100[index] / 100,
 				atlas_peak_class: CORE.cat_labels[String(row[T.category])],
@@ -3910,6 +3924,7 @@
 				genesis_region: state.genesisRegion === 'all' ? null : state.genesisRegion,
 				lysis_region: state.lysisRegion === 'all' ? null : state.lysisRegion,
 				bsiso1_phase_at_genesis: state.bsiso === 'all' ? null : Number(state.bsiso),
+				mjo_rmm_phase_at_genesis: state.mjo === 'all' ? null : Number(state.mjo),
 				enso_category_at_genesis: state.enso === 'all' ? null : Number(state.enso),
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
 				search: state.search || null
@@ -3920,9 +3935,9 @@
 			url: window.location.href,
 			caveats: [
 				'Atlas-derived IMD-style class is not official IMD grade.',
-				'Every v5.5.1 physical event is continuous at hourly resolution with physics resampled at every published centre.',
+				`Every ${CORE.meta.catalogue_version} physical event is continuous at hourly resolution with physics resampled at every published centre.`,
 				'Cyclone names use credible NOAA IBTrACS v04r01 associations; state means use IMD 0.25-degree daily rainfall over active track dates.',
-				'Interpolated positions meet the published v5.5.1 gap-support contract.'
+				`Interpolated positions meet the published ${CORE.meta.catalogue_version} gap-support contract.`
 			]
 		};
 	}
@@ -3968,8 +3983,18 @@
 	}
 
 	function renderData() {
-		$('#mlaCoverageText').textContent = `${CORE.meta.coverage_start} to ${CORE.meta.coverage_end}; complete through ${COMPLETE_END_YEAR}.`;
+		const analysisCoverage = `${String(CORE.meta.coverage_start).slice(0, 10)} to ${String(CORE.meta.coverage_end).slice(0, 10)}`;
+		const retainedCoverage = CORE.meta.first_position && CORE.meta.last_position
+			? ` Retained event positions run from ${String(CORE.meta.first_position).slice(0, 10)} to ${String(CORE.meta.last_position).slice(0, 10)}.`
+			: '';
+		$('#mlaCoverageText').textContent = `Analysis source: ${analysisCoverage}; complete through ${COMPLETE_END_YEAR}.${retainedCoverage}`;
 		$('#mlaBuildText').textContent = `Atlas ${CORE.meta.atlas_version}, built ${CORE.meta.built_utc}; ${fmt(CORE.meta.tracks)} physical events and ${fmt(CORE.meta.rows)} hourly positions.`;
+		const version = $('#mlaCatalogueVersion');
+		if (version) version.textContent = `LPS ${CORE.meta.catalogue_version}`;
+		const rows = $('#mlaCatalogueRows');
+		if (rows) rows.textContent = fmt(CORE.meta.rows);
+		const tracks = $('#mlaCatalogueTracks');
+		if (tracks) tracks.textContent = fmt(CORE.meta.tracks);
 		const release = $('#mlaReleaseSummary');
 		if (release) release.href = CORE.meta.sources.release_summary;
 		const zenodo = $('#mlaZenodoRecord');
@@ -4012,7 +4037,17 @@
 		setLoading('Decompressing the fast map, summaries and climate filters…');
 		const boundaryPromise = loadBoundaryView();
 		[CORE, CLIMATE] = await Promise.all([loadGzipJson('mla-core-gzip-b64'), loadGzipJson('mla-climate-gzip-b64')]);
-		if (CLIMATE.track_count !== CORE.tracks.length || CLIMATE.bsiso.phase.length !== CORE.tracks.length || CLIMATE.enso.class.length !== CORE.tracks.length) throw new Error('Climate-filter asset does not match the catalogue');
+		if (CLIMATE.track_count !== CORE.tracks.length || CLIMATE.bsiso.phase.length !== CORE.tracks.length || CLIMATE.mjo.phase.length !== CORE.tracks.length || CLIMATE.enso.class.length !== CORE.tracks.length) throw new Error('Climate-filter asset does not match the catalogue');
+		catalogueStartDate = String(CORE.meta.coverage_start).slice(0, 10);
+		catalogueEndDate = String(CORE.meta.coverage_end).slice(0, 10);
+		state.yearMin = Number(catalogueStartDate.slice(0, 4));
+		state.yearMax = Number(catalogueEndDate.slice(0, 4));
+		state.dateMin = catalogueStartDate;
+		state.dateMax = catalogueEndDate;
+		for (const selector of ['#mlaDateMin', '#mlaDateMax']) {
+			$(selector).min = catalogueStartDate;
+			$(selector).max = catalogueEndDate;
+		}
 		T = Object.fromEntries(CORE.track_fields.map((name, index) => [name, index]));
 		S = Object.fromEntries(CORE.series_fields.map((name, index) => [name, index]));
 		Q = Object.fromEntries(CORE.qc_fields.map((name, index) => [name, index]));

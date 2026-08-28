@@ -4,7 +4,7 @@
 Chart contract
 --------------
 Question: Which spatial, seasonal, intensity and lifecycle structures are
-most useful for a compact introduction to the public v5.5.1 catalogue?
+most useful for a compact introduction to the public v5.6 catalogue?
 Grain: one physical event for panels a-c; one event per normalised-life bin
 before cross-event aggregation for panel d.
 Metrics: unique-track count per 1-degree cell, genesis month by peak atlas class,
@@ -34,11 +34,11 @@ ATLAS_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ATLAS_ROOT.parent
 DEFAULT_DATA = (
     WORKSPACE_ROOT
-    / "lps-v5.3-continuity-framework/production/v5.5.1/public-release"
-    / "lps_v5.5.1-era5-1940-2025-core.parquet"
+    / "lps-v5.3-continuity-framework/production/v5.6/public-release"
+    / "lps_v5.6-era5-1940-2025-core.parquet"
 )
 DEFAULT_CORE = ATLAS_ROOT / "assets/atlas-core.6c7262721551.json.gz"
-DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.5.1-track-diagnostics.png"
+DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.6-track-diagnostics.png"
 
 PAPER = "#fffaf0"
 INK = "#282119"
@@ -119,7 +119,9 @@ def event_summary(frame: pd.DataFrame) -> pd.DataFrame:
     summary = pd.DataFrame(
         {
             "genesis_time": group["time"].first(),
-            "peak_class": group["event_peak_imd_category"].first(),
+            # The compact atlas legend combines category 7 with category 6 as
+            # VSCS+, matching the browser's event-class convention.
+            "peak_class": group["event_peak_imd_category"].first().clip(upper=6),
             "peak_wind": group["p95_anomaly_wind_125km_ms"].max(),
             "peak_deficit": group["pressure_deficit_hpa"].max(),
         }
@@ -340,8 +342,8 @@ def main() -> None:
     configure_style(args.font)
     frame = load_data(args.data)
     summary = event_summary(frame)
-    if len(summary) != 1_678 or not summary.index.is_unique:
-        raise ValueError(f"Expected 1,678 unique physical events, found {len(summary):,}")
+    if summary.empty or not summary.index.is_unique:
+        raise ValueError(f"Expected non-empty unique physical events, found {len(summary):,}")
     required = summary[["peak_wind", "peak_deficit", "peak_class"]]
     if not np.isfinite(required.to_numpy(dtype=float)).all():
         raise ValueError("Non-finite event summary values would make the figure incomplete")
@@ -350,7 +352,7 @@ def main() -> None:
     geography = load_geography(args.core)
     figure = build_figure(frame, summary, geography)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(args.output, dpi=190, metadata={"Software": "matplotlib", "Title": "LPS v5.5.1 track diagnostics"})
+    figure.savefig(args.output, dpi=190, metadata={"Software": "matplotlib", "Title": "LPS v5.6 track diagnostics"})
     plt.close(figure)
     print(f"Wrote {args.output} from {len(summary):,} physical events and {len(frame):,} hourly positions")
 

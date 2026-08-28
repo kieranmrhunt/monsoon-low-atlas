@@ -1,0 +1,29 @@
+{
+  "schema": "lps-v5.6-release-completion-audit-v1",
+  "status": "pass",
+  "completed_at_utc": "2026-08-28T22:14:45.906854+00:00",
+  "catalogue": {
+    "rows": 351810,
+    "events": 2115,
+    "observed_rows": 296945,
+    "posterior_rows": 54865,
+    "sha256": "bcb447e313aa5cce36052e21755daaeb77b0c0f38c3bad631701387fb9585b04",
+    "schema_columns": 58,
+    "analysis_start": "1940-01-01T00:00:00Z",
+    "analysis_end": "2025-12-31T23:00:00Z",
+    "first_retained_position": "1940-04-30T20:00:00Z",
+    "last_retained_position": "2025-12-03T10:00:00Z"
+  },
+  "checks": {
+    "all_positions_present": true,
+    "all_required_physics_present": true,
+    "all_hourly_categories_present": true,
+    "all_actual_closed_isobar_counts_present": true,
+    "every_event_has_complete_hourly_axis": true,
+    "one_row_per_event_time": true,
+    "all_twelve_calendar_months_represented": true,
+    "source_covers_all_1032_calendar_months": true,
+    "public_schema_is_exact_allowlisted_projection": true,
+    "public_package_contains_only_csv_gz_and_parquet": true
+  }
+}

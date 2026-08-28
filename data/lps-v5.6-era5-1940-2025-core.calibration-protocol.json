@@ -1,0 +1,16 @@
+{
+  "schema": "lps-v5.6-calibration-protocol-pointer-v1",
+  "status": "frozen",
+  "scientific_change": true,
+  "catalogue_identity_or_geometry_changed": true,
+  "source_path": "lps-v5.3-continuity-framework/production/v5.6/CALIBRATION_PROTOCOL.md",
+  "source_sha256": "e5b41dc82b1de9c8e851140d4b18e4dbc71667d1f2882ee4f5b076052e1c4231",
+  "population": "observed entry into 65-100 E, 0-32 N in any calendar month; genesis is not used",
+  "calibration_years": "2020-2023 seasonal IMD counts and 2015-2025 IBTrACS recall",
+  "precipitation_used_for_selection_or_intensity": false,
+  "source_coverage_audit": {
+    "source_path": "lps-v5.3-continuity-framework/production/v5.6/audit/source_month_coverage.json",
+    "source_sha256": "af891df259d69a236bc397b9928df7cb94fe4a6721930f173db9b61142a208b4",
+    "calendar_months": 1032
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "schema": "lps-v5.6-release-manifest-v1",
+  "status": "prepared_release",
+  "catalogue": {
+    "path": "lps-v5.3-continuity-framework/production/v5.6/public-release/lps_v5.6-era5-1940-2025-core.parquet",
+    "sha256": "bcb447e313aa5cce36052e21755daaeb77b0c0f38c3bad631701387fb9585b04",
+    "bytes": 75137133,
+    "coverage": "1940-2025, all calendar months",
+    "analysis_start": "1940-01-01T00:00:00Z",
+    "analysis_end": "2025-12-31T23:00:00Z",
+    "first_position": "1940-04-30T20:00:00Z",
+    "last_position": "2025-12-03T10:00:00Z",
+    "source_calendar_months_audited": 1032,
+    "rows": 351810,
+    "observed_rows": 296945,
+    "posterior_rows": 54865,
+    "physical_events": 2115,
+    "schema_columns": 58
+  },
+  "csv": {
+    "path": "lps-v5.3-continuity-framework/production/v5.6/public-release/lps_v5.6-era5-1940-2025-core.csv.gz",
+    "sha256": "176332ebfe707c59fea7f2c774bffbca3736ef2a9dba924fa4fd11a7a91dff4c",
+    "bytes": 107636191
+  },
+  "identity_semantics": {
+    "track_id": "one hourly-complete physical event",
+    "population": "all-season South Asian release-domain entrants; no genesis rule"
+  },
+  "continuity": {
+    "complete_hourly_spans": true,
+    "non_hourly_steps": 0,
+    "duplicate_track_times": 0,
+    "maximum_hourly_speed_ms": 19.960254644608447
+  },
+  "selection": {
+    "primary_routes": {
+      "v54_fixed_core": 1680,
+      "allseason_physical_supplement": 435
+    },
+    "route_membership": {
+      "allseason_physical_supplement": 444,
+      "v54_fixed_core": 1680
+    },
+    "mixed_route_events": 9,
+    "primary_route_definition": "v54_fixed_core takes precedence for reconciled events with rows from both computational admission routes",
+    "final_physical_gate": "unchanged from v5.5"
+  },
+  "intensity": {
+    "metric": "p95_anomaly_wind_125km_ms",
+    "wind_thresholds_ms": {
+      "depression": 10.864504601961277,
+      "deep_depression": 14.212801616020542,
+      "cyclonic_storm": 18.83486906837853,
+      "severe_cyclonic_storm": 26.590403390652043,
+      "very_severe_or_extremely_severe": 35.45387118753606,
+      "super_cyclonic_storm": 66.47600847663011
+    },
+    "persistence_hours": 6,
+    "land_fraction_minimum": 0.95,
+    "land_depression_closed_isobars": 2,
+    "land_depression_circulation_ms": 8.745548,
+    "land_pressure_maximum_category": "depression"
+  },
+  "qa": {
+    "source_path": "lps-v5.3-continuity-framework/production/v5.6/final_qa/final_release_qa.json",
+    "source_sha256": "9e31350b36552d5b2d6d5efc31f1fa438b711a9648c3f8a0476d742c7ab87479",
+    "status": "pass"
+  },
+  "source_coverage": {
+    "source_path": "lps-v5.3-continuity-framework/production/v5.6/audit/source_month_coverage.json",
+    "source_sha256": "af891df259d69a236bc397b9928df7cb94fe4a6721930f173db9b61142a208b4",
+    "status": "pass"
+  },
+  "publication": {
+    "prepared_on": "2026-08-28",
+    "published_on": null,
+    "zenodo_status": "not_published",
+    "zenodo_record": null,
+    "zenodo_doi": null,
+    "previous_releases_preserved": true
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "schema": "lps-v5.6-atlas-release-qa-v1",
+  "status": "pass",
+  "completed_at_utc": "2026-08-28T22:14:45.906854+00:00",
+  "source_qa_sha256": "9e31350b36552d5b2d6d5efc31f1fa438b711a9648c3f8a0476d742c7ab87479",
+  "checks": {
+    "nonempty_catalogue": true,
+    "unique_event_time_rows": true,
+    "unique_release_row_ids": true,
+    "hourly_complete_events": true,
+    "all_events_enter_release_domain": true,
+    "every_event_passed_physical_gate": true,
+    "closed_isobar_diagnostics_complete": true,
+    "intensity_complete": true,
+    "event_peak_constant": true,
+    "only_documented_core_routes": true,
+    "supplemental_route_survives_final_gate": true,
+    "primary_core_route_partition_is_complete": true,
+    "mixed_core_route_events_are_reconciled": true,
+    "baseline_observed_candidate_uids_unique": true,
+    "expanded_observed_candidate_uids_unique": true,
+    "every_v551_observed_candidate_uid_retained": true,
+    "every_v551_event_has_all_observed_candidate_uids_retained": true,
+    "all_four_report_seasons_present": true,
+    "recent_total_within_20pct_of_imd": true,
+    "recent_frequency_error_improves_on_v551": true,
+    "recent_off_monsoon_error_improves_on_v551": true,
+    "recent_monsoon_mean_within_three_systems_of_imd": true,
+    "recent_off_monsoon_means_within_three_systems_of_imd": true,
+    "ibtracs_overall_event_recall_not_lower_than_v551": true,
+    "ibtracs_off_monsoon_recall_not_lower_than_v551": true
+  },
+  "statistics": {
+    "rows": 351810,
+    "events": 2115,
+    "observed_rows": 296945,
+    "analysis_start": "1940-01-01T00:00:00Z",
+    "analysis_end": "2025-12-31T23:00:00Z",
+    "first_retained_position": "1940-04-30T20:00:00Z",
+    "last_retained_position": "2025-12-03T10:00:00Z",
+    "events_by_core_route": {
+      "v54_fixed_core": 1680,
+      "allseason_physical_supplement": 435
+    },
+    "pressure_assisted_events": 44
+  },
+  "frequency_calibration": {
+    "period": "2020-2023",
+    "mean_events_per_year_by_season": {
+      "winter": {
+        "v56_total": 2.0,
+        "v551_total": 0.0,
+        "imd_total": 0.5
+      },
+      "pre_monsoon": {
+        "v56_total": 3.5,
+        "v551_total": 2.0,
+        "imd_total": 3.0
+      },
+      "monsoon": {
+        "v56_total": 14.0,
+        "v551_total": 13.5,
+        "imd_total": 13.25
+      },
+      "post_monsoon": {
+        "v56_total": 5.75,
+        "v551_total": 3.0,
+        "imd_total": 8.0
+      }
+    },
+    "mean_absolute_season_year_error": {
+      "v56": 1.625,
+      "v5.5.1": 2.1875
+    },
+    "off_monsoon_mean_absolute_season_year_error": {
+      "v56": 1.5833333333333333,
+      "v5.5.1": 2.3333333333333335
+    },
+    "v56_mean_total_per_year": 25.25,
+    "v551_mean_total_per_year": 18.5,
+    "imd_mean_total_per_year": 24.75
+  },
+  "ibtracs_recall_225km": {
+    "v5.5.1": {
+      "reference_events": 112,
+      "recalled_events": 84,
+      "event_recall": 0.75,
+      "mean_fix_recall": 0.7053855765405582,
+      "by_release_domain_entry_season": {
+        "monsoon": {
+          "reference_events": 44,
+          "recalled_events": 41,
+          "event_recall": 0.9318181818181818,
+          "mean_fix_recall": 0.8925688225030332
+        },
+        "post_monsoon": {
+          "reference_events": 49,
+          "recalled_events": 30,
+          "event_recall": 0.6122448979591837,
+          "mean_fix_recall": 0.5593027344932595
+        },
+        "pre_monsoon": {
+          "reference_events": 17,
+          "recalled_events": 13,
+          "event_recall": 0.7647058823529411,
+          "mean_fix_recall": 0.7249601407199615
+        },
+        "winter": {
+          "reference_events": 2,
+          "recalled_events": 0,
+          "event_recall": 0.0,
+          "mean_fix_recall": 0.0
+        }
+      }
+    },
+    "v5.6": {
+      "reference_events": 112,
+      "recalled_events": 100,
+      "event_recall": 0.8928571428571429,
+      "mean_fix_recall": 0.8216830885901926,
+      "by_release_domain_entry_season": {
+        "monsoon": {
+          "reference_events": 44,
+          "recalled_events": 43,
+          "event_recall": 0.9772727272727273,
+          "mean_fix_recall": 0.9380233679575786
+        },
+        "post_monsoon": {
+          "reference_events": 49,
+          "recalled_events": 41,
+          "event_recall": 0.8367346938775511,
+          "mean_fix_recall": 0.7313058725540755
+        },
+        "pre_monsoon": {
+          "reference_events": 17,
+          "recalled_events": 15,
+          "event_recall": 0.8823529411764706,
+          "mean_fix_recall": 0.8189111751069656
+        },
+        "winter": {
+          "reference_events": 2,
+          "recalled_events": 1,
+          "event_recall": 0.5,
+          "mean_fix_recall": 0.5
+        }
+      }
+    }
+  },
+  "source_coverage": {
+    "source_path": "lps-v5.3-continuity-framework/production/v5.6/audit/source_month_coverage.json",
+    "source_sha256": "af891df259d69a236bc397b9928df7cb94fe4a6721930f173db9b61142a208b4",
+    "calendar_months": 1032
+  }
+}

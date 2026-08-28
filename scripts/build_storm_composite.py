@@ -21,6 +21,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -39,7 +40,6 @@ from scipy.ndimage import map_coordinates
 
 
 SCHEMA = "monsoon-low-atlas-storm-composite-v1"
-RELEASE = "LPS v5.5.1"
 RELATIVE_DEGREES = np.arange(-10.0, 10.0001, 0.25, dtype=np.float64)
 PRESSURE_HPA = np.array(
     [
@@ -690,7 +690,7 @@ def composite_asset(
     sections, vertical_errors, vertical_source = build_vertical_sections(track, paths)
     return {
         "schema": SCHEMA,
-        "release": RELEASE,
+        "release": catalogue_release(catalogue),
         "track_id": int(track_id),
         "track_start": pd.Timestamp(track["time"].iloc[0]).isoformat(),
         "track_end": pd.Timestamp(track["time"].iloc[-1]).isoformat(),
@@ -820,6 +820,13 @@ def validate_packed_field(
     return problems
 
 
+def catalogue_release(catalogue: Path) -> str:
+    match = re.search(r"lps_v(\d+(?:\.\d+)+)", catalogue.name)
+    if not match:
+        raise ValueError(f"Cannot infer release version from {catalogue.name}")
+    return f"LPS v{match.group(1)}"
+
+
 def build_manifest(output: Path, catalogue: Path) -> Path:
     expected_ids = catalogue_track_ids(catalogue)
     expected_set = {int(value) for value in expected_ids}
@@ -909,7 +916,7 @@ def build_manifest(output: Path, catalogue: Path) -> Path:
     }
     manifest = {
         "schema": "monsoon-low-atlas-storm-composite-manifest-v1",
-        "release": RELEASE,
+        "release": catalogue_release(catalogue),
         "built_utc": utc_now(),
         "expected_tracks": int(len(expected_ids)),
         "completed_tracks": int(len(tracks)),
@@ -952,12 +959,12 @@ def build_manifest(output: Path, catalogue: Path) -> Path:
 
 def parser() -> argparse.ArgumentParser:
     project = Path(__file__).resolve().parents[2]
-    release = project / "lps-v5.3-continuity-framework" / "production" / "v5.5.1"
+    release = project / "lps-v5.3-continuity-framework" / "production" / "v5.6"
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument(
         "--catalogue",
         type=Path,
-        default=release / "public-release" / "lps_v5.5.1-era5-1940-2025-core.parquet",
+        default=release / "public-release" / "lps_v5.6-era5-1940-2025-core.parquet",
     )
     result.add_argument("--output", type=Path, required=True)
     selection = result.add_mutually_exclusive_group()

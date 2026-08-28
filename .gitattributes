@@ -1,0 +1,2 @@
+# Preserve the Bureau's byte-for-byte fixed-width RMM snapshot, including padding.
+inputs/climate/rmm.74toRealtime.txt -whitespace

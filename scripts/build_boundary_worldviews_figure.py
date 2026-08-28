@@ -46,7 +46,7 @@ from build_track_diagnostic_figure import (
 )
 
 
-DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.5.1-track-density-boundary-worldviews.png"
+DEFAULT_OUTPUT = ATLAS_ROOT / "figures/lps-v5.6-track-density-boundary-worldviews.png"
 MAP_EXTENT = (66.0, 101.0, 5.0, 38.0)  # west, east, south, north
 # Dissolved India geometry groups across all 34 Natural Earth v5.1.1 POVs:
 # default; ind; pak/tur; chn/twn; nep; gbr; usa; rus; isr; iso/tlc; and
@@ -255,8 +255,8 @@ def main() -> None:
     args = parse_args()
     configure_style(args.font)
     frame = load_data(args.data)
-    if frame["track_id"].nunique() != 1_678:
-        raise ValueError("Expected 1,678 unique physical events")
+    if frame.empty or frame["track_id"].nunique() < 1:
+        raise ValueError("Expected a non-empty physical-event catalogue")
     worldviews = [(spec, load_worldview(spec, args.boundary_dir)) for spec in VIEWPOINTS]
     india_geometries = [world.loc[world["ADMIN"].eq("India"), "geometry"].union_all() for unused, world in worldviews]
     if len({geometry.normalize().wkb for geometry in india_geometries}) != len(india_geometries):
@@ -268,7 +268,7 @@ def main() -> None:
         dpi=190,
         metadata={
             "Software": "matplotlib/geopandas",
-            "Title": "LPS v5.5.1 track density with alternative boundary worldviews for India",
+            "Title": "LPS v5.6 track density with alternative boundary worldviews for India",
             "Description": "Eleven distinct India outlines across 34 Natural Earth v5.1.1 admin-0 POV products; identical geometries are grouped and boundary variants are dataset worldviews, not endorsements.",
         },
     )

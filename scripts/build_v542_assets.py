@@ -234,10 +234,10 @@ def state_rainfall_series(
     return state_series, available
 
 
-def state_jjas_climatology(
+def state_monthly_climatology(
     payload: dict,
     state_slugs: list[str],
-) -> tuple[list[int], list[int]]:
+) -> tuple[list[list[int]], list[int]]:
     years = [int(value) for value in payload["years"]]
     coverage = [min(years), max(years)]
     state_series, unused = state_rainfall_series(
@@ -246,16 +246,19 @@ def state_jjas_climatology(
         coverage_start=coverage[0],
         coverage_end=coverage[1],
     )
-    climatology = []
+    climatology: list[list[int]] = []
     for yearly in state_series:
-        chunks = []
-        for year, values in yearly.items():
-            first = datetime(year, 6, 1).timetuple().tm_yday - 1
-            last = datetime(year, 9, 30).timetuple().tm_yday
-            valid = values[first:last]
-            chunks.append(valid[np.isfinite(valid)])
-        pooled = np.concatenate(chunks) if chunks else np.array([], dtype=float)
-        climatology.append(int(round(float(np.mean(pooled)))) if len(pooled) else -1)
+        monthly: list[int] = []
+        for month in range(1, 13):
+            chunks = []
+            for year, values in yearly.items():
+                first = datetime(year, month, 1).timetuple().tm_yday - 1
+                days = calendar.monthrange(year, month)[1]
+                valid = values[first:first + days]
+                chunks.append(valid[np.isfinite(valid)])
+            pooled = np.concatenate(chunks) if chunks else np.array([], dtype=float)
+            monthly.append(int(round(float(np.mean(pooled)))) if len(pooled) else -1)
+        climatology.append(monthly)
     return climatology, coverage
 
 
@@ -331,12 +334,12 @@ def state_rainfall_from_grd(
     template: dict,
     coverage_start: int = 1940,
     coverage_end: int = 2025,
-) -> tuple[list[dict[int, np.ndarray]], list[bool], list[int], list[int], str]:
+) -> tuple[list[dict[int, np.ndarray]], list[bool], list[list[int]], list[int], str]:
     """Read the local IMD archive and return daily state means in 0.1 mm."""
     weights, available = state_grid_weights(template)
     state_series: list[dict[int, np.ndarray]] = [dict() for unused in template["state_slugs"]]
-    climatology_total = np.zeros(len(state_series), dtype=np.float64)
-    climatology_count = np.zeros(len(state_series), dtype=np.int64)
+    climatology_total = np.zeros((len(state_series), 12), dtype=np.float64)
+    climatology_count = np.zeros((len(state_series), 12), dtype=np.int64)
     archive_digest = hashlib.sha256()
     for year in range(1901, coverage_end + 1):
         path = directory / f"{year}.grd"
@@ -360,12 +363,13 @@ def state_rainfall_from_grd(
             out=np.full((len(state_series), days), np.nan, dtype=float),
             where=np.asarray(denominator) > 0,
         )
-        first = datetime(year, 6, 1).timetuple().tm_yday - 1
-        last = datetime(year, 9, 30).timetuple().tm_yday
-        season = means[:, first:last]
-        finite_season = np.isfinite(season)
-        climatology_total += np.nansum(season, axis=1)
-        climatology_count += finite_season.sum(axis=1)
+        for month in range(1, 13):
+            first = datetime(year, month, 1).timetuple().tm_yday - 1
+            count = calendar.monthrange(year, month)[1]
+            monthly = means[:, first:first + count]
+            finite_month = np.isfinite(monthly)
+            climatology_total[:, month - 1] += np.nansum(monthly, axis=1)
+            climatology_count[:, month - 1] += finite_month.sum(axis=1)
         if coverage_start <= year <= coverage_end:
             for state_index, is_available in enumerate(available):
                 if is_available:
@@ -373,12 +377,12 @@ def state_rainfall_from_grd(
     climatology = np.divide(
         climatology_total,
         climatology_count,
-        out=np.full(len(state_series), np.nan),
+        out=np.full(climatology_total.shape, np.nan, dtype=float),
         where=climatology_count > 0,
     )
     climatology_x10 = [
-        int(round(value * 10.0)) if math.isfinite(value) else -1
-        for value in climatology
+        [int(round(value * 10.0)) if math.isfinite(value) else -1 for value in row]
+        for row in climatology
     ]
     return (
         state_series,
@@ -406,6 +410,20 @@ def mean_state_rainfall(
                 values.append(float(rainfall))
         means.append(int(round(float(np.mean(values)))) if values else -1)
     return means, len(dates)
+
+
+def mean_state_climatology(
+    group: pd.DataFrame,
+    monthly_climatology_x10: list[list[int]],
+) -> list[int]:
+    """Mean all-record calendar-month baseline across an event's UTC dates."""
+    dates = sorted(set(group["time"].dt.date))
+    means: list[int] = []
+    for monthly in monthly_climatology_x10:
+        values = [monthly[value.month - 1] for value in dates]
+        values = [value for value in values if value >= 0]
+        means.append(int(round(float(np.mean(values)))) if values else -1)
+    return means
 
 
 def finite(value, fallback: float = 0.0) -> float:
@@ -528,7 +546,7 @@ def main() -> None:
             rainfall,
             template["state_slugs"],
         )
-        state_jjas_mean_x10, state_jjas_coverage = state_jjas_climatology(
+        state_monthly_climatology_x10, state_climatology_coverage = state_monthly_climatology(
             rainfall,
             template["state_slugs"],
         )
@@ -539,8 +557,8 @@ def main() -> None:
         (
             rainfall_series,
             state_available,
-            state_jjas_mean_x10,
-            state_jjas_coverage,
+            state_monthly_climatology_x10,
+            state_climatology_coverage,
             rainfall_input_sha,
         ) = state_rainfall_from_grd(args.rainfall_grd_dir, template)
         rainfall_source = "India Meteorological Department 0.25-degree daily gridded rainfall"
@@ -731,6 +749,9 @@ def main() -> None:
             "rh850": float(group["rh850_mean_pct"].max()),
         }
         state_means, rain_days = mean_state_rainfall(group, rainfall_series)
+        state_climatology_means = mean_state_climatology(
+            group, state_monthly_climatology_x10
+        )
         peak_vort.append(metrics["vort"])
         peak_wind.append(metrics["wind"])
         peak_deficit.append(metrics["deficit"])
@@ -746,6 +767,7 @@ def main() -> None:
                 "times": times,
                 "metrics": metrics,
                 "state_means": state_means,
+                "state_climatology_means": state_climatology_means,
                 "rain_days": rain_days,
                 "distance_km": int(round(float(np.nansum(step_km[within_segment])))),
                 "max_speed_ms": float(np.nanmax(valid_speeds)) if len(valid_speeds) else 0,
@@ -788,6 +810,7 @@ def main() -> None:
     point_months = []
     detail_series = []
     state_mean_rows = []
+    state_climatology_rows = []
 
     for index, cached in enumerate(group_cache):
         parent_id = cached["parent_id"]
@@ -925,6 +948,7 @@ def main() -> None:
             ]
         )
         state_mean_rows.append(state_means)
+        state_climatology_rows.append(cached["state_climatology_means"])
 
     state_matrix = np.asarray(state_mean_rows, dtype=float)
     state_percentiles = np.full(state_matrix.shape, -1, dtype=np.int16)
@@ -940,8 +964,21 @@ def main() -> None:
             ranks.to_numpy()
         ).astype(np.int16)
 
-    coverage_start = data["time"].min().isoformat().replace("+00:00", "Z")
-    coverage_end = data["time"].max().isoformat().replace("+00:00", "Z")
+    first_position = data["time"].min().isoformat().replace("+00:00", "Z")
+    last_position = data["time"].max().isoformat().replace("+00:00", "Z")
+    if expected.get("first_position", first_position) != first_position:
+        raise ValueError("Release manifest first position does not match the catalogue")
+    if expected.get("last_position", last_position) != last_position:
+        raise ValueError("Release manifest last position does not match the catalogue")
+    coverage_start = expected.get("analysis_start", first_position)
+    coverage_end = expected.get("analysis_end", last_position)
+    if pd.Timestamp(coverage_start) > data["time"].min() or pd.Timestamp(coverage_end) < data["time"].max():
+        raise ValueError("Release analysis period does not contain every retained position")
+    if version_tag == "v5.6":
+        if int(expected.get("source_calendar_months_audited", 0)) != 1032:
+            raise ValueError("v5.6 release manifest does not audit all 1,032 source months")
+        if release.get("source_coverage", {}).get("status") != "pass":
+            raise ValueError("v5.6 source-coverage audit does not pass")
     built_utc = datetime.now(timezone.utc).isoformat()
     release_stem = f"lps-{version_tag}-era5-1940-2025-core"
     crosswalk: list[dict | None] = []
@@ -970,6 +1007,8 @@ def main() -> None:
             "state_columns": int(sum(state_available)),
             "coverage_start": coverage_start,
             "coverage_end": coverage_end,
+            "first_position": first_position,
+            "last_position": last_position,
             "lon_min": round(float(data["lon"].min()), 4),
             "lon_max": round(float(data["lon"].max()), 4),
             "lat_min": round(float(data["lat"].min()), 4),
@@ -981,7 +1020,11 @@ def main() -> None:
             "schema": release["schema"],
             "atlas_version": version_tag,
             "built_utc": built_utc,
-            "catalogue_completed_utc": release["publication"]["published_on"],
+            "catalogue_completed_utc": (
+                release["publication"].get("published_on")
+                or release["publication"].get("prepared_on")
+                or built_utc
+            ),
             "default_complete_end_year": 2025,
             "core_catalogue_sha256": source_sha,
             "release_manifest_sha256": sha256(args.release_manifest),
@@ -1035,6 +1078,7 @@ def main() -> None:
         "profile_fields": [],
         "profile_bins": 0,
         "state_mean_x10": state_mean_rows,
+        "state_climatology_mean_x10": state_climatology_rows,
         "state_pct": state_percentiles.tolist(),
         "state_rainfall": {
             "source": rainfall_source,
@@ -1042,10 +1086,10 @@ def main() -> None:
             "statistic": "Area-mean daily rainfall averaged over UTC calendar days touched by each LPS physical event.",
             "coverage": [1940, 2025],
             "baseline": rainfall_baseline,
-            "jjas_climatology_x10": state_jjas_mean_x10,
-            "jjas_climatology_period": state_jjas_coverage,
-            "jjas_climatology_months": [6, 7, 8, 9],
-            "fractional_anomaly": "event-period state mean / all-record JJAS daily state mean - 1",
+            "monthly_climatology_x10": state_monthly_climatology_x10,
+            "climatology_period": state_climatology_coverage,
+            "climatology_months": list(range(1, 13)),
+            "fractional_anomaly": "event-period state mean / all-record calendar-month-matched daily state mean - 1",
         },
     }
 
