@@ -85,7 +85,7 @@ if [[ -f "$COMPOSITE_DIR/manifest.json" ]]; then
     --output-dir assets \
     --longitude-step 0.5
 else
-  echo "Skipping filterable vertical sections: no composite manifest at $COMPOSITE_DIR/manifest.json" >&2
+  echo "Skipping filterable storm-centred composites: no composite manifest at $COMPOSITE_DIR/manifest.json" >&2
 fi
 
 chmod 0644 assets/atlas-build-manifest.json assets/atlas-core.*.json.gz \

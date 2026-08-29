@@ -30,6 +30,11 @@
 		relative_vorticity: {label: 'Relative vorticity', unit: '10⁻⁵ s⁻¹', minimum: -20, maximum: 20, palette: 'vorticity'},
 		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 370, palette: 'vorticity', topPressure: 125}
 	});
+	const SUBSET_COMPOSITE_DEFINITIONS = Object.freeze({
+		relative_vorticity: {...COMPOSITE_SECTION_DEFINITIONS.relative_vorticity, kind: 'vertical_section'},
+		theta_e: {...COMPOSITE_SECTION_DEFINITIONS.theta_e, kind: 'vertical_section'},
+		precipitation: {label: 'ERA5 daily precipitation', unit: 'mm day⁻¹', minimum: 0, palette: 'terrain_r', kind: 'horizontal_precipitation'}
+	});
 	const COMPOSITE_TICK_FONT_SIZE = 12;
 	const COMPOSITE_LABEL_FONT_SIZE = 13;
 
@@ -479,11 +484,11 @@
 		if (!sectionPromise) {
 			sectionPromise = (async () => {
 				ensureAtlasConfig();
-				if (!atlasConfig.sections) throw new Error('Filtered-subset vertical sections are not configured');
+				if (!atlasConfig.sections) throw new Error('Filtered-subset composites are not configured');
 				if (reason) toast(reason);
-				const asset = await fetchJsonAsset(atlasConfig.sections, 'filtered-subset vertical sections');
-				if (asset.schema !== 'monsoon-low-atlas-subset-sections-v1' || asset.track_count !== CORE.tracks.length) throw new Error('Subset-section asset does not match the catalogue');
-				for (let index = 0; index < CORE.tracks.length; index++) if (Number(asset.track_ids[index]) !== atlasId(index)) throw new Error('Subset-section event order does not match the catalogue');
+				const asset = await fetchJsonAsset(atlasConfig.sections, 'filtered-subset composites');
+				if (asset.schema !== 'monsoon-low-atlas-subset-composites-v2' || asset.track_count !== CORE.tracks.length) throw new Error('Subset-composite asset does not match the catalogue');
+				for (let index = 0; index < CORE.tracks.length; index++) if (Number(asset.track_ids[index]) !== atlasId(index)) throw new Error('Subset-composite event order does not match the catalogue');
 				for (const field of Object.values(asset.fields)) {
 					field.values = decodeInt16Base64(field.data_b64);
 					delete field.data_b64;
@@ -1682,7 +1687,7 @@
 		if (['systems', 'rate', 'system_days'].includes(parameters.get('climmeasure'))) state.climatologyMeasure = parameters.get('climmeasure');
 		if (['count', 'share'].includes(parameters.get('seasonview'))) state.seasonalMode = parameters.get('seasonview');
 		if (['mjo', 'bsiso', 'enso'].includes(parameters.get('climateplot'))) state.climateIndex = parameters.get('climateplot');
-		if (Object.hasOwn(COMPOSITE_SECTION_DEFINITIONS, parameters.get('subsetsection'))) state.subsetSectionVariable = parameters.get('subsetsection');
+		if (Object.hasOwn(SUBSET_COMPOSITE_DEFINITIONS, parameters.get('subsetsection'))) state.subsetSectionVariable = parameters.get('subsetsection');
 		if (Object.hasOwn(EXTREMES, parameters.get('extreme'))) state.extremeMetric = parameters.get('extreme');
 		if (EXTREME_RELATIONSHIP_KEYS.includes(parameters.get('extx'))) state.extremeX = parameters.get('extx');
 		if (EXTREME_RELATIONSHIP_KEYS.includes(parameters.get('exty'))) state.extremeY = parameters.get('exty');
@@ -3438,13 +3443,15 @@
 		if (!drawing) return;
 		if (!labels.length || !series.length) { emptyChart(id); return; }
 		const {context, width, height} = drawing;
-		const padding = {left: 48, right: 14, top: 48, bottom: 52};
+		context.font = `11px ${CANVAS_FONT}`;
+		const provisionalGroupWidth = (width - 48 - 14) / labels.length;
+		const rotateLabels = labels.some(label => context.measureText(label).width > provisionalGroupWidth - 6);
+		const padding = {left: 48, right: 14, top: 48, bottom: rotateLabels ? 78 : 52};
 		const maximumRaw = Math.max(1, ...series.flatMap(item => item.values).filter(Number.isFinite));
 		const maximum = options && options.percent ? Math.max(10, Math.ceil(maximumRaw / 10) * 10) : maximumRaw;
 		const plotHeight = height - padding.top - padding.bottom;
 		const groupWidth = (width - padding.left - padding.right) / labels.length;
 		const barWidth = Math.min(22, groupWidth * .72 / series.length);
-		context.font = `11px ${CANVAS_FONT}`;
 		context.strokeStyle = 'rgba(70, 60, 45, .16)';
 		context.fillStyle = css('--mla-muted', '#685c4d');
 		for (let tick = 0; tick <= 4; tick++) {
@@ -3458,9 +3465,22 @@
 				const value = Number(item.values[labelIndex]) || 0;
 				const barHeight = value / maximum * plotHeight;
 				context.fillStyle = item.colour;
-				context.fillRect(centre + (seriesIndex - series.length / 2) * barWidth, height - padding.bottom - barHeight, Math.max(2, barWidth - 1), barHeight);
+				context.fillRect(centre + (seriesIndex - (series.length - 1) / 2) * barWidth - barWidth / 2, height - padding.bottom - barHeight, Math.max(2, barWidth - 1), barHeight);
 			});
-			context.fillStyle = css('--mla-muted', '#685c4d'); context.textAlign = 'center'; context.fillText(label, centre, height - 14);
+			context.fillStyle = css('--mla-muted', '#685c4d');
+			if (rotateLabels) {
+				context.save();
+				context.translate(centre, height - padding.bottom + 13);
+				context.rotate(-Math.PI / 4);
+				context.textAlign = 'right';
+				context.textBaseline = 'middle';
+				context.fillText(label, 0, 0);
+				context.restore();
+			} else {
+				context.textAlign = 'center';
+				context.textBaseline = 'alphabetic';
+				context.fillText(label, centre, height - 14);
+			}
 		});
 		let legendX = padding.left;
 		series.forEach(item => {
@@ -3606,8 +3626,8 @@
 	function renderClimateComposition() {
 		const key = state.climateIndex;
 		const field = key === 'enso' ? CLIMATE.enso.class : CLIMATE[key].phase;
-		const values = key === 'enso' ? [-1, 0, 1, 2] : [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8];
-		const labels = key === 'enso' ? ['Unavailable', 'La Niña', 'Neutral', 'El Niño'] : ['Unavailable', 'Inactive', '1', '2', '3', '4', '5', '6', '7', '8'];
+		const values = key === 'enso' ? [-1, 0, 1, 2] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
+		const labels = key === 'enso' ? ['Unavailable', 'La Niña', 'Neutral', 'El Niño'] : ['Inactive', '1', '2', '3', '4', '5', '6', '7', '8'];
 		const search = {...parsedSearch(), query: '', exactDate: null, exactTime: null, exactDateStart: null, exactDateEnd: null, exactTrackId: null, exactYear: null};
 		const currentIndexes = [];
 		const referenceIndexes = [];
@@ -3621,13 +3641,16 @@
 		const referenceCounts = counts(referenceIndexes);
 		const currentTotal = currentCounts.reduce((sum, value) => sum + value, 0);
 		const referenceTotal = referenceCounts.reduce((sum, value) => sum + value, 0);
+		const currentOmitted = currentIndexes.length - currentTotal;
+		const referenceOmitted = referenceIndexes.length - referenceTotal;
 		const currentShares = currentCounts.map(value => currentTotal ? value / currentTotal * 100 : 0);
 		const referenceShares = referenceCounts.map(value => referenceTotal ? value / referenceTotal * 100 : 0);
 		drawGroupedBars('mlaClimateChart', labels, [
 			{name: 'Filtered context', colour: css('--mla-indigo', '#233f78'), values: currentShares},
 			{name: 'All LPSs', colour: css('--mla-turmeric', '#c3931d'), values: referenceShares}
 		], {percent: true, decimals: 0});
-		$('#mlaClimateStatus').textContent = `${fmt(currentTotal)} eligible systems in the filtered context; ${fmt(referenceTotal)} in the time/month reference. Shares describe LPS composition, not formation rate per index day.`;
+		const missingNote = key === 'enso' ? '' : ` Records without ${key.toUpperCase()} phase data are omitted (${fmt(currentOmitted)} filtered; ${fmt(referenceOmitted)} reference).`;
+		$('#mlaClimateStatus').textContent = `${fmt(currentTotal)} eligible systems in the filtered context; ${fmt(referenceTotal)} in the time/month reference. Shares describe LPS composition, not formation rate per index day.${missingNote}`;
 		$('#mlaClimateData').innerHTML = accessibleTable(['Category', 'Filtered N', 'Filtered share', 'Reference N', 'Reference share'], labels.map((label, index) => [label, currentCounts[index], `${fmt(currentShares[index], 1)}%`, referenceCounts[index], `${fmt(referenceShares[index], 1)}%`]));
 	}
 
@@ -3792,9 +3815,9 @@
 		context.restore();
 	}
 
-	function drawPrecipitationComposite(field) {
+	function drawPrecipitationComposite(field, canvasId, scaleMaximum) {
 		const unpacked = unpackCompositeField(field);
-		const drawing = setupChart('mlaPrecipComposite');
+		const drawing = setupChart(canvasId || 'mlaPrecipComposite');
 		if (!drawing || !unpacked) return;
 		const {context, width, height} = drawing;
 		const availableWidth = Math.max(80, width - 66);
@@ -3803,7 +3826,7 @@
 		const plot = {left: 52 + (availableWidth - plotSize) / 2, top: 14, width: plotSize, height: plotSize};
 		const palette = COMPOSITE_PALETTES.terrain_r;
 		const minimum = 0;
-		const maximum = 60;
+		const maximum = Number.isFinite(Number(scaleMaximum)) && Number(scaleMaximum) > 0 ? Number(scaleMaximum) : 60;
 		const cellWidth = plot.width / unpacked.columns;
 		const cellHeight = plot.height / unpacked.rows;
 		context.save();
@@ -3935,24 +3958,40 @@
 		return result;
 	}
 
+	function sharedCompositeMaximum(fields) {
+		let maximum = 0;
+		for (const field of fields) {
+			const unpacked = unpackCompositeField(field);
+			if (!unpacked) continue;
+			for (const value of unpacked.values) if (Number.isFinite(value) && value > maximum) maximum = value;
+		}
+		return niceRainfallMaximum(maximum);
+	}
+
 	function renderSubsetSections() {
 		if ($('#mlaPanelClimatology').hidden) return;
 		const variable = state.subsetSectionVariable;
-		const definition = COMPOSITE_SECTION_DEFINITIONS[variable];
+		const definition = SUBSET_COMPOSITE_DEFINITIONS[variable];
+		const precipitation = definition.kind === 'horizontal_precipitation';
 		$('#mlaSubsetSectionVariable').value = variable;
+		$('#mlaSubsetCompositeHeading').textContent = precipitation ? 'Storm-centred precipitation footprint' : 'Storm-centred vertical structure';
+		$('#mlaSubsetCompositeSubtitle').textContent = precipitation
+			? 'Lifecycle-mean ERA5 daily precipitation; both panels use the same data-driven scale.'
+			: 'Lifecycle-mean ERA5 zonal section through 0° relative latitude; both panels use the same fixed scale.';
+		for (const id of ['mlaSubsetSectionChart', 'mlaReferenceSectionChart']) $( `#${id}`).classList.toggle('is-footprint', precipitation);
 		$('#mlaClearSectionReference').hidden = !state.sectionReference;
 		$('#mlaPinSectionReference').textContent = state.sectionReference ? 'Update pinned reference' : 'Pin subset as reference';
 		$('#mlaReferenceSectionHeading').textContent = state.sectionReference ? `Pinned reference · ${state.sectionReferenceLabel}` : 'Complete catalogue reference';
 		if (!SECTIONS) {
-			emptyChart('mlaSubsetSectionChart', 'Loading filtered-subset ERA5 sections…');
-			emptyChart('mlaReferenceSectionChart', 'Loading reference ERA5 sections…');
-			$('#mlaSubsetSectionStatus').textContent = 'Loading one compact archive containing all 2,115 lifecycle-mean sections…';
-			$('#mlaReferenceSectionStatus').textContent = 'Reference section pending.';
-			ensureSections('Loading filterable ERA5 vertical sections…').then(renderSubsetSections).catch(error => {
-				emptyChart('mlaSubsetSectionChart', 'Subset sections unavailable');
-				emptyChart('mlaReferenceSectionChart', 'Subset sections unavailable');
+			emptyChart('mlaSubsetSectionChart', 'Loading filtered-subset ERA5 composites…');
+			emptyChart('mlaReferenceSectionChart', 'Loading reference ERA5 composites…');
+			$('#mlaSubsetSectionStatus').textContent = 'Loading one compact archive containing all 2,115 lifecycle-mean composites…';
+			$('#mlaReferenceSectionStatus').textContent = 'Reference composite pending.';
+			ensureSections('Loading filterable ERA5 composites…').then(renderSubsetSections).catch(error => {
+				emptyChart('mlaSubsetSectionChart', 'Subset composites unavailable');
+				emptyChart('mlaReferenceSectionChart', 'Subset composites unavailable');
 				$('#mlaSubsetSectionStatus').textContent = error.message || String(error);
-				$('#mlaReferenceSectionStatus').textContent = 'Could not load the section archive.';
+				$('#mlaReferenceSectionStatus').textContent = 'Could not load the composite archive.';
 			});
 			return;
 		}
@@ -3960,20 +3999,32 @@
 		const current = meanSubsetSection(state.active, variable, `current:${filterSignature()}`);
 		const referenceKey = state.sectionReference ? `pinned:${state.sectionReference.join('.')}` : 'all';
 		const baseline = meanSubsetSection(reference, variable, referenceKey);
+		const sharedMaximum = precipitation ? sharedCompositeMaximum([current, baseline]) : null;
 		if (current) {
-			drawSectionComposite(current, SECTIONS.grid.pressure_hpa, definition, 'mlaSubsetSectionChart');
-			$('#mlaSubsetSectionStatus').textContent = `${fmt(current.systems)} systems · ${fmt(current.validCells / current.totalCells * 100, 1)}% of section cells represented · fixed ${definition.minimum}–${definition.maximum} ${definition.unit}.`;
-			$('#mlaSubsetSectionChart').setAttribute('aria-label', `${definition.label} lifecycle-mean storm-centred vertical section for ${current.systems} systems in the current filtered subset`);
+			if (precipitation) drawPrecipitationComposite(current, 'mlaSubsetSectionChart', sharedMaximum);
+			else drawSectionComposite(current, SECTIONS.grid.pressure_hpa, definition, 'mlaSubsetSectionChart');
+			$('#mlaSubsetSectionStatus').textContent = precipitation
+				? `${fmt(current.systems)} systems · ${fmt(current.validCells / current.totalCells * 100, 1)}% of footprint cells represented · shared 0–${fmt(sharedMaximum)} ${definition.unit}.`
+				: `${fmt(current.systems)} systems · ${fmt(current.validCells / current.totalCells * 100, 1)}% of section cells represented · fixed ${definition.minimum}–${definition.maximum} ${definition.unit}.`;
+			$('#mlaSubsetSectionChart').setAttribute('aria-label', precipitation
+				? `${definition.label} lifecycle-mean storm-centred horizontal footprint for ${current.systems} systems in the current filtered subset`
+				: `${definition.label} lifecycle-mean storm-centred vertical section for ${current.systems} systems in the current filtered subset`);
 		} else {
 			emptyChart('mlaSubsetSectionChart', 'No systems in the filtered subset');
 			$('#mlaSubsetSectionStatus').textContent = 'No systems are available for this filtered composite.';
 		}
 		if (baseline) {
-			drawSectionComposite(baseline, SECTIONS.grid.pressure_hpa, definition, 'mlaReferenceSectionChart');
-			$('#mlaReferenceSectionStatus').textContent = `${fmt(baseline.systems)} systems · same fixed scale as the current subset.`;
-			$('#mlaReferenceSectionChart').setAttribute('aria-label', `${definition.label} lifecycle-mean storm-centred vertical section for ${baseline.systems} systems in the reference subset`);
+			if (precipitation) drawPrecipitationComposite(baseline, 'mlaReferenceSectionChart', sharedMaximum);
+			else drawSectionComposite(baseline, SECTIONS.grid.pressure_hpa, definition, 'mlaReferenceSectionChart');
+			$('#mlaReferenceSectionStatus').textContent = `${fmt(baseline.systems)} systems · same ${precipitation ? `0–${fmt(sharedMaximum)} ${definition.unit}` : 'fixed'} scale as the current subset.`;
+			$('#mlaReferenceSectionChart').setAttribute('aria-label', precipitation
+				? `${definition.label} lifecycle-mean storm-centred horizontal footprint for ${baseline.systems} systems in the reference subset`
+				: `${definition.label} lifecycle-mean storm-centred vertical section for ${baseline.systems} systems in the reference subset`);
 		}
-		$('#mlaSubsetSectionData').innerHTML = `<p>${esc(SECTIONS.method)} The display uses a 0.5° relative-longitude grid and preserves all ${fmt(SECTIONS.grid.pressure_hpa.length)} pressure levels; θₑ omits 100 hPa in the plotted view. Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`;
+		const method = precipitation ? SECTIONS.method.precipitation : SECTIONS.method.vertical;
+		$('#mlaSubsetSectionData').innerHTML = precipitation
+			? `<p>${esc(method)} Each system contributes one lifecycle-mean footprint to the subset mean. The interactive display uses a 0.5° storm-relative latitude–longitude grid. Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`
+			: `<p>${esc(method)} The display uses a 0.5° relative-longitude grid and preserves all ${fmt(SECTIONS.grid.pressure_hpa.length)} pressure levels; θₑ omits 100 hPa in the plotted view. Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`;
 	}
 
 	function compositeOptionLabel(key) {

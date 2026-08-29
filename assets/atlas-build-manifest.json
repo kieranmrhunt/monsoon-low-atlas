@@ -4,24 +4,29 @@
   "state_rainfall_sha256": "19455971196f61d0effb6cabcbebad003fb8cd5e78d36fa3193fac0944d652ba",
   "core": "atlas-core.cefb51e2bde1.json.gz",
   "detail": "atlas-detail.4ca0b5c25000.json.gz",
-  "sections": "atlas-sections.524b8cb36a5f.json.gz",
-  "sections_built_utc": "2026-08-29T07:36:25.888048+00:00",
-  "sections_sha256": "524b8cb36a5f338f7b2485706e786c97f7310a04ccdb7a5f73dab397f2b6ea1c",
+  "sections": "atlas-sections.4dbc0deb2e5e.json.gz",
+  "sections_built_utc": "2026-08-29T11:28:18.263842+00:00",
+  "sections_sha256": "4dbc0deb2e5e10a2b72984bf1ea496599c1a885e457aca1b98e84cdf51d7b8a2",
   "core_uncompressed_bytes": 3533186,
   "core_compressed_bytes": 1681501,
   "detail_uncompressed_bytes": 49488185,
   "detail_compressed_bytes": 12388468,
-  "sections_uncompressed_bytes": 12499637,
-  "sections_compressed_bytes": 6810207,
+  "sections_uncompressed_bytes": 21981055,
+  "sections_compressed_bytes": 11141342,
   "sections_qa": {
     "tracks": 2115,
     "relative_longitude_step_degrees": 0.5,
     "relative_longitude_columns": 41,
+    "relative_latitude_step_degrees": 0.5,
+    "relative_latitude_rows": 41,
     "pressure_levels": 27,
-    "lifecycle_snapshots_per_track": 9,
+    "vertical_snapshots_per_track": 9,
+    "precipitation_days_per_track_min": 4,
+    "precipitation_days_per_track_max": 24,
     "fields": [
       "relative_vorticity",
-      "theta_e"
+      "theta_e",
+      "precipitation"
     ]
   },
   "qa": {

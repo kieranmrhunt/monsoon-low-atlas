@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pack per-system vertical composites for responsive filtered-subset means."""
+"""Pack per-system composites for responsive filtered-subset means."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ from pathlib import Path
 
 
 NULL_I16 = -32768
-FIELDS = ("relative_vorticity", "theta_e")
+SECTION_FIELDS = ("relative_vorticity", "theta_e")
+PRECIPITATION_FIELDS = {"precipitation": "era5"}
+FIELDS = SECTION_FIELDS + tuple(PRECIPITATION_FIELDS)
 
 
 def sha256(path: Path) -> str:
@@ -55,8 +57,11 @@ def main() -> None:
     field_sources = {field: set() for field in FIELDS}
     pressure_hpa = None
     longitude = None
+    latitude = None
     source_longitude = None
+    source_latitude = None
     longitude_columns = None
+    latitude_rows = None
     sample_counts = {field: [] for field in FIELDS}
 
     for position, track_id in enumerate(track_ids, start=1):
@@ -67,33 +72,55 @@ def main() -> None:
         if pressure_hpa is None:
             pressure_hpa = [float(value) for value in asset["grid"]["pressure_hpa"]]
             source_longitude = dict(asset["grid"]["relative_longitude_degrees"])
+            source_latitude = dict(asset["grid"]["relative_latitude_degrees"])
             stride = round(args.longitude_step / float(source_longitude["step"]))
             if stride < 1 or abs(stride * float(source_longitude["step"]) - args.longitude_step) > 1e-8:
                 raise RuntimeError("Requested longitude step is not an integer multiple of the source grid")
+            latitude_stride = round(args.longitude_step / float(source_latitude["step"]))
+            if latitude_stride < 1 or abs(latitude_stride * float(source_latitude["step"]) - args.longitude_step) > 1e-8:
+                raise RuntimeError("Requested grid step is not an integer multiple of the source latitude grid")
             longitude_columns = list(range(0, int(source_longitude["count"]), stride))
+            latitude_rows = list(range(0, int(source_latitude["count"]), latitude_stride))
             longitude = {
                 "start": float(source_longitude["start"]),
                 "step": float(source_longitude["step"]) * stride,
                 "count": len(longitude_columns),
             }
+            latitude = {
+                "start": float(source_latitude["start"]),
+                "step": float(source_latitude["step"]) * latitude_stride,
+                "count": len(latitude_rows),
+            }
         elif pressure_hpa != [float(value) for value in asset["grid"]["pressure_hpa"]]:
             raise RuntimeError(f"Pressure grid mismatch for event {track_id}")
 
         for field_name in FIELDS:
-            field = asset.get("section", {}).get(field_name)
+            is_precipitation = field_name in PRECIPITATION_FIELDS
+            field = (
+                asset.get("precipitation", {}).get(PRECIPITATION_FIELDS[field_name])
+                if is_precipitation
+                else asset.get("section", {}).get(field_name)
+            )
             if field is None:
-                raise RuntimeError(f"Missing {field_name} section for event {track_id}")
+                raise RuntimeError(f"Missing {field_name} composite for event {track_id}")
             shape = [int(value) for value in field["shape"]]
             values = field["data"]
-            if shape != [len(pressure_hpa), int(source_longitude["count"])] or len(values) != shape[0] * shape[1]:
+            expected_shape = (
+                [int(source_latitude["count"]), int(source_longitude["count"])]
+                if is_precipitation
+                else [len(pressure_hpa), int(source_longitude["count"])]
+            )
+            if shape != expected_shape or len(values) != shape[0] * shape[1]:
                 raise RuntimeError(f"Unexpected {field_name} shape for event {track_id}: {shape}")
+            selected_rows = latitude_rows if is_precipitation else range(shape[0])
             packed_values = [
                 values[row * shape[1] + column]
-                for row in range(shape[0])
+                for row in selected_rows
                 for column in longitude_columns
             ]
             meta = {
-                "shape_per_track": [shape[0], len(longitude_columns)],
+                "kind": "horizontal_precipitation" if is_precipitation else "vertical_section",
+                "shape_per_track": [len(latitude_rows) if is_precipitation else shape[0], len(longitude_columns)],
                 "scale": float(field["scale"]),
                 "units": field["units"],
             }
@@ -125,17 +152,18 @@ def main() -> None:
 
     built_utc = datetime.now(timezone.utc).isoformat()
     payload = {
-        "schema": "monsoon-low-atlas-subset-sections-v1",
+        "schema": "monsoon-low-atlas-subset-composites-v2",
         "release": core["meta"]["catalogue_version"],
         "track_count": len(track_ids),
         "track_ids": track_ids,
         "grid": {
             "relative_longitude_degrees": longitude,
+            "relative_latitude_degrees": latitude,
             "pressure_hpa": pressure_hpa,
-            "frame": "unrotated storm-relative zonal section at zero relative latitude",
+            "frame": "unrotated storm-relative geographic coordinates centred at zero relative longitude and latitude",
         },
         "fields": fields,
-        "method": manifest["method"]["vertical"],
+        "method": manifest["method"],
         "source": {
             "composite_manifest": f"{args.composite_dir.name}/manifest.json",
             "composite_manifest_sha256": sha256(manifest_path),
@@ -163,8 +191,12 @@ def main() -> None:
                 "tracks": len(track_ids),
                 "relative_longitude_step_degrees": longitude["step"],
                 "relative_longitude_columns": longitude["count"],
+                "relative_latitude_step_degrees": latitude["step"],
+                "relative_latitude_rows": latitude["count"],
                 "pressure_levels": len(pressure_hpa),
-                "lifecycle_snapshots_per_track": min(sample_counts[FIELDS[0]]),
+                "vertical_snapshots_per_track": min(sample_counts[SECTION_FIELDS[0]]),
+                "precipitation_days_per_track_min": min(sample_counts["precipitation"]),
+                "precipitation_days_per_track_max": max(sample_counts["precipitation"]),
                 "fields": list(FIELDS),
             },
         })
