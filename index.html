@@ -325,8 +325,6 @@
 .mla-swatch { width: 18px; height: 8px; border-radius: 999px; display: inline-block; }
 
 .mla-dossier { padding: 15px; }
-.mla-dossier-sheet-toggle { display: none; }
-.mla-dossier-sheet-body { min-width: 0; }
 .mla-dossier-empty { color: var(--mla-muted); padding: 8px 0; }
 .mla-dossier-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .mla-dossier h3 { font-family: var(--mla-font); font-size: 27px; line-height: 1.05; font-weight: 500; margin: 6px 0; }
@@ -506,24 +504,6 @@
 	.mla-percentile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.mla-map-stack { height: 500px; }
 	.mla-dossier { display: block; }
-	.mla-dossier.has-selection {
-		position: fixed;
-		left: 10px;
-		right: 10px;
-		bottom: max(10px, env(safe-area-inset-bottom));
-		z-index: 70;
-		max-height: min(64vh, 620px);
-		padding: 0;
-		overflow: hidden;
-		box-shadow: 0 18px 50px -16px rgba(20, 18, 15, .55);
-	}
-	.mla-dossier.has-selection .mla-dossier-sheet-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 54px; border: 0; border-bottom: 1px solid var(--mla-line); background: var(--mla-well); padding: 10px 13px; text-align: left; font-weight: 650; }
-	.mla-dossier.has-selection .mla-dossier-sheet-toggle::after { content: "−"; color: var(--mla-indigo); font-size: 20px; font-weight: 400; }
-	.mla-dossier.has-selection.is-collapsed .mla-dossier-sheet-toggle { border-bottom: 0; }
-	.mla-dossier.has-selection.is-collapsed .mla-dossier-sheet-toggle::after { content: "+"; }
-	.mla-dossier.has-selection .mla-dossier-sheet-body { max-height: calc(min(64vh, 620px) - 54px); overflow: auto; overscroll-behavior: contain; padding: 12px 14px 18px; }
-	.mla-dossier.has-selection.is-collapsed .mla-dossier-sheet-body { display: none; }
-	.mla-dossier.has-selection #mlaTimeControls { margin: -12px -14px 12px; border-top: 0; border-bottom: 1px solid var(--mla-line); }
 	.mla-fact-grid { grid-template-columns: 1fr 1fr; }
 	.mla-record-grid { grid-template-columns: 1fr; }
 	.mla-chart-wide { grid-column: auto; }
@@ -755,7 +735,6 @@
 						<canvas class="mla-map-layer" id="mlaMapOverlay" role="img" aria-describedby="mlaMapDescription">Interactive map of filtered atlas tracks. Use the systems table for a keyboard-accessible alternative.</canvas>
 						<div class="mla-map-tip" id="mlaMapTip" role="tooltip"></div>
 					</div>
-					<div id="mlaTimeControlsAnchor"></div>
 					<div class="mla-time-controls" id="mlaTimeControls" hidden>
 						<button class="mla-btn mla-btn-small" id="mlaPreviousHour" type="button" aria-label="Previous track hour">−1 h</button>
 						<label class="mla-track-time-control" for="mlaTrackHour"><span>Track hour</span><input class="mla-time-slider" id="mlaTrackHour" type="range" min="0" max="0" value="0" step="1" aria-label="Selected track hour"></label>
@@ -774,8 +753,7 @@
 					<details class="mla-a11y-data" id="mlaStateRainfallPanel" hidden><summary>State rainfall values</summary><div id="mlaStateRainfallData"></div></details>
 				</section>
 				<aside class="mla-card mla-dossier" id="mlaDossier" aria-live="polite">
-					<button class="mla-dossier-sheet-toggle" id="mlaMobileDossierToggle" type="button" aria-expanded="true" aria-controls="mlaDossierSheetBody"><span id="mlaMobileDossierSummary">Selected system</span></button>
-					<div class="mla-dossier-sheet-body" id="mlaDossierSheetBody"><div id="mlaMobileTimelineSlot"></div><div id="mlaDossierContent"><p class="mla-dossier-empty">Select a track on the map or from a table to open its dossier.</p></div></div>
+					<p class="mla-dossier-empty">Select a track on the map or from a table to open its dossier.</p>
 				</aside>
 			</div>
 			<div class="mla-chart-grid mla-explore-evolution-grid" id="mlaExploreEvolutionGrid" style="margin-top:14px">
@@ -855,7 +833,7 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.4dbc0deb2e5e.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.ee76bb36833e.js"></script>
+<script src="assets/atlas-app.ba65979d5a6b.js"></script>
 
 </body>
 </html>

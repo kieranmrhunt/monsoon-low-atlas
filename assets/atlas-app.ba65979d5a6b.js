@@ -84,7 +84,6 @@
 	let exactSearchIndex = null;
 	let exactSearchConflicts = [];
 	let extremeScatterPoints = [];
-	let mobileDossierOpen = true;
 	const compositeCache = new Map();
 	const compositePromises = new Map();
 	const compositeErrors = new Map();
@@ -1461,10 +1460,6 @@
 			for (const key of new Set(exactSearchConflicts.map(item => item.key))) clearFilter(key);
 			syncControls();
 			applyFilters();
-		});
-		$('#mlaMobileDossierToggle').addEventListener('click', () => {
-			mobileDossierOpen = !mobileDossierOpen;
-			syncMobileDossierLayout();
 		});
 		$('#mlaMapLayer').addEventListener('change', event => { state.mapLayer = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY); writeUrl('replace'); });
 		$('#mlaMapColour').addEventListener('change', event => { state.mapColour = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA); writeUrl('replace'); });
@@ -2931,32 +2926,17 @@
 		return `${['La Niña', 'Neutral', 'El Niño'][category]} (${fmt(CLIMATE.enso.oni_x100[index] / 100, 2)} °C)`;
 	}
 
-	function syncMobileDossierLayout() {
-		const dossier = $('#mlaDossier');
-		const controls = $('#mlaTimeControls');
-		const anchor = $('#mlaTimeControlsAnchor');
-		const slot = $('#mlaMobileTimelineSlot');
-		const mobile = window.matchMedia('(max-width: 760px)').matches;
-		if (mobile && state.selected != null) {
-			if (controls.parentElement !== slot) slot.appendChild(controls);
-		} else if (controls.previousElementSibling !== anchor) anchor.after(controls);
-		dossier.classList.toggle('is-collapsed', mobile && state.selected != null && !mobileDossierOpen);
-		$('#mlaMobileDossierToggle').setAttribute('aria-expanded', String(!dossier.classList.contains('is-collapsed')));
-	}
-
 	function renderDossier() {
 		const node = $('#mlaDossier');
-		const content = $('#mlaDossierContent');
+		const content = node;
 		const hasSelection = state.selected != null;
 		node.classList.toggle('has-selection', hasSelection);
 		$('#mlaExploreEvolutionGrid').classList.toggle('has-selection', hasSelection);
 		$('#mlaSelectedEvolutionCard').hidden = !hasSelection;
 		$('#mlaCompositeCard').hidden = !hasSelection;
 		if (state.selected == null) {
-			$('#mlaMobileDossierSummary').textContent = 'Selected system';
 			if (!state.active.length) {
 				content.innerHTML = '<div class="mla-dossier-head"><div><h3>No matching systems</h3><p class="mla-dossier-sub">Adjust or reset the active filters.</p></div></div>';
-				syncMobileDossierLayout();
 				return;
 			}
 			const durations = state.active.map(index => Number(track(index)[T.duration_hours]));
@@ -2972,12 +2952,10 @@
 				['Displayed positions', fmt(visiblePointCount(state.active))]
 			];
 			content.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current subset</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">Selected-month positions on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, rainfall context and downloads.</p>`;
-			syncMobileDossierLayout();
 			return;
 		}
 		const index = state.selected;
 		const row = track(index);
-		$('#mlaMobileDossierSummary').textContent = `${systemLabel(index)} · ${date(row[T.start_ms])}`;
 		const facts = [
 			['Peak ERA5 class', CORE.cat_labels[String(row[T.category])]],
 			['Duration', durationText(row[T.duration_hours])],
@@ -3006,7 +2984,6 @@
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
 		$('#mlaFitTrack').addEventListener('click', fitSelected);
 		$('#mlaSelectedFixes').addEventListener('click', downloadSelectedFixes);
-		syncMobileDossierLayout();
 	}
 
 	function sortedActive(sortValue) {
@@ -3037,7 +3014,6 @@
 
 	function selectTrack(index, options) {
 		const next = Number.isInteger(index) ? index : null;
-		if (next !== state.selected && next != null) mobileDossierOpen = true;
 		if (state.focusSource === 'point' && state.selected !== next && !(options && options.keepTimeFocus)) clearTimeFocus();
 		state.selected = next;
 		if (state.selected != null && Number.isFinite(state.focusTimeMs)) state.focusPointIndex = pointIndexAtTime(state.selected, state.focusTimeMs);
