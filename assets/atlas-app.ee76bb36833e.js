@@ -3495,27 +3495,52 @@
 		const drawing = setupChart(id);
 		if (!drawing) return;
 		const {context, width, height} = drawing;
-		const padding = {left: options && options.left || 72, right: 14, top: 20, bottom: 40};
+		context.font = `11px ${CANVAS_FONT}`;
+		const rowLabelWidth = Math.max(0, ...rows.map(label => context.measureText(label).width));
+		const left = Math.max(options && options.left || 72, Math.ceil(rowLabelWidth) + 14);
+		const provisionalCellWidth = (width - left - 14) / columns.length;
+		const rotateColumns = columns.some(label => context.measureText(label).width > provisionalCellWidth - 7);
+		const padding = {left, right: 14, top: 20, bottom: rotateColumns ? 88 : 40};
 		const cellWidth = (width - padding.left - padding.right) / columns.length;
 		const cellHeight = (height - padding.top - padding.bottom) / rows.length;
 		const maximum = Math.max(1, ...matrix.flat().filter(Number.isFinite));
 		const labelColour = css('--mla-muted', '#685c4d');
-		context.font = `11px ${CANVAS_FONT}`;
-		context.fillStyle = labelColour;
-		columns.forEach((label, index) => context.fillText(label, padding.left + index * cellWidth + 3, height - 15));
 		rows.forEach((label, row) => {
-			context.fillStyle = labelColour;
-			context.fillText(label, 7, padding.top + row * cellHeight + cellHeight * .64);
 			columns.forEach((unused, column) => {
 				const value = matrix[row][column];
 				context.fillStyle = Number.isFinite(value) && value > 0 ? ramp(value / maximum) : 'rgba(90, 75, 55, .08)';
 				context.fillRect(padding.left + column * cellWidth, padding.top + row * cellHeight, Math.max(1, cellWidth - 1), Math.max(1, cellHeight - 1));
 				if (cellWidth > 34 && cellHeight > 22 && Number.isFinite(value) && value > 0) {
 					context.fillStyle = value / maximum > .58 ? '#fffaf0' : '#282119';
+					context.textAlign = 'left';
+					context.textBaseline = 'alphabetic';
 					context.fillText(fmt(value, options && options.decimals ? options.decimals : 0), padding.left + column * cellWidth + 4, padding.top + row * cellHeight + cellHeight * .64);
 				}
 			});
+			context.fillStyle = labelColour;
+			context.textAlign = 'right';
+			context.textBaseline = 'middle';
+			context.fillText(label, padding.left - 7, padding.top + row * cellHeight + cellHeight / 2);
 		});
+		context.fillStyle = labelColour;
+		columns.forEach((label, index) => {
+			const centre = padding.left + (index + .5) * cellWidth;
+			if (rotateColumns) {
+				context.save();
+				context.translate(centre, height - padding.bottom + 10);
+				context.rotate(-Math.PI / 4);
+				context.textAlign = 'right';
+				context.textBaseline = 'middle';
+				context.fillText(label, 0, 0);
+				context.restore();
+			} else {
+				context.textAlign = 'center';
+				context.textBaseline = 'alphabetic';
+				context.fillText(label, centre, height - 15);
+			}
+		});
+		context.textAlign = 'left';
+		context.textBaseline = 'alphabetic';
 	}
 
 	function fixedProjection(width, height, bounds) {
