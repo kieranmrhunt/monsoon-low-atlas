@@ -36,9 +36,11 @@
 	let CORE;
 	let CLIMATE;
 	let DETAIL;
+	let SECTIONS;
 	let catalogueStartDate = '1940-01-01';
 	let catalogueEndDate = '2025-12-31';
 	let detailPromise;
+	let sectionPromise;
 	let T;
 	let S;
 	let Q;
@@ -74,9 +76,14 @@
 	let weatherEncodedCanvas = null;
 	let weatherEncodedContext = null;
 	let compositeLoadSerial = 0;
+	let exactSearchIndex = null;
+	let exactSearchConflicts = [];
+	let extremeScatterPoints = [];
+	let mobileDossierOpen = true;
 	const compositeCache = new Map();
 	const compositePromises = new Map();
 	const compositeErrors = new Map();
+	const sectionMeanCache = new Map();
 
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
@@ -182,6 +189,14 @@
 		sort: 'metric-desc',
 		extremeMetric: 'duration',
 		extremeEligibility: 'all',
+		extremeX: 'deficit',
+		extremeY: 'wind',
+		climatologyMeasure: 'systems',
+		seasonalMode: 'count',
+		climateIndex: 'mjo',
+		subsetSectionVariable: 'relative_vorticity',
+		sectionReference: null,
+		sectionReferenceLabel: '',
 		evolutionMetric: 'deficit',
 		compositePrecipSource: 'era5',
 		compositeSectionVariable: 'relative_vorticity',
@@ -446,6 +461,39 @@
 			})();
 		}
 		return detailPromise;
+	}
+
+	function decodeInt16Base64(encoded) {
+		const binary = atob(encoded);
+		const bytes = new Uint8Array(binary.length);
+		for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+		if (new Uint8Array(new Uint16Array([1]).buffer)[0] === 1) return new Int16Array(bytes.buffer);
+		const view = new DataView(bytes.buffer);
+		const values = new Int16Array(bytes.byteLength / 2);
+		for (let index = 0; index < values.length; index++) values[index] = view.getInt16(index * 2, true);
+		return values;
+	}
+
+	async function ensureSections(reason) {
+		if (SECTIONS) return SECTIONS;
+		if (!sectionPromise) {
+			sectionPromise = (async () => {
+				ensureAtlasConfig();
+				if (!atlasConfig.sections) throw new Error('Filtered-subset vertical sections are not configured');
+				if (reason) toast(reason);
+				const asset = await fetchJsonAsset(atlasConfig.sections, 'filtered-subset vertical sections');
+				if (asset.schema !== 'monsoon-low-atlas-subset-sections-v1' || asset.track_count !== CORE.tracks.length) throw new Error('Subset-section asset does not match the catalogue');
+				for (let index = 0; index < CORE.tracks.length; index++) if (Number(asset.track_ids[index]) !== atlasId(index)) throw new Error('Subset-section event order does not match the catalogue');
+				for (const field of Object.values(asset.fields)) {
+					field.values = decodeInt16Base64(field.data_b64);
+					delete field.data_b64;
+				}
+				SECTIONS = asset;
+				sectionMeanCache.clear();
+				return asset;
+			})();
+		}
+		return sectionPromise;
 	}
 
 	async function ensureStormComposite(trackIndex, force) {
@@ -991,38 +1039,109 @@
 		};
 	}
 
+	function resolveExactSystemSearch(search) {
+		if (!search.query || search.exactDateStart != null || search.exactYear != null) return null;
+		if (search.exactTrackId != null) {
+			const index = CORE.tracks.findIndex((unused, candidate) => atlasId(candidate) === search.exactTrackId);
+			return index >= 0 ? index : null;
+		}
+		const query = search.query.replace(/^cyclone\s+/, '').trim();
+		const matches = [];
+		for (let index = 0; index < CORE.tracks.length; index++) {
+			const name = officialName(index).toLowerCase();
+			if ((name && name === query) || systemLabel(index).toLowerCase() === search.query) matches.push(index);
+		}
+		return matches.length === 1 ? matches[0] : null;
+	}
+
+	function selectedMonthLabel() {
+		const values = [...state.months].sort((a, b) => a - b);
+		const preset = Object.entries(SEASON_MONTHS).find(([, months]) => months.length === values.length && months.every(month => state.months.has(month)));
+		return preset ? preset[0].toUpperCase() : values.map(month => MONTHS[month - 1]).join(', ');
+	}
+
+	function filterFailures(index, search, options) {
+		const failures = [];
+		const ignoredClimate = options && options.ignoreClimate;
+		const row = track(index);
+		const minimumActive = state.timeMode === 'dates' ? Date.parse(`${state.dateMin}T00:00:00Z`) : NaN;
+		const maximumActive = state.timeMode === 'dates' ? Date.parse(`${state.dateMax}T23:59:59.999Z`) : NaN;
+		if (state.timeMode === 'dates') {
+			if (row[T.end_ms] < minimumActive || row[T.start_ms] > maximumActive) failures.push({key: 'period', label: `Active dates ${state.dateMin}–${state.dateMax}`});
+		} else if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) failures.push({key: 'period', label: `Genesis years ${state.yearMin}–${state.yearMax}`});
+		if (search.exactDateStart == null && !monthPass(index)) failures.push({key: 'months', label: `Months: ${selectedMonthLabel()}`});
+		if (!state.classes.has(row[T.category])) failures.push({key: 'classes', label: `Peak classes: ${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(', ')}`});
+		for (const key of FILTER_METRIC_KEYS) if (percentileMetric(index, key) < state.percentileMins[key]) failures.push({key: `pct-${key}`, label: `${METRICS[key].title} ≥ P${state.percentileMins[key]}`});
+		if (!matchPass(index)) failures.push({key: 'match', label: `IBTrACS: ${$('#mlaMatch').selectedOptions[0].textContent}`});
+		if (!qcPass(index)) failures.push({key: 'qc', label: 'Continuity screen'});
+		if (state.genesisRegion !== 'all' && !(genesisRegions[index] & ENDPOINT_REGION_BITS[state.genesisRegion])) failures.push({key: 'genesis', label: `Genesis: ${ENDPOINT_REGION_LABELS[state.genesisRegion]}`});
+		if (state.lysisRegion !== 'all' && !(lysisRegions[index] & ENDPOINT_REGION_BITS[state.lysisRegion])) failures.push({key: 'lysis', label: `Lysis: ${ENDPOINT_REGION_LABELS[state.lysisRegion]}`});
+		if (ignoredClimate !== 'bsiso' && state.bsiso !== 'all' && CLIMATE.bsiso.phase[index] !== Number(state.bsiso)) failures.push({key: 'bsiso', label: `BSISO: ${$('#mlaBsiso').selectedOptions[0].textContent}`});
+		if (ignoredClimate !== 'mjo' && state.mjo !== 'all' && CLIMATE.mjo.phase[index] !== Number(state.mjo)) failures.push({key: 'mjo', label: `MJO: ${$('#mlaMjo').selectedOptions[0].textContent}`});
+		if (ignoredClimate !== 'enso' && state.enso !== 'all' && CLIMATE.enso.class[index] !== Number(state.enso)) failures.push({key: 'enso', label: `ENSO: ${$('#mlaEnso').selectedOptions[0].textContent}`});
+		if (!statePass(index)) failures.push({key: 'state', label: `Crosses ${CORE.states[state.stateIndex]}`});
+		if (!(options && options.ignoreSearch) && search.query) {
+			if (search.exactDateStart != null && (row[T.end_ms] < search.exactDateStart || row[T.start_ms] > search.exactDateEnd)) failures.push({key: 'search', label: `Active on ${search.exactDate}`});
+			else if (search.exactDateStart == null && search.exactYear != null && row[T.start_year] !== search.exactYear) failures.push({key: 'search', label: `Search: ${search.query}`});
+			else if (search.exactDateStart == null && search.exactYear == null && search.exactTrackId != null && atlasId(index) !== search.exactTrackId) failures.push({key: 'search', label: `Search: ${search.query}`});
+			else if (search.exactDateStart == null && search.exactYear == null && search.exactTrackId == null && !CORE.search[index].includes(search.query)) failures.push({key: 'search', label: `Search: ${search.query}`});
+		}
+		return failures;
+	}
+
+	function clearFilter(key) {
+		if (key === 'period') {
+			state.yearMin = Number(catalogueStartDate.slice(0, 4)); state.yearMax = Number(catalogueEndDate.slice(0, 4));
+			state.dateMin = catalogueStartDate; state.dateMax = catalogueEndDate;
+		} else if (key === 'months') state.months = new Set(SEASON_MONTHS.all);
+		else if (key === 'month-mode') state.monthMode = 'active';
+		else if (key === 'classes') state.classes = new Set([1, 2, 3, 4, 5, 6]);
+		else if (key.startsWith('pct-')) state.percentileMins[key.slice(4)] = 0;
+		else if (key === 'match') state.match = 'any';
+		else if (key === 'qc') state.qc = 'any';
+		else if (key === 'genesis') state.genesisRegion = 'all';
+		else if (key === 'lysis') state.lysisRegion = 'all';
+		else if (key === 'bsiso') state.bsiso = 'all';
+		else if (key === 'mjo') state.mjo = 'all';
+		else if (key === 'enso') state.enso = 'all';
+		else if (key === 'state') { state.stateIndex = -1; state.stateMin = 0; }
+		else if (key === 'search') state.search = '';
+	}
+
+	function activeFilterDescriptors() {
+		const descriptors = [];
+		if (state.timeMode === 'dates' ? state.dateMin !== catalogueStartDate || state.dateMax !== catalogueEndDate : state.yearMin !== Number(catalogueStartDate.slice(0, 4)) || state.yearMax !== Number(catalogueEndDate.slice(0, 4))) descriptors.push({key: 'period', label: state.timeMode === 'dates' ? `${state.dateMin}–${state.dateMax}` : `${state.yearMin}–${state.yearMax}`, group: 'context'});
+		if (state.months.size !== 12) descriptors.push({key: 'months', label: `Months: ${selectedMonthLabel()}`, group: 'context'});
+		if (state.monthMode !== 'active') descriptors.push({key: 'month-mode', label: `Month: ${state.monthMode}`, group: 'context'});
+		if (state.classes.size !== 6) descriptors.push({key: 'classes', label: `Class: ${[...state.classes].sort().map(value => CLASS_SHORT[value]).join(',')}`, group: 'context'});
+		for (const key of FILTER_METRIC_KEYS) if (state.percentileMins[key] > 0) descriptors.push({key: `pct-${key}`, label: `${METRICS[key].shortTitle || METRICS[key].title} ≥ P${state.percentileMins[key]}`, group: 'percentile'});
+		if (state.match !== 'any') descriptors.push({key: 'match', label: `IBTrACS: ${$('#mlaMatch').selectedOptions[0].textContent}`, group: 'context'});
+		if (state.genesisRegion !== 'all') descriptors.push({key: 'genesis', label: `Genesis: ${ENDPOINT_REGION_LABELS[state.genesisRegion]}`, group: 'context'});
+		if (state.lysisRegion !== 'all') descriptors.push({key: 'lysis', label: `Lysis: ${ENDPOINT_REGION_LABELS[state.lysisRegion]}`, group: 'context'});
+		if (state.bsiso !== 'all') descriptors.push({key: 'bsiso', label: `BSISO: ${$('#mlaBsiso').selectedOptions[0].textContent}`, group: 'context'});
+		if (state.mjo !== 'all') descriptors.push({key: 'mjo', label: `MJO: ${$('#mlaMjo').selectedOptions[0].textContent}`, group: 'context'});
+		if (state.enso !== 'all') descriptors.push({key: 'enso', label: `ENSO: ${$('#mlaEnso').selectedOptions[0].textContent}`, group: 'context'});
+		if (state.stateIndex >= 0) descriptors.push({key: 'state', label: `Crosses: ${CORE.states[state.stateIndex]}`, group: 'context'});
+		if (state.search) descriptors.push({key: 'search', label: `${exactSearchIndex == null ? 'Search' : 'Opened'}: ${state.search}`, group: 'context'});
+		return descriptors;
+	}
+
 	function applyFilters(options) {
 		if (!CORE) return;
 		const active = [];
 		const bits = new Uint8Array(CORE.tracks.length);
 		const search = parsedSearch();
-		const {query, exactYear, exactDateStart, exactDateEnd, exactTrackId} = search;
-		const minimumActive = state.timeMode === 'dates' ? Date.parse(`${state.dateMin}T00:00:00Z`) : NaN;
-		const maximumActive = state.timeMode === 'dates' ? Date.parse(`${state.dateMax}T23:59:59.999Z`) : NaN;
+		exactSearchIndex = resolveExactSystemSearch(search);
 		for (let index = 0; index < CORE.tracks.length; index++) {
-			const row = track(index);
-			if (state.timeMode === 'dates') {
-				if (row[T.end_ms] < minimumActive || row[T.start_ms] > maximumActive) continue;
-			} else if (row[T.start_year] < state.yearMin || row[T.start_year] > state.yearMax) continue;
-			if (exactDateStart == null && !monthPass(index)) continue;
-			if (!state.classes.has(row[T.category])) continue;
-			if (FILTER_METRIC_KEYS.some(key => percentileMetric(index, key) < state.percentileMins[key])) continue;
-			if (!matchPass(index) || !qcPass(index) || !endpointRegionPass(index) || !climatePass(index) || !statePass(index)) continue;
-			if (query) {
-				if (exactDateStart != null && (row[T.end_ms] < exactDateStart || row[T.start_ms] > exactDateEnd)) continue;
-				if (exactDateStart == null && exactYear != null && row[T.start_year] !== exactYear) continue;
-				if (exactDateStart == null && exactYear == null && exactTrackId != null && atlasId(index) !== exactTrackId) continue;
-				if (exactDateStart == null && exactYear == null && exactTrackId == null && !CORE.search[index].includes(query)) continue;
-			}
+			if (filterFailures(index, search, {ignoreSearch: exactSearchIndex != null}).length) continue;
 			bits[index] = 1;
 			active.push(index);
 		}
 		state.active = active;
 		state.activeBit = bits;
-		if (state.selected != null && !bits[state.selected]) {
-			state.selected = null;
-			if (state.focusSource === 'point') clearTimeFocus();
-		}
+		if (root.dataset.ready !== 'true') setLoading('Rendering filter state and time controls…');
+		if (exactSearchIndex != null) state.selected = exactSearchIndex;
+		exactSearchConflicts = state.selected != null && !bits[state.selected] ? filterFailures(state.selected, search, {ignoreSearch: exactSearchIndex != null}) : [];
 		if (search.exactDateStart != null) {
 			state.focusStartMs = search.exactDateStart;
 			state.focusEndMs = search.exactDateEnd;
@@ -1037,12 +1156,14 @@
 		updateFilterReadout();
 		updateTimeControls();
 		mapScheduler.invalidate((state.stateFill === 'none' ? 0 : MAP_DIRTY.BASE) | MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+		if (root.dataset.ready !== 'true') setLoading('Rendering the requested atlas panel…');
 		renderCurrentPanel();
+		if (root.dataset.ready !== 'true') setLoading('Preparing the initial map view…');
 		const autoFitKey = filterSignature();
 		const narrowTime = state.timeMode === 'dates'
 			? Date.parse(state.dateMax) - Date.parse(state.dateMin) <= 3 * 366 * 86400000
 			: state.yearMax - state.yearMin <= 3;
-		if (!(options && options.noAutoFit) && !state.selected && active.length > 0 && active.length <= 80 && narrowTime && lastAutoFitSignature !== autoFitKey) {
+		if (!(options && options.noAutoFit) && state.selected == null && active.length > 0 && active.length <= 80 && narrowTime && lastAutoFitSignature !== autoFitKey) {
 			lastAutoFitSignature = autoFitKey;
 			requestAnimationFrame(() => fitCohort({quiet: true}));
 		}
@@ -1051,6 +1172,26 @@
 
 	function updateFilterReadout() {
 		$('#mlaResultCount').textContent = `${fmt(state.active.length)} of ${fmt(CORE.tracks.length)} systems`;
+		const descriptors = activeFilterDescriptors();
+		$('#mlaActiveFilters').innerHTML = descriptors.map(item => `<button class="mla-chip mla-filter-chip" type="button" data-clear-filter="${esc(item.key)}" aria-label="Remove ${esc(item.label)} filter">${esc(item.label)}<span aria-hidden="true">×</span></button>`).join('');
+		const contextCount = descriptors.filter(item => item.group === 'context' && item.key !== 'search').length;
+		const percentileCount = descriptors.filter(item => item.group === 'percentile').length;
+		$('#mlaContextFilterCount').textContent = contextCount ? String(contextCount) : '';
+		$('#mlaPercentileFilterCount').textContent = percentileCount ? String(percentileCount) : '';
+		const notice = $('#mlaFilterNotice');
+		const noticeText = $('#mlaFilterNoticeText');
+		const clear = $('#mlaClearConflicts');
+		if (state.selected != null && !state.activeBit[state.selected]) {
+			const labels = exactSearchConflicts.slice(0, 3).map(item => item.label);
+			const extra = exactSearchConflicts.length > 3 ? ` and ${exactSearchConflicts.length - 3} more` : '';
+			noticeText.textContent = `${systemLabel(state.selected)} remains pinned outside the current subset because of ${labels.join('; ')}${extra}.`;
+			clear.hidden = !exactSearchConflicts.length;
+			notice.hidden = false;
+		} else if (exactSearchIndex != null) {
+			noticeText.textContent = `${systemLabel(exactSearchIndex)} opened globally; the surrounding subset filters are unchanged.`;
+			clear.hidden = true;
+			notice.hidden = false;
+		} else notice.hidden = true;
 		$$('[data-percentile-filter]').forEach(control => {
 			const key = control.dataset.percentileFilter;
 			const output = $(`#${control.id}Value`);
@@ -1079,6 +1220,15 @@
 		});
 		const matchField = $('#mlaMatch').closest('.mla-field');
 		if (matchField) matchField.hidden = !CORE.crosswalk.some(Boolean);
+		const namedSuggestions = new Map();
+		for (let index = 0; index < CORE.tracks.length; index++) {
+			const name = officialName(index);
+			if (name && !namedSuggestions.has(name.toLowerCase())) namedSuggestions.set(name.toLowerCase(), {name, id: atlasId(index)});
+		}
+		$('#mlaSearchSuggestions').innerHTML = [...namedSuggestions.values()].sort((first, second) => first.name.localeCompare(second.name)).map(item => `<option value="Cyclone ${esc(item.name)}">physical event ${item.id}</option>`).join('');
+		const relationshipOptions = EXTREME_RELATIONSHIP_KEYS.map(key => `<option value="${key}">${esc(`${EXTREMES[key].label} (${EXTREMES[key].unit})`)}</option>`).join('');
+		$('#mlaExtremeX').innerHTML = relationshipOptions;
+		$('#mlaExtremeY').innerHTML = relationshipOptions;
 	}
 
 	function syncControls() {
@@ -1118,6 +1268,12 @@
 		$('#mlaWeatherTracks').checked = state.weatherTracks;
 		$('#mlaExtremeMetric').value = state.extremeMetric;
 		$('#mlaExtremeEligibility').value = state.extremeEligibility;
+		$('#mlaExtremeX').value = state.extremeX;
+		$('#mlaExtremeY').value = state.extremeY;
+		$('#mlaClimatologyMeasure').value = state.climatologyMeasure;
+		$('#mlaSeasonalMode').value = state.seasonalMode;
+		$('#mlaClimateIndex').value = state.climateIndex;
+		$('#mlaSubsetSectionVariable').value = state.subsetSectionVariable;
 		$('#mlaEvolutionMetric').value = state.evolutionMetric;
 		$('#mlaProfileMetricCount').textContent = `${fmt(state.profileMetrics.size)} shown`;
 		$$('[data-month]').forEach(button => button.setAttribute('aria-pressed', String(state.months.has(Number(button.dataset.month)))));
@@ -1289,6 +1445,22 @@
 			setMonths(SEASON_MONTHS[button.dataset.season]);
 		});
 		$('#mlaResetFilters').addEventListener('click', resetFilters);
+		$('#mlaActiveFilters').addEventListener('click', event => {
+			const button = event.target.closest('[data-clear-filter]');
+			if (!button) return;
+			clearFilter(button.dataset.clearFilter);
+			syncControls();
+			applyFilters();
+		});
+		$('#mlaClearConflicts').addEventListener('click', () => {
+			for (const key of new Set(exactSearchConflicts.map(item => item.key))) clearFilter(key);
+			syncControls();
+			applyFilters();
+		});
+		$('#mlaMobileDossierToggle').addEventListener('click', () => {
+			mobileDossierOpen = !mobileDossierOpen;
+			syncMobileDossierLayout();
+		});
 		$('#mlaMapLayer').addEventListener('change', event => { state.mapLayer = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY); writeUrl('replace'); });
 		$('#mlaMapColour').addEventListener('change', event => { state.mapColour = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA); writeUrl('replace'); });
 		$('#mlaStateFill').addEventListener('change', async event => {
@@ -1334,8 +1506,25 @@
 		$('#mlaTrackHour').addEventListener('input', moveTrackHourSlider);
 		$('#mlaTrackHour').addEventListener('change', commitTrackHourSlider);
 		$('#mlaFitCohort').addEventListener('click', () => fitCohort());
-		$('#mlaExtremeMetric').addEventListener('change', event => { state.extremeMetric = event.target.value; renderExtremes(); });
+		$('#mlaExtremeMetric').addEventListener('change', event => { state.extremeMetric = event.target.value; renderExtremes(); writeUrl('replace'); });
 		$('#mlaExtremeEligibility').addEventListener('change', event => { state.extremeEligibility = event.target.value; renderExtremes(); });
+		$('#mlaExtremeX').addEventListener('change', event => { state.extremeX = event.target.value; renderExtremes(); writeUrl('replace'); });
+		$('#mlaExtremeY').addEventListener('change', event => { state.extremeY = event.target.value; renderExtremes(); writeUrl('replace'); });
+		$('#mlaClimatologyMeasure').addEventListener('change', event => { state.climatologyMeasure = event.target.value; renderClimatology(); writeUrl('replace'); });
+		$('#mlaSeasonalMode').addEventListener('change', event => { state.seasonalMode = event.target.value; renderClimatology(); writeUrl('replace'); });
+		$('#mlaClimateIndex').addEventListener('change', event => { state.climateIndex = event.target.value; renderClimatology(); writeUrl('replace'); });
+		$('#mlaSubsetSectionVariable').addEventListener('change', event => { state.subsetSectionVariable = event.target.value; renderSubsetSections(); writeUrl('replace'); });
+		$('#mlaPinSectionReference').addEventListener('click', () => {
+			state.sectionReference = state.active.slice();
+			const descriptors = activeFilterDescriptors().filter(item => item.key !== 'search');
+			state.sectionReferenceLabel = descriptors.length ? descriptors.slice(0, 3).map(item => item.label).join(' · ') + (descriptors.length > 3 ? ` · +${descriptors.length - 3}` : '') : 'All current filters';
+			renderSubsetSections();
+		});
+		$('#mlaClearSectionReference').addEventListener('click', () => {
+			state.sectionReference = null;
+			state.sectionReferenceLabel = '';
+			renderSubsetSections();
+		});
 		$('#mlaEvolutionMetric').addEventListener('change', event => { state.evolutionMetric = event.target.value; renderLifeCharts(); writeUrl('replace'); });
 		$('#mlaCompositePrecipSource').addEventListener('change', event => { state.compositePrecipSource = event.target.value; renderStormComposites(); writeUrl('replace'); });
 		$('#mlaCompositeSectionVariable').addEventListener('change', event => { state.compositeSectionVariable = event.target.value; renderStormComposites(); writeUrl('replace'); });
@@ -1423,6 +1612,13 @@
 		if (state.evolutionMetric !== 'deficit') parameters.set('evolve', state.evolutionMetric);
 		if (state.compositePrecipSource !== 'era5') parameters.set('compositeprecip', state.compositePrecipSource);
 		if (state.compositeSectionVariable !== 'relative_vorticity') parameters.set('compositesection', state.compositeSectionVariable);
+		if (state.climatologyMeasure !== 'systems') parameters.set('climmeasure', state.climatologyMeasure);
+		if (state.seasonalMode !== 'count') parameters.set('seasonview', state.seasonalMode);
+		if (state.climateIndex !== 'mjo') parameters.set('climateplot', state.climateIndex);
+		if (state.subsetSectionVariable !== 'relative_vorticity') parameters.set('subsetsection', state.subsetSectionVariable);
+		if (state.extremeMetric !== 'duration') parameters.set('extreme', state.extremeMetric);
+		if (state.extremeX !== 'deficit') parameters.set('extx', state.extremeX);
+		if (state.extremeY !== 'wind') parameters.set('exty', state.extremeY);
 		const profileMetrics = PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key));
 		if (profileMetrics.join(',') !== DEFAULT_PROFILE_METRICS.join(',')) parameters.set('profiles', profileMetrics.join(','));
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
@@ -1483,6 +1679,13 @@
 		if (PROFILE_METRIC_KEYS.includes(parameters.get('evolve'))) state.evolutionMetric = parameters.get('evolve');
 		if (['era5', 'imerg'].includes(parameters.get('compositeprecip'))) state.compositePrecipSource = parameters.get('compositeprecip');
 		if (Object.hasOwn(COMPOSITE_SECTION_DEFINITIONS, parameters.get('compositesection'))) state.compositeSectionVariable = parameters.get('compositesection');
+		if (['systems', 'rate', 'system_days'].includes(parameters.get('climmeasure'))) state.climatologyMeasure = parameters.get('climmeasure');
+		if (['count', 'share'].includes(parameters.get('seasonview'))) state.seasonalMode = parameters.get('seasonview');
+		if (['mjo', 'bsiso', 'enso'].includes(parameters.get('climateplot'))) state.climateIndex = parameters.get('climateplot');
+		if (Object.hasOwn(COMPOSITE_SECTION_DEFINITIONS, parameters.get('subsetsection'))) state.subsetSectionVariable = parameters.get('subsetsection');
+		if (Object.hasOwn(EXTREMES, parameters.get('extreme'))) state.extremeMetric = parameters.get('extreme');
+		if (EXTREME_RELATIONSHIP_KEYS.includes(parameters.get('extx'))) state.extremeX = parameters.get('extx');
+		if (EXTREME_RELATIONSHIP_KEYS.includes(parameters.get('exty'))) state.extremeY = parameters.get('exty');
 		const profileMetrics = (parameters.get('profiles') || '').split(',').filter(key => PROFILE_METRIC_KEYS.includes(key));
 		if (profileMetrics.length) state.profileMetrics = new Set(profileMetrics);
 		state.mapZoom = clamp(Number(parameters.get('zoom')) || 1, 1, 16);
@@ -2723,15 +2926,32 @@
 		return `${['La Niña', 'Neutral', 'El Niño'][category]} (${fmt(CLIMATE.enso.oni_x100[index] / 100, 2)} °C)`;
 	}
 
+	function syncMobileDossierLayout() {
+		const dossier = $('#mlaDossier');
+		const controls = $('#mlaTimeControls');
+		const anchor = $('#mlaTimeControlsAnchor');
+		const slot = $('#mlaMobileTimelineSlot');
+		const mobile = window.matchMedia('(max-width: 760px)').matches;
+		if (mobile && state.selected != null) {
+			if (controls.parentElement !== slot) slot.appendChild(controls);
+		} else if (controls.previousElementSibling !== anchor) anchor.after(controls);
+		dossier.classList.toggle('is-collapsed', mobile && state.selected != null && !mobileDossierOpen);
+		$('#mlaMobileDossierToggle').setAttribute('aria-expanded', String(!dossier.classList.contains('is-collapsed')));
+	}
+
 	function renderDossier() {
 		const node = $('#mlaDossier');
+		const content = $('#mlaDossierContent');
 		const hasSelection = state.selected != null;
+		node.classList.toggle('has-selection', hasSelection);
 		$('#mlaExploreEvolutionGrid').classList.toggle('has-selection', hasSelection);
 		$('#mlaSelectedEvolutionCard').hidden = !hasSelection;
 		$('#mlaCompositeCard').hidden = !hasSelection;
 		if (state.selected == null) {
+			$('#mlaMobileDossierSummary').textContent = 'Selected system';
 			if (!state.active.length) {
-				node.innerHTML = '<div class="mla-dossier-head"><div><h3>No matching systems</h3><p class="mla-dossier-sub">Adjust or reset the active filters.</p></div></div>';
+				content.innerHTML = '<div class="mla-dossier-head"><div><h3>No matching systems</h3><p class="mla-dossier-sub">Adjust or reset the active filters.</p></div></div>';
+				syncMobileDossierLayout();
 				return;
 			}
 			const durations = state.active.map(index => Number(track(index)[T.duration_hours]));
@@ -2746,11 +2966,13 @@
 				['Named cyclone matches', fmt(named)],
 				['Displayed positions', fmt(visiblePointCount(state.active))]
 			];
-			node.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current subset</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">Selected-month positions on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, rainfall context and downloads.</p>`;
+			content.innerHTML = `<div class="mla-dossier-head"><div><span class="mla-badge" data-tone="official">Current subset</span><h3>${fmt(state.active.length)} systems</h3><p class="mla-dossier-sub">Selected-month positions on the map</p></div></div><div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div><p class="mla-dossier-empty">Select a track for its weather evolution, rainfall context and downloads.</p>`;
+			syncMobileDossierLayout();
 			return;
 		}
 		const index = state.selected;
 		const row = track(index);
+		$('#mlaMobileDossierSummary').textContent = `${systemLabel(index)} · ${date(row[T.start_ms])}`;
 		const facts = [
 			['Peak ERA5 class', CORE.cat_labels[String(row[T.category])]],
 			['Duration', durationText(row[T.duration_hours])],
@@ -2768,8 +2990,8 @@
 			['ENSO at genesis', ensoLabel(index)]
 		];
 		const analogues = closestAnalogues(index, 5);
-		node.innerHTML = `
-			<div class="mla-dossier-head"><div><h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div></div>
+		content.innerHTML = `
+			<div class="mla-dossier-head"><div>${state.activeBit[index] ? '' : '<span class="mla-badge" data-tone="review">Pinned · outside current subset</span>'}<h3>${esc(systemLabel(index))}</h3><p class="mla-dossier-sub">${date(row[T.start_ms])} to ${date(row[T.end_ms])} · physical event ID ${atlasId(index)}</p></div></div>
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			<p class="mla-dossier-empty">Peak class is ERA5-derived and uses IMD-equivalent wind thresholds. CS means Cyclonic Storm, not Saffir–Simpson Category 1 or an official agency classification.</p>
 			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" data-keep-map="true" title="track, intensity and impact analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
@@ -2779,6 +3001,7 @@
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
 		$('#mlaFitTrack').addEventListener('click', fitSelected);
 		$('#mlaSelectedFixes').addEventListener('click', downloadSelectedFixes);
+		syncMobileDossierLayout();
 	}
 
 	function sortedActive(sortValue) {
@@ -2803,11 +3026,13 @@
 		const indexes = sortedActive(state.sort);
 		if (!indexes.length) return;
 		const current = indexes.indexOf(state.selected);
-		selectTrack(indexes[(current + direction + indexes.length) % indexes.length]);
+		if (current < 0) selectTrack(indexes[direction < 0 ? indexes.length - 1 : 0]);
+		else selectTrack(indexes[(current + direction + indexes.length) % indexes.length]);
 	}
 
 	function selectTrack(index, options) {
 		const next = Number.isInteger(index) ? index : null;
+		if (next !== state.selected && next != null) mobileDossierOpen = true;
 		if (state.focusSource === 'point' && state.selected !== next && !(options && options.keepTimeFocus)) clearTimeFocus();
 		state.selected = next;
 		if (state.selected != null && Number.isFinite(state.focusTimeMs)) state.focusPointIndex = pointIndexAtTime(state.selected, state.focusTimeMs);
@@ -3164,6 +3389,88 @@
 		});
 	}
 
+	function drawStackedBars(id, labels, matrix, options) {
+		const drawing = setupChart(id);
+		if (!drawing) return;
+		if (!labels.length || !matrix.length) { emptyChart(id); return; }
+		const {context, width, height} = drawing;
+		const colours = options.colours;
+		const seriesLabels = options.seriesLabels;
+		const padding = {left: 48, right: 14, top: 48, bottom: 48};
+		const totals = matrix.map(row => row.reduce((sum, value) => sum + (Number(value) || 0), 0));
+		const maximum = options.share ? 100 : Math.max(1, ...totals);
+		const plotHeight = height - padding.top - padding.bottom;
+		const barWidth = (width - padding.left - padding.right) / labels.length;
+		context.font = `11px ${CANVAS_FONT}`;
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		context.strokeStyle = 'rgba(70, 60, 45, .16)';
+		for (let tick = 0; tick <= 4; tick++) {
+			const y = padding.top + tick * plotHeight / 4;
+			context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+			context.fillText(`${fmt(maximum * (4 - tick) / 4)}${options.share ? '%' : ''}`, 4, y + 4);
+		}
+		matrix.forEach((row, rowIndex) => {
+			const total = totals[rowIndex];
+			let cumulative = 0;
+			row.forEach((raw, column) => {
+				const value = options.share ? (total ? Number(raw) / total * 100 : 0) : Number(raw);
+				const y0 = height - padding.bottom - cumulative / maximum * plotHeight;
+				cumulative += value;
+				const y1 = height - padding.bottom - cumulative / maximum * plotHeight;
+				context.fillStyle = colours[column];
+				context.fillRect(padding.left + rowIndex * barWidth + barWidth * .12, y1, Math.max(2, barWidth * .76), Math.max(0, y0 - y1));
+			});
+			context.fillStyle = css('--mla-muted', '#685c4d');
+			context.textAlign = 'center';
+			context.fillText(labels[rowIndex], padding.left + rowIndex * barWidth + barWidth / 2, height - 13);
+		});
+		let legendX = padding.left;
+		seriesLabels.forEach((label, index) => {
+			context.fillStyle = colours[index]; context.fillRect(legendX, 15, 12, 9);
+			context.fillStyle = css('--mla-ink', '#282119'); context.textAlign = 'left'; context.fillText(label, legendX + 16, 24);
+			legendX += 29 + label.length * 7;
+		});
+		context.textAlign = 'left';
+	}
+
+	function drawGroupedBars(id, labels, series, options) {
+		const drawing = setupChart(id);
+		if (!drawing) return;
+		if (!labels.length || !series.length) { emptyChart(id); return; }
+		const {context, width, height} = drawing;
+		const padding = {left: 48, right: 14, top: 48, bottom: 52};
+		const maximumRaw = Math.max(1, ...series.flatMap(item => item.values).filter(Number.isFinite));
+		const maximum = options && options.percent ? Math.max(10, Math.ceil(maximumRaw / 10) * 10) : maximumRaw;
+		const plotHeight = height - padding.top - padding.bottom;
+		const groupWidth = (width - padding.left - padding.right) / labels.length;
+		const barWidth = Math.min(22, groupWidth * .72 / series.length);
+		context.font = `11px ${CANVAS_FONT}`;
+		context.strokeStyle = 'rgba(70, 60, 45, .16)';
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		for (let tick = 0; tick <= 4; tick++) {
+			const y = padding.top + tick * plotHeight / 4;
+			context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+			context.fillText(`${fmt(maximum * (4 - tick) / 4, options && options.decimals || 0)}${options && options.percent ? '%' : ''}`, 4, y + 4);
+		}
+		labels.forEach((label, labelIndex) => {
+			const centre = padding.left + (labelIndex + .5) * groupWidth;
+			series.forEach((item, seriesIndex) => {
+				const value = Number(item.values[labelIndex]) || 0;
+				const barHeight = value / maximum * plotHeight;
+				context.fillStyle = item.colour;
+				context.fillRect(centre + (seriesIndex - series.length / 2) * barWidth, height - padding.bottom - barHeight, Math.max(2, barWidth - 1), barHeight);
+			});
+			context.fillStyle = css('--mla-muted', '#685c4d'); context.textAlign = 'center'; context.fillText(label, centre, height - 14);
+		});
+		let legendX = padding.left;
+		series.forEach(item => {
+			context.fillStyle = item.colour; context.fillRect(legendX, 15, 12, 9);
+			context.fillStyle = css('--mla-ink', '#282119'); context.textAlign = 'left'; context.fillText(item.name, legendX + 16, 24);
+			legendX += 34 + item.name.length * 7;
+		});
+		context.textAlign = 'left';
+	}
+
 	function drawHeatmap(id, rows, columns, matrix, options) {
 		const drawing = setupChart(id);
 		if (!drawing) return;
@@ -3239,6 +3546,91 @@
 		return ![...state.months].some(month => month < firstMonth);
 	}
 
+	function selectedExposureDays(year) {
+		let days = 0;
+		for (let month = 1; month <= 12; month++) {
+			if (!state.months.has(month)) continue;
+			const count = new Date(Date.UTC(year, month, 0)).getUTCDate();
+			for (let day = 1; day <= count; day++) {
+				const value = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+				if (state.timeMode === 'dates' && (value < state.dateMin || value > state.dateMax)) continue;
+				days++;
+			}
+		}
+		return days;
+	}
+
+	function systemDaysByYear(indexes) {
+		const result = new Map();
+		for (const index of indexes) {
+			const row = track(index);
+			let day = Math.floor(Number(row[T.start_ms]) / 86400000) * 86400000;
+			const end = Math.floor(Number(row[T.end_ms]) / 86400000) * 86400000;
+			for (; day <= end; day += 86400000) {
+				const instant = new Date(day);
+				const year = instant.getUTCFullYear();
+				const month = instant.getUTCMonth() + 1;
+				const value = instant.toISOString().slice(0, 10);
+				if (!state.months.has(month)) continue;
+				if (state.timeMode === 'dates' ? value < state.dateMin || value > state.dateMax : year < state.yearMin || year > state.yearMax) continue;
+				result.set(year, (result.get(year) || 0) + 1);
+			}
+		}
+		return result;
+	}
+
+	function centredMean(points, radius) {
+		return points.map((point, index) => {
+			const values = points.slice(Math.max(0, index - radius), index + radius + 1).map(item => item.y).filter(Number.isFinite);
+			return {x: point.x, y: values.length >= Math.min(5, radius * 2 + 1) ? mean(values) : NaN};
+		});
+	}
+
+	function theilSenSlope(points) {
+		const valid = points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+		const slopes = [];
+		for (let first = 0; first < valid.length; first++) for (let second = first + 1; second < valid.length; second++) slopes.push((valid[second].y - valid[first].y) / (valid[second].x - valid[first].x));
+		return slopes.length ? median(slopes) : NaN;
+	}
+
+	const ENDPOINT_FLOW_LABELS = ['Bay of Bengal', 'Arabian Sea', 'Indian land', 'Other land', 'Other Indian Ocean', 'Other water'];
+	function endpointFlowIndex(mask) {
+		if (mask & ENDPOINT_REGION_BITS.india) return 2;
+		if (mask & ENDPOINT_REGION_BITS.bob) return 0;
+		if (mask & ENDPOINT_REGION_BITS.arabian) return 1;
+		if (mask & ENDPOINT_REGION_BITS.land) return 3;
+		if (mask & ENDPOINT_REGION_BITS.indian_ocean) return 4;
+		return 5;
+	}
+
+	function renderClimateComposition() {
+		const key = state.climateIndex;
+		const field = key === 'enso' ? CLIMATE.enso.class : CLIMATE[key].phase;
+		const values = key === 'enso' ? [-1, 0, 1, 2] : [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+		const labels = key === 'enso' ? ['Unavailable', 'La Niña', 'Neutral', 'El Niño'] : ['Unavailable', 'Inactive', '1', '2', '3', '4', '5', '6', '7', '8'];
+		const search = {...parsedSearch(), query: '', exactDate: null, exactTime: null, exactDateStart: null, exactDateEnd: null, exactTrackId: null, exactYear: null};
+		const currentIndexes = [];
+		const referenceIndexes = [];
+		for (let index = 0; index < CORE.tracks.length; index++) {
+			const failures = filterFailures(index, search, {ignoreSearch: true, ignoreClimate: key});
+			if (!failures.length) currentIndexes.push(index);
+			if (!failures.some(item => item.key === 'period' || item.key === 'months')) referenceIndexes.push(index);
+		}
+		const counts = indexes => values.map(value => indexes.reduce((sum, index) => sum + Number(field[index] === value), 0));
+		const currentCounts = counts(currentIndexes);
+		const referenceCounts = counts(referenceIndexes);
+		const currentTotal = currentCounts.reduce((sum, value) => sum + value, 0);
+		const referenceTotal = referenceCounts.reduce((sum, value) => sum + value, 0);
+		const currentShares = currentCounts.map(value => currentTotal ? value / currentTotal * 100 : 0);
+		const referenceShares = referenceCounts.map(value => referenceTotal ? value / referenceTotal * 100 : 0);
+		drawGroupedBars('mlaClimateChart', labels, [
+			{name: 'Filtered context', colour: css('--mla-indigo', '#233f78'), values: currentShares},
+			{name: 'All LPSs', colour: css('--mla-turmeric', '#c3931d'), values: referenceShares}
+		], {percent: true, decimals: 0});
+		$('#mlaClimateStatus').textContent = `${fmt(currentTotal)} eligible systems in the filtered context; ${fmt(referenceTotal)} in the time/month reference. Shares describe LPS composition, not formation rate per index day.`;
+		$('#mlaClimateData').innerHTML = accessibleTable(['Category', 'Filtered N', 'Filtered share', 'Reference N', 'Reference share'], labels.map((label, index) => [label, currentCounts[index], `${fmt(currentShares[index], 1)}%`, referenceCounts[index], `${fmt(referenceShares[index], 1)}%`]));
+	}
+
 	function renderClimatology() {
 		if ($('#mlaPanelClimatology').hidden) return;
 		const annual = new Map();
@@ -3246,25 +3638,48 @@
 			const year = track(index)[T.start_year];
 			annual.set(year, (annual.get(year) || 0) + 1);
 		}
+		const systemDays = systemDaysByYear(state.active);
 		const annualPoints = [];
+		const annualLabel = state.climatologyMeasure === 'rate' ? 'Systems / 100 selected days' : state.climatologyMeasure === 'system_days' ? 'LPS system-days' : 'Selected systems';
 		for (let year = periodYearMin(); year <= periodYearMax(); year++) {
 			if (!completeYear(year)) continue;
-			annualPoints.push({x: year, y: annual.get(year) || 0});
+			const count = annual.get(year) || 0;
+			const exposure = selectedExposureDays(year);
+			const value = state.climatologyMeasure === 'rate' ? (exposure ? count / exposure * 100 : NaN) : state.climatologyMeasure === 'system_days' ? (systemDays.get(year) || 0) : count;
+			annualPoints.push({x: year, y: value, count, exposure, systemDays: systemDays.get(year) || 0});
 		}
-		drawLinePlot('mlaAnnualChart', [{name: 'Systems', colour: css('--mla-indigo', '#233f78'), points: annualPoints}], {zero: true, xFormat: value => String(Math.round(value)), yFormat: value => fmt(value)});
-		$('#mlaAnnualData').innerHTML = accessibleTable(['Year', 'Systems'], annualPoints.map(point => [point.x, point.y]), periodYearMax() > COMPLETE_END_YEAR ? '2026 is partial and excluded.' : '');
+		const smooth = centredMean(annualPoints, 5);
+		drawLinePlot('mlaAnnualChart', [
+			{name: annualLabel, colour: rgba(css('--mla-indigo', '#233f78'), .34), width: 1.4, points: annualPoints},
+			{name: 'Centred 11-year mean', colour: css('--mla-indigo-deep', '#17294f'), width: 3, points: smooth}
+		], {zero: true, xFormat: value => String(Math.round(value)), yFormat: value => fmt(value, state.climatologyMeasure === 'rate' ? 1 : 0)});
+		const slope = theilSenSlope(annualPoints) * 10;
+		const unit = state.climatologyMeasure === 'rate' ? 'systems per 100 days' : state.climatologyMeasure === 'system_days' ? 'system-days' : 'systems';
+		$('#mlaAnnualStatus').textContent = `${Number.isFinite(slope) ? `Theil–Sen descriptive slope ${slope >= 0 ? '+' : '−'}${fmt(Math.abs(slope), 2)} ${unit} decade⁻¹` : 'Trend unavailable'} · ${fmt(annualPoints.length)} exposed years · no attribution implied.`;
+		$('#mlaAnnualData').innerHTML = accessibleTable(['Year', annualLabel, 'Systems', 'Selected days', 'System-days', '11-year mean'], annualPoints.map((point, index) => [point.x, fmt(point.y, state.climatologyMeasure === 'rate' ? 2 : 0), point.count, point.exposure, point.systemDays, fmt(smooth[index].y, 2)]));
 
-		const monthly = Array(12).fill(0);
+		const exposedYears = annualPoints.length;
+		const totalSystemDays = [...systemDays.values()].reduce((sum, value) => sum + value, 0);
+		const durations = state.active.map(index => Number(track(index)[T.duration_hours]));
+		const named = state.active.filter(index => officialName(index)).length;
+		$('#mlaClimatologyStats').innerHTML = [
+			['Filtered systems', fmt(state.active.length), exposedYears ? `${fmt(state.active.length / exposedYears, 2)} per exposed year` : 'No exposed years'],
+			['LPS system-days', fmt(totalSystemDays), 'Each system-date counted once'],
+			['Median duration', durationText(median(durations)), `${fmt(quantile(durations, .25))}–${fmt(quantile(durations, .75))} h IQR`],
+			['Named cyclone matches', `${fmt(named / Math.max(1, state.active.length) * 100, 1)}%`, `${fmt(named)} credible named associations`]
+		].map(item => `<section class="mla-card mla-stat"><span>${esc(item[0])}</span><strong>${esc(item[1])}</strong><small>${esc(item[2])}</small></section>`).join('');
+
+		const monthly = Array.from({length: 12}, () => Array(6).fill(0));
 		for (const index of state.active) {
 			const row = track(index);
-			if (state.monthMode === 'genesis') monthly[new Date(row[T.start_ms]).getUTCMonth()]++;
-			else if (state.monthMode === 'peak') monthly[CORE.peak_months[index][metric().peakMonth] - 1]++;
+			if (state.monthMode === 'genesis') monthly[new Date(row[T.start_ms]).getUTCMonth()][row[T.category] - 1]++;
+			else if (state.monthMode === 'peak') monthly[CORE.peak_months[index][metric().peakMonth] - 1][row[T.category] - 1]++;
 			else {
-				for (let month = 1; month <= 12; month++) if (row[T.month_mask] & (1 << (month - 1))) monthly[month - 1]++;
+				for (let month = 1; month <= 12; month++) if (row[T.month_mask] & (1 << (month - 1))) monthly[month - 1][row[T.category] - 1]++;
 			}
 		}
-		drawBars('mlaMonthChart', MONTHS.map((label, index) => ({label, value: monthly[index], colour: index >= 5 && index <= 8 ? css('--mla-peacock', '#08736f') : css('--mla-saffron', '#c9631b')})));
-		$('#mlaMonthData').innerHTML = accessibleTable(['Month', state.monthMode === 'active' ? 'Event-months' : 'Systems'], MONTHS.map((month, index) => [month, monthly[index]]));
+		drawStackedBars('mlaMonthChart', MONTHS, monthly, {share: state.seasonalMode === 'share', colours: CLASS_COLOURS.slice(1), seriesLabels: ['L', 'D', 'DD', 'CS', 'SCS', 'VS+']});
+		$('#mlaMonthData').innerHTML = accessibleTable(['Month', 'L', 'D', 'DD', 'CS', 'SCS', 'VS+', 'Total'], MONTHS.map((month, index) => [month, ...monthly[index], monthly[index].reduce((sum, value) => sum + value, 0)]));
 
 		const decadeStart = Math.floor(periodYearMin() / 10) * 10;
 		const decades = [];
@@ -3284,7 +3699,18 @@
 		classMatrix.forEach((row, index) => row.forEach((value, column) => { row[column] = value / exposure[index]; }));
 		drawHeatmap('mlaClassChart', decades.map((value, index) => `${String(value).slice(2)}s (${exposure[index]}y)`), ['L', 'D', 'DD', 'CS', 'SCS', 'VS+'], classMatrix, {left: 78, decimals: 1});
 		$('#mlaClassData').innerHTML = accessibleTable(['Decade', 'L/y', 'D/y', 'DD/y', 'CS/y', 'SCS/y', 'VS+/y'], decades.map((value, index) => [value, ...classMatrix[index].map(number => fmt(number, 2))]));
+
+		const flowCounts = Array.from({length: ENDPOINT_FLOW_LABELS.length}, () => Array(ENDPOINT_FLOW_LABELS.length).fill(0));
+		for (const index of state.active) flowCounts[endpointFlowIndex(genesisRegions[index])][endpointFlowIndex(lysisRegions[index])]++;
+		const flowShares = flowCounts.map(row => {
+			const total = row.reduce((sum, value) => sum + value, 0);
+			return row.map(value => total ? value / total * 100 : 0);
+		});
+		drawHeatmap('mlaEndpointChart', ENDPOINT_FLOW_LABELS.map(label => label.replace('Indian Ocean', 'IO')), ENDPOINT_FLOW_LABELS.map(label => label.replace('Indian Ocean', 'IO')), flowShares, {left: 104, decimals: 0});
+		$('#mlaEndpointData').innerHTML = accessibleTable(['Genesis', ...ENDPOINT_FLOW_LABELS], ENDPOINT_FLOW_LABELS.map((label, row) => [label, ...flowShares[row].map((value, column) => `${fmt(value, 1)}% (n=${flowCounts[row][column]})`)]));
 		drawTrackDensityMap();
+		renderClimateComposition();
+		renderSubsetSections();
 	}
 
 	function accessibleTable(headers, rows, note) {
@@ -3303,7 +3729,7 @@
 	}
 
 	function unpackCompositeField(field) {
-		if (!field || !Array.isArray(field.shape) || field.shape.length !== 2 || !Array.isArray(field.data)) return null;
+		if (!field || !Array.isArray(field.shape) || field.shape.length !== 2 || !(Array.isArray(field.data) || ArrayBuffer.isView(field.data))) return null;
 		const values = new Float32Array(field.data.length);
 		for (let index = 0; index < field.data.length; index++) values[index] = field.data[index] == null ? NaN : Number(field.data[index]) * Number(field.scale || 1);
 		return {values, rows: Number(field.shape[0]), columns: Number(field.shape[1])};
@@ -3420,9 +3846,9 @@
 		drawCompositeColourBar(context, palette, minimum, maximum, 'mm day⁻¹', plot.left, plot.top + plot.height + 51, plot.width);
 	}
 
-	function drawSectionComposite(field, pressureLevels, definition) {
+	function drawSectionComposite(field, pressureLevels, definition, canvasId) {
 		const unpacked = unpackCompositeField(field);
-		const drawing = setupChart('mlaSectionComposite');
+		const drawing = setupChart(canvasId || 'mlaSectionComposite');
 		if (!drawing || !unpacked || !Array.isArray(pressureLevels)) return;
 		const {context, width, height} = drawing;
 		const plot = {left: 58, top: 14, width: Math.max(80, width - 72), height: Math.max(80, height - 119)};
@@ -3476,6 +3902,78 @@
 			context.fillText(String(pressure), plot.left - 6, y);
 		}
 		drawCompositeColourBar(context, palette, definition.minimum, definition.maximum, definition.unit, plot.left, plot.top + plot.height + 51, plot.width);
+	}
+
+	function meanSubsetSection(indexes, fieldKey, cacheKey) {
+		if (!SECTIONS || !indexes.length) return null;
+		const key = `${fieldKey}|${cacheKey}`;
+		if (sectionMeanCache.has(key)) return sectionMeanCache.get(key);
+		const source = SECTIONS.fields[fieldKey];
+		const [rows, columns] = source.shape_per_track.map(Number);
+		const size = rows * columns;
+		const sums = new Float64Array(size);
+		const counts = new Uint32Array(size);
+		const nullValue = Number(source.null_value);
+		for (const trackIndex of indexes) {
+			const offset = trackIndex * size;
+			for (let cell = 0; cell < size; cell++) {
+				const raw = source.values[offset + cell];
+				if (raw === nullValue) continue;
+				sums[cell] += raw * Number(source.scale);
+				counts[cell]++;
+			}
+		}
+		const data = new Float32Array(size);
+		let validCells = 0;
+		for (let cell = 0; cell < size; cell++) {
+			data[cell] = counts[cell] ? sums[cell] / counts[cell] : NaN;
+			if (counts[cell]) validCells++;
+		}
+		const result = {shape: [rows, columns], scale: 1, data, systems: indexes.length, validCells, totalCells: size};
+		sectionMeanCache.set(key, result);
+		while (sectionMeanCache.size > 18) sectionMeanCache.delete(sectionMeanCache.keys().next().value);
+		return result;
+	}
+
+	function renderSubsetSections() {
+		if ($('#mlaPanelClimatology').hidden) return;
+		const variable = state.subsetSectionVariable;
+		const definition = COMPOSITE_SECTION_DEFINITIONS[variable];
+		$('#mlaSubsetSectionVariable').value = variable;
+		$('#mlaClearSectionReference').hidden = !state.sectionReference;
+		$('#mlaPinSectionReference').textContent = state.sectionReference ? 'Update pinned reference' : 'Pin subset as reference';
+		$('#mlaReferenceSectionHeading').textContent = state.sectionReference ? `Pinned reference · ${state.sectionReferenceLabel}` : 'Complete catalogue reference';
+		if (!SECTIONS) {
+			emptyChart('mlaSubsetSectionChart', 'Loading filtered-subset ERA5 sections…');
+			emptyChart('mlaReferenceSectionChart', 'Loading reference ERA5 sections…');
+			$('#mlaSubsetSectionStatus').textContent = 'Loading one compact archive containing all 2,115 lifecycle-mean sections…';
+			$('#mlaReferenceSectionStatus').textContent = 'Reference section pending.';
+			ensureSections('Loading filterable ERA5 vertical sections…').then(renderSubsetSections).catch(error => {
+				emptyChart('mlaSubsetSectionChart', 'Subset sections unavailable');
+				emptyChart('mlaReferenceSectionChart', 'Subset sections unavailable');
+				$('#mlaSubsetSectionStatus').textContent = error.message || String(error);
+				$('#mlaReferenceSectionStatus').textContent = 'Could not load the section archive.';
+			});
+			return;
+		}
+		const reference = state.sectionReference || CORE.tracks.map((unused, index) => index);
+		const current = meanSubsetSection(state.active, variable, `current:${filterSignature()}`);
+		const referenceKey = state.sectionReference ? `pinned:${state.sectionReference.join('.')}` : 'all';
+		const baseline = meanSubsetSection(reference, variable, referenceKey);
+		if (current) {
+			drawSectionComposite(current, SECTIONS.grid.pressure_hpa, definition, 'mlaSubsetSectionChart');
+			$('#mlaSubsetSectionStatus').textContent = `${fmt(current.systems)} systems · ${fmt(current.validCells / current.totalCells * 100, 1)}% of section cells represented · fixed ${definition.minimum}–${definition.maximum} ${definition.unit}.`;
+			$('#mlaSubsetSectionChart').setAttribute('aria-label', `${definition.label} lifecycle-mean storm-centred vertical section for ${current.systems} systems in the current filtered subset`);
+		} else {
+			emptyChart('mlaSubsetSectionChart', 'No systems in the filtered subset');
+			$('#mlaSubsetSectionStatus').textContent = 'No systems are available for this filtered composite.';
+		}
+		if (baseline) {
+			drawSectionComposite(baseline, SECTIONS.grid.pressure_hpa, definition, 'mlaReferenceSectionChart');
+			$('#mlaReferenceSectionStatus').textContent = `${fmt(baseline.systems)} systems · same fixed scale as the current subset.`;
+			$('#mlaReferenceSectionChart').setAttribute('aria-label', `${definition.label} lifecycle-mean storm-centred vertical section for ${baseline.systems} systems in the reference subset`);
+		}
+		$('#mlaSubsetSectionData').innerHTML = `<p>${esc(SECTIONS.method)} The display uses a 0.5° relative-longitude grid and preserves all ${fmt(SECTIONS.grid.pressure_hpa.length)} pressure levels; θₑ omits 100 hPa in the plotted view. Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`;
 	}
 
 	function compositeOptionLabel(key) {
@@ -3701,7 +4199,30 @@
 		return result;
 	}
 
+	function maximumSeriesValue(index, field, divisor) {
+		if (!DETAIL) return NaN;
+		const values = DETAIL.series[index][S[field]].filter(value => value != null).map(Number);
+		return values.length ? Math.max(...values) / (divisor || 1) : NaN;
+	}
+
+	function maximumLagGrowth(index, field, divisor, lag) {
+		if (!DETAIL) return NaN;
+		const values = DETAIL.series[index][S[field]];
+		let maximum = -Infinity;
+		for (let point = lag || 24; point < values.length; point++) {
+			if (values[point] == null || values[point - (lag || 24)] == null) continue;
+			maximum = Math.max(maximum, (Number(values[point]) - Number(values[point - (lag || 24)])) / (divisor || 1));
+		}
+		return Number.isFinite(maximum) ? maximum : NaN;
+	}
+
+	function seriesCount(index, field, predicate) {
+		if (!DETAIL) return NaN;
+		return DETAIL.series[index][S[field]].reduce((count, value) => count + Number(value != null && predicate(Number(value))), 0);
+	}
+
 	const EXTREMES = {
+		compoundIntensity: {label: 'Compound intensity percentile', unit: 'P', decimals: 1, value: index => mean(['deficit', 'wind', 'vort', 'mslp'].map(key => percentileMetric(index, key))), descending: true, note: 'Equal-weight mean of fixed full-catalogue pressure-deficit, circulation-wind, smoothed-vorticity and MSLP-depth percentiles'},
 		duration: {label: 'Duration', unit: 'h', decimals: 0, value: index => track(index)[T.duration_hours], descending: true, note: 'Hourly event span · supported centres included'},
 		distance: {label: 'Linked path length', unit: 'km', decimals: 0, value: index => track(index)[T.distance_km], descending: true, note: 'Great-circle distance summed along hourly centres'},
 		meanSpeed: {label: 'Mean translation speed', unit: 'm s⁻¹', decimals: 1, value: index => track(index)[T.distance_km] * 1000 / Math.max(3600, track(index)[T.duration_hours] * 3600), descending: true, note: 'Path length divided by elapsed event duration'},
@@ -3712,6 +4233,12 @@
 		mslp: {label: 'Minimum MSLP', unit: 'hPa', decimals: 1, value: index => track(index)[T.min_mslp_x10] / 10, descending: false},
 		q850: {label: 'q850', unit: 'g kg⁻¹', decimals: 1, value: index => track(index)[T.peak_q850_x10] / 10, descending: true},
 		rh850: {label: 'RH850', unit: '%', decimals: 1, value: index => track(index)[T.peak_rh850_x10] / 10, descending: true},
+		deepening24: {label: 'Maximum 24 h pressure-deficit growth', unit: 'hPa day⁻¹', decimals: 1, value: index => maximumLagGrowth(index, 'pressure_deficit_x10', 10, 24), descending: true, requiresDetail: true, note: 'Largest end-minus-start change across any 24-hour interval; this is pressure-deficit growth, not central-pressure fall'},
+		windGrowth24: {label: 'Maximum 24 h circulation-wind growth', unit: 'm s⁻¹ day⁻¹', decimals: 1, value: index => maximumLagGrowth(index, 'circulation_wind_x10', 10, 24), descending: true, requiresDetail: true, note: 'Largest end-minus-start change across any 24-hour interval'},
+		vortGrowth24: {label: 'Maximum 24 h smoothed-vorticity growth', unit: '10⁻⁵ s⁻¹ day⁻¹', decimals: 1, value: index => maximumLagGrowth(index, 'vort_smooth_x10', 10, 24), descending: true, requiresDetail: true, note: 'Largest end-minus-start change across any 24-hour interval'},
+		closedIsobars: {label: 'Maximum closed 2-hPa isobars', unit: 'count', decimals: 0, value: index => maximumSeriesValue(index, 'closed_isobars', 1), descending: true, requiresDetail: true},
+		depressionHours: {label: 'Hours at depression strength or above', unit: 'h', decimals: 0, value: index => seriesCount(index, 'category', value => value >= 2), descending: true, requiresDetail: true, note: 'Hourly positions with persistent atlas-derived class D or stronger'},
+		landHours: {label: 'Hours over majority land', unit: 'h', decimals: 0, value: index => seriesCount(index, 'land_fraction_pct_x10', value => value >= 500), descending: true, requiresDetail: true, note: 'Hourly centres whose local ERA5 land fraction is at least 50%'},
 		observedPositions: {label: 'Observed positions', unit: 'track points', decimals: 0, value: index => track(index)[T.observed_positions], descending: true, note: 'Detector-supported hourly positions only'},
 		qualifyingPositions: {label: 'Mature detections', unit: 'track points', decimals: 0, value: index => track(index)[T.qualifying_positions], descending: true, note: 'Positions passing the mature-physics gate'},
 		lowestCoverage: {label: 'Observed coverage', unit: '%', decimals: 0, value: index => CORE.qc[index][Q.coverage_pct], descending: false, note: 'Lowest detector-observed fraction of the hourly event span'},
@@ -3725,19 +4252,274 @@
 		eastGenesis: {label: 'Genesis longitude', unit: '°E', decimals: 2, value: index => track(index)[T.gen_lon_x1000] / 1000, descending: true, note: 'Easternmost first published centre'},
 		westGenesis: {label: 'Genesis longitude', unit: '°E', decimals: 2, value: index => track(index)[T.gen_lon_x1000] / 1000, descending: false, note: 'Westernmost first published centre'}
 	};
+	const EXTREME_RELATIONSHIP_KEYS = ['compoundIntensity', 'duration', 'distance', 'meanSpeed', 'deficit', 'wind', 'rain', 'vort', 'mslp', 'q850', 'rh850', 'stateRain', 'deepening24', 'windGrowth24', 'vortGrowth24', 'depressionHours', 'landHours'];
+
+	function extremeValueMap(indexes, definition) {
+		const values = new Map();
+		for (const index of indexes) {
+			const value = Number(definition.value(index));
+			if (Number.isFinite(value)) values.set(index, value);
+		}
+		return values;
+	}
+
+	function extremeAxisDomain(values) {
+		let minimum = Math.min(...values);
+		let maximum = Math.max(...values);
+		if (minimum === maximum) {
+			const margin = Math.max(1, Math.abs(minimum) * .08);
+			minimum -= margin;
+			maximum += margin;
+		} else {
+			const margin = (maximum - minimum) * .055;
+			minimum -= margin;
+			maximum += margin;
+		}
+		return [minimum, maximum];
+	}
+
+	function drawExtremeHistogram(indexes, definition, valueByIndex) {
+		const drawing = setupChart('mlaExtremeHistogram');
+		if (!drawing) return;
+		const values = indexes.map(index => valueByIndex.get(index)).filter(Number.isFinite);
+		if (!values.length) {
+			emptyChart('mlaExtremeHistogram');
+			$('#mlaExtremeDistributionData').innerHTML = '<p>No eligible values.</p>';
+			return;
+		}
+		const {context, width, height} = drawing;
+		const padding = {left: 52, right: 18, top: 22, bottom: 47};
+		const rawMinimum = Math.min(...values);
+		const rawMaximum = Math.max(...values);
+		const span = rawMaximum - rawMinimum || Math.max(1, Math.abs(rawMinimum) * .1);
+		const minimum = rawMaximum === rawMinimum ? rawMinimum - span / 2 : rawMinimum;
+		const maximum = rawMaximum === rawMinimum ? rawMaximum + span / 2 : rawMaximum;
+		const binCount = clamp(Math.round(Math.sqrt(values.length)), 8, 24);
+		const bins = Array(binCount).fill(0);
+		for (const value of values) bins[Math.min(binCount - 1, Math.floor((value - minimum) / (maximum - minimum) * binCount))]++;
+		const maximumCount = Math.max(1, ...bins);
+		const plotWidth = width - padding.left - padding.right;
+		const plotHeight = height - padding.top - padding.bottom;
+		context.font = `11px ${CANVAS_FONT}`;
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		context.strokeStyle = 'rgba(70, 60, 45, .16)';
+		for (let tick = 0; tick <= 4; tick++) {
+			const y = padding.top + tick * plotHeight / 4;
+			context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+			context.textAlign = 'right';
+			context.fillText(fmt(maximumCount * (4 - tick) / 4), padding.left - 7, y + 4);
+		}
+		const barWidth = plotWidth / binCount;
+		bins.forEach((count, bin) => {
+			const barHeight = count / maximumCount * plotHeight;
+			context.fillStyle = rgba(css('--mla-indigo', '#233f78'), .78);
+			context.fillRect(padding.left + bin * barWidth + .5, height - padding.bottom - barHeight, Math.max(1, barWidth - 1), barHeight);
+		});
+		for (let tick = 0; tick <= 4; tick++) {
+			const x = padding.left + tick * plotWidth / 4;
+			const value = minimum + tick * (maximum - minimum) / 4;
+			context.fillStyle = css('--mla-muted', '#685c4d');
+			context.textAlign = tick === 0 ? 'left' : tick === 4 ? 'right' : 'center';
+			context.fillText(fmt(value, definition.decimals), x, height - 23);
+		}
+		if (state.selected != null && valueByIndex.has(state.selected)) {
+			const selectedValue = valueByIndex.get(state.selected);
+			const x = padding.left + clamp((selectedValue - minimum) / (maximum - minimum), 0, 1) * plotWidth;
+			context.strokeStyle = css('--mla-madder', '#ad4328');
+			context.lineWidth = 2;
+			context.setLineDash([5, 4]);
+			context.beginPath(); context.moveTo(x, padding.top); context.lineTo(x, height - padding.bottom); context.stroke();
+			context.setLineDash([]);
+		}
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.textAlign = 'center';
+		context.fillText(`${definition.label} (${definition.unit})`, padding.left + plotWidth / 2, height - 6);
+		const statistics = [
+			['Eligible systems', fmt(values.length)],
+			['Minimum', fmt(rawMinimum, definition.decimals)],
+			['25th percentile', fmt(quantile(values, .25), definition.decimals)],
+			['Median', fmt(median(values), definition.decimals)],
+			['75th percentile', fmt(quantile(values, .75), definition.decimals)],
+			['Maximum', fmt(rawMaximum, definition.decimals)]
+		];
+		$('#mlaExtremeDistributionSubtitle').textContent = `${fmt(values.length)} eligible systems · median ${fmt(median(values), definition.decimals)} ${definition.unit} · dashed marker is the pinned system when eligible.`;
+		$('#mlaExtremeDistributionData').innerHTML = accessibleTable(['Statistic', definition.unit || 'Value'], statistics);
+	}
+
+	function drawExtremeBoxPlot(indexes, definition, valueByIndex) {
+		const drawing = setupChart('mlaExtremeBoxPlot');
+		if (!drawing) return;
+		const groups = Array.from({length: 6}, () => []);
+		for (const index of indexes) if (valueByIndex.has(index)) groups[track(index)[T.category] - 1].push(valueByIndex.get(index));
+		const summaries = groups.map(values => ({
+			n: values.length,
+			p05: quantile(values, .05),
+			p25: quantile(values, .25),
+			p50: quantile(values, .5),
+			p75: quantile(values, .75),
+			p95: quantile(values, .95)
+		}));
+		const domainValues = summaries.flatMap(item => [item.p05, item.p95]).filter(Number.isFinite);
+		if (!domainValues.length) {
+			emptyChart('mlaExtremeBoxPlot');
+			$('#mlaExtremeClassData').innerHTML = '<p>No eligible values.</p>';
+			return;
+		}
+		const {context, width, height} = drawing;
+		const padding = {left: 56, right: 18, top: 22, bottom: 47};
+		const [minimum, maximum] = extremeAxisDomain(domainValues);
+		const plotWidth = width - padding.left - padding.right;
+		const plotHeight = height - padding.top - padding.bottom;
+		const Y = value => height - padding.bottom - (value - minimum) / (maximum - minimum) * plotHeight;
+		context.font = `11px ${CANVAS_FONT}`;
+		context.strokeStyle = 'rgba(70, 60, 45, .16)';
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		for (let tick = 0; tick <= 4; tick++) {
+			const y = padding.top + tick * plotHeight / 4;
+			const value = maximum - tick * (maximum - minimum) / 4;
+			context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+			context.textAlign = 'right'; context.fillText(fmt(value, definition.decimals), padding.left - 7, y + 4);
+		}
+		const groupWidth = plotWidth / groups.length;
+		summaries.forEach((summary, category) => {
+			const x = padding.left + (category + .5) * groupWidth;
+			const boxWidth = Math.min(44, groupWidth * .56);
+			context.fillStyle = css('--mla-muted', '#685c4d');
+			context.textAlign = 'center';
+			context.fillText(CLASS_SHORT[category + 1], x, height - 22);
+			context.fillText(`n=${summary.n}`, x, height - 7);
+			if (!summary.n) return;
+			context.strokeStyle = CLASS_COLOURS[category + 1];
+			context.lineWidth = 1.5;
+			context.beginPath(); context.moveTo(x, Y(summary.p05)); context.lineTo(x, Y(summary.p95)); context.stroke();
+			for (const value of [summary.p05, summary.p95]) {
+				context.beginPath(); context.moveTo(x - boxWidth * .28, Y(value)); context.lineTo(x + boxWidth * .28, Y(value)); context.stroke();
+			}
+			context.fillStyle = rgba(CLASS_COLOURS[category + 1], .42);
+			context.fillRect(x - boxWidth / 2, Y(summary.p75), boxWidth, Math.max(1, Y(summary.p25) - Y(summary.p75)));
+			context.strokeRect(x - boxWidth / 2, Y(summary.p75), boxWidth, Math.max(1, Y(summary.p25) - Y(summary.p75)));
+			context.lineWidth = 2.4;
+			context.beginPath(); context.moveTo(x - boxWidth / 2, Y(summary.p50)); context.lineTo(x + boxWidth / 2, Y(summary.p50)); context.stroke();
+		});
+		$('#mlaExtremeClassData').innerHTML = accessibleTable(['Peak class', 'n', 'P05', 'P25', 'Median', 'P75', 'P95'], summaries.map((summary, category) => [CLASS_SHORT[category + 1], summary.n, fmt(summary.p05, definition.decimals), fmt(summary.p25, definition.decimals), fmt(summary.p50, definition.decimals), fmt(summary.p75, definition.decimals), fmt(summary.p95, definition.decimals)]), `Values are ${definition.unit}. Classes are each system's peak atlas-derived class.`);
+	}
+
+	function drawExtremeScatter(indexes, xDefinition, yDefinition, xValues, yValues) {
+		const drawing = setupChart('mlaExtremeScatter');
+		if (!drawing) return;
+		const points = indexes.filter(index => xValues.has(index) && yValues.has(index)).map(index => ({index, xValue: xValues.get(index), yValue: yValues.get(index)}));
+		if (!points.length) {
+			extremeScatterPoints = [];
+			emptyChart('mlaExtremeScatter');
+			$('#mlaExtremeScatterStatus').textContent = 'No systems have both diagnostics in this subset.';
+			return;
+		}
+		const {canvas, context, width, height} = drawing;
+		const padding = {left: 72, right: 24, top: 24, bottom: 58};
+		const [xMinimum, xMaximum] = extremeAxisDomain(points.map(point => point.xValue));
+		const [yMinimum, yMaximum] = extremeAxisDomain(points.map(point => point.yValue));
+		const plotWidth = width - padding.left - padding.right;
+		const plotHeight = height - padding.top - padding.bottom;
+		const X = value => padding.left + (value - xMinimum) / (xMaximum - xMinimum) * plotWidth;
+		const Y = value => height - padding.bottom - (value - yMinimum) / (yMaximum - yMinimum) * plotHeight;
+		context.font = `11px ${CANVAS_FONT}`;
+		context.strokeStyle = 'rgba(70, 60, 45, .16)';
+		context.fillStyle = css('--mla-muted', '#685c4d');
+		for (let tick = 0; tick <= 4; tick++) {
+			const x = padding.left + tick * plotWidth / 4;
+			const y = padding.top + tick * plotHeight / 4;
+			context.beginPath(); context.moveTo(x, padding.top); context.lineTo(x, height - padding.bottom); context.stroke();
+			context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+			context.textAlign = tick === 0 ? 'left' : tick === 4 ? 'right' : 'center';
+			context.fillText(fmt(xMinimum + tick * (xMaximum - xMinimum) / 4, xDefinition.decimals), x, height - 37);
+			context.textAlign = 'right';
+			context.fillText(fmt(yMaximum - tick * (yMaximum - yMinimum) / 4, yDefinition.decimals), padding.left - 8, y + 4);
+		}
+		extremeScatterPoints = points.map(point => ({...point, x: X(point.xValue), y: Y(point.yValue)}));
+		for (const point of extremeScatterPoints) {
+			context.beginPath(); context.arc(point.x, point.y, point.index === state.selected ? 5.7 : 3.15, 0, Math.PI * 2);
+			context.fillStyle = rgba(CLASS_COLOURS[track(point.index)[T.category]], point.index === state.selected ? .98 : .63);
+			context.fill();
+			if (point.index === state.selected) {
+				context.strokeStyle = css('--mla-ink', '#282119'); context.lineWidth = 1.6; context.stroke();
+			}
+		}
+		context.fillStyle = css('--mla-ink', '#282119');
+		context.textAlign = 'center';
+		context.fillText(`${xDefinition.label} (${xDefinition.unit})`, padding.left + plotWidth / 2, height - 8);
+		context.save();
+		context.translate(16, padding.top + plotHeight / 2);
+		context.rotate(-Math.PI / 2);
+		context.fillText(`${yDefinition.label} (${yDefinition.unit})`, 0, 0);
+		context.restore();
+		const status = $('#mlaExtremeScatterStatus');
+		const summary = `${fmt(points.length)} systems · coloured by peak atlas class · click a point to open it.`;
+		status.textContent = summary;
+		const nearest = event => {
+			const rectangle = canvas.getBoundingClientRect();
+			const x = event.clientX - rectangle.left;
+			const y = event.clientY - rectangle.top;
+			let best = null;
+			let distance = 13 * 13;
+			for (const point of extremeScatterPoints) {
+				const candidate = (point.x - x) ** 2 + (point.y - y) ** 2;
+				if (candidate <= distance) { distance = candidate; best = point; }
+			}
+			return best;
+		};
+		canvas.onpointermove = event => {
+			const point = nearest(event);
+			canvas.style.cursor = point ? 'pointer' : 'crosshair';
+			status.textContent = point ? `${systemLabel(point.index)} · ${xDefinition.label} ${fmt(point.xValue, xDefinition.decimals)} ${xDefinition.unit} · ${yDefinition.label} ${fmt(point.yValue, yDefinition.decimals)} ${yDefinition.unit}` : summary;
+		};
+		canvas.onpointerleave = () => { canvas.style.cursor = 'crosshair'; status.textContent = summary; };
+		canvas.onclick = event => {
+			const point = nearest(event);
+			if (point) selectTrack(point.index, {openExplore: true, fit: true});
+		};
+		canvas.setAttribute('aria-label', `${xDefinition.label} against ${yDefinition.label} for ${points.length} filtered systems, coloured by peak class. A ranked accessible table follows the diagnostic charts.`);
+	}
+
+	function drawExtremeTiming(indexes, definition) {
+		const count = indexes.length ? Math.max(1, Math.ceil(indexes.length * .1)) : 0;
+		const extremeIndexes = indexes.slice(0, count);
+		const matrix = Array.from({length: 12}, () => Array(6).fill(0));
+		for (const index of extremeIndexes) matrix[new Date(track(index)[T.start_ms]).getUTCMonth()][track(index)[T.category] - 1]++;
+		drawHeatmap('mlaExtremeTiming', MONTHS, ['L', 'D', 'DD', 'CS', 'SCS', 'VS+'], matrix, {left: 43});
+		$('#mlaExtremeTimingData').innerHTML = accessibleTable(['Genesis month', 'L', 'D', 'DD', 'CS', 'SCS', 'VS+', 'Total'], MONTHS.map((month, row) => [month, ...matrix[row], matrix[row].reduce((sum, value) => sum + value, 0)]), `${fmt(extremeIndexes.length)} systems in the most extreme decile by ${definition.label.toLowerCase()}; ties are ordered by physical-event ID.`);
+	}
 
 	function renderExtremes() {
 		if ($('#mlaPanelExtremes').hidden) return;
 		const definition = EXTREMES[state.extremeMetric];
-		const indexes = state.active.filter(index => Number.isFinite(definition.value(index))).sort((first, second) => {
-			const difference = definition.descending ? definition.value(second) - definition.value(first) : definition.value(first) - definition.value(second);
+		const xDefinition = EXTREMES[state.extremeX];
+		const yDefinition = EXTREMES[state.extremeY];
+		if (!DETAIL && [definition, xDefinition, yDefinition].some(item => item.requiresDetail)) {
+			$('#mlaExtremeCaveat').textContent = 'Opening complete hourly diagnostics for the selected analysis…';
+			$('#mlaRecordCards').innerHTML = '<p>Loading hourly catalogue diagnostics…</p>';
+			for (const id of ['mlaExtremeHistogram', 'mlaExtremeBoxPlot', 'mlaExtremeScatter', 'mlaExtremeTiming']) emptyChart(id, 'Loading hourly catalogue diagnostics…');
+			$('#mlaExtremeScatterStatus').textContent = 'Loading the full hourly diagnostic series once for this session.';
+			ensureDetail('Opening complete hourly diagnostics…').then(renderExtremes).catch(error => {
+				$('#mlaExtremeCaveat').textContent = `Hourly diagnostics could not be opened: ${error.message || error}`;
+			});
+			return;
+		}
+		const valueByIndex = extremeValueMap(state.active, definition);
+		const indexes = [...valueByIndex.keys()].sort((first, second) => {
+			const difference = definition.descending ? valueByIndex.get(second) - valueByIndex.get(first) : valueByIndex.get(first) - valueByIndex.get(second);
 			return difference || track(first)[T.id] - track(second)[T.id];
 		});
-		const valueText = index => `${fmt(definition.value(index), definition.decimals)} ${definition.unit}`.trim();
+		const valueText = index => `${fmt(valueByIndex.get(index), definition.decimals)} ${definition.unit}`.trim();
 		$('#mlaExtremeCaveat').textContent = definition.note || 'Catalogue diagnostic · not an externally validated record';
 		$('#mlaRecordCards').innerHTML = indexes.slice(0, 3).map((index, rank) => {
 			return `<article class="mla-card mla-record"><span class="mla-label">${rank + 1} · ${esc(definition.label)}</span><h3><button class="mla-row-button" type="button" data-select-track="${index}" data-open-explore="true">${esc(systemLabel(index))}</button></h3><p><strong>${esc(valueText(index))}</strong> · ${date(track(index)[T.start_ms])} · ${esc(CLASS_SHORT[track(index)[T.category]])}</p></article>`;
 		}).join('') || '<p>No eligible systems in this subset.</p>';
+		drawExtremeHistogram(indexes, definition, valueByIndex);
+		drawExtremeBoxPlot(indexes, definition, valueByIndex);
+		const xValues = state.extremeX === state.extremeMetric ? valueByIndex : extremeValueMap(state.active, xDefinition);
+		const yValues = state.extremeY === state.extremeMetric ? valueByIndex : state.extremeY === state.extremeX ? xValues : extremeValueMap(state.active, yDefinition);
+		drawExtremeScatter(state.active, xDefinition, yDefinition, xValues, yValues);
+		drawExtremeTiming(indexes, definition);
 		const table = $('#mlaExtremeTable');
 		table.querySelector('thead').innerHTML = `<tr><th>Rank</th><th>System</th><th>Genesis</th><th>${esc(definition.label)}</th><th>Peak ERA5 class</th></tr>`;
 		table.querySelector('tbody').innerHTML = indexes.slice(0, 50).map((index, rank) => {
@@ -4054,9 +4836,11 @@
 		setLoading('Building a spatial index for responsive track selection…');
 		await new Promise(resolve => setTimeout(resolve, 0));
 		buildPathRuntime();
+		setLoading('Indexing event labels, search and endpoint regions…');
 		buildFallbackLabels();
 		buildSearchIndex();
 		buildEndpointRegions();
+		setLoading('Preparing atlas controls and the requested view…');
 		buildFilterControls();
 		readUrl();
 		if (state.stateFill !== 'none') await ensureDetail();
@@ -4065,11 +4849,16 @@
 		bindMap();
 		updateBoundarySourceText();
 		syncControls();
+		setLoading('Applying filters and drawing the initial view…');
 		applyFilters({noUrl: true});
+		setLoading('Synchronising initial time controls…');
 		updateTimeControls();
 		if (state.weatherLayer !== 'none' && Number.isFinite(state.focusTimeMs)) syncWeatherToFocus();
+		setLoading('Activating the requested atlas panel…');
 		activateTab(state.tab, false);
+		setLoading('Preparing data and provenance notes…');
 		renderData();
+		setLoading('Finishing the atlas view…');
 		$('#mlaLoading').hidden = true;
 		root.dataset.ready = 'true';
 		void loadVisitCounter();

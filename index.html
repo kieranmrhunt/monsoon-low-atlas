@@ -251,6 +251,14 @@
 .mla-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-filter-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--mla-line); padding: 9px 13px; }
 .mla-result-count { font-family: var(--mla-font); font-size: 13px; }
+.mla-filter-summary-main { display: flex; align-items: center; gap: 8px 12px; flex: 1 1 560px; flex-wrap: wrap; min-width: 0; }
+.mla-active-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.mla-filter-chip { min-height: 30px; padding: 4px 9px; border-color: color-mix(in srgb, var(--mla-indigo) 38%, var(--mla-line)); background: color-mix(in srgb, var(--mla-indigo) 9%, var(--mla-card)); color: var(--mla-indigo-deep); font-size: 12px; }
+.mla-filter-chip span { margin-left: 4px; font-size: 15px; line-height: 1; }
+.mla-filter-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; margin-left: auto; border-radius: 999px; background: color-mix(in srgb, var(--mla-indigo) 12%, var(--mla-card)); color: var(--mla-indigo-deep); font-size: 11px; font-weight: 650; }
+.mla-filter-count:empty { display: none; }
+.mla-filter-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border-top: 1px solid var(--mla-line); padding: 9px 13px; background: color-mix(in srgb, var(--mla-turmeric) 12%, var(--mla-card)); color: var(--mla-ink); font-size: 13px; }
+.mla-filter-notice p { margin: 0; }
 .mla-caution { margin: 8px 0 0; color: var(--mla-muted); font-size: 12px; }
 
 .mla-panel { animation: mla-panel-in .18s ease both; }
@@ -317,6 +325,8 @@
 .mla-swatch { width: 18px; height: 8px; border-radius: 999px; display: inline-block; }
 
 .mla-dossier { padding: 15px; }
+.mla-dossier-sheet-toggle { display: none; }
+.mla-dossier-sheet-body { min-width: 0; }
 .mla-dossier-empty { color: var(--mla-muted); padding: 8px 0; }
 .mla-dossier-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .mla-dossier h3 { font-family: var(--mla-font); font-size: 27px; line-height: 1.05; font-weight: 500; margin: 6px 0; }
@@ -394,6 +404,17 @@
 .mla-profile-chart { height: 190px; }
 .mla-chart-wide { grid-column: 1 / -1; }
 .mla-chart-wide .mla-chart { height: 340px; }
+.mla-climate-chart { height: 330px; }
+.mla-section-compare-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.mla-section-compare-panel { min-width: 0; }
+.mla-section-compare-panel + .mla-section-compare-panel { border-left: 1px solid var(--mla-line); padding-left: 14px; }
+.mla-section-compare-panel h4 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
+.mla-subset-section-chart { display: block; width: 100%; height: 360px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card-strong); }
+.mla-chart-status { min-height: 20px; margin: 7px 0 0; color: var(--mla-muted); font-size: 12px; }
+.mla-inline-controls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.mla-inline-controls .mla-field { min-width: 170px; }
+.mla-extreme-analysis-grid { margin: 14px 0; }
+.mla-extreme-scatter { cursor: crosshair; }
 .mla-genesis-chart {
 	width: min(100%, 1040px);
 	height: clamp(430px, 48vw, 620px) !important;
@@ -477,11 +498,31 @@
 	.mla-explore-evolution-grid { grid-template-areas: "subset"; }
 	.mla-explore-evolution-grid.has-selection { grid-template-areas: "selected" "composite" "subset"; }
 	.mla-composite-title { display: block; }
+	.mla-section-compare-grid { grid-template-columns: 1fr; }
+	.mla-section-compare-panel + .mla-section-compare-panel { border-left: 0; border-top: 1px solid var(--mla-line); padding: 14px 0 0; }
 	.mla-composite-panel + .mla-composite-panel { border-left: 0; border-top: 1px solid var(--mla-line); padding: 14px 0 0; }
 	#mlaSectionComposite { width: min(100%, 220px); aspect-ratio: .52 / 1; margin-inline: auto; }
 	.mla-percentile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.mla-map-stack { height: 500px; }
 	.mla-dossier { display: block; }
+	.mla-dossier.has-selection {
+		position: fixed;
+		left: 10px;
+		right: 10px;
+		bottom: max(10px, env(safe-area-inset-bottom));
+		z-index: 70;
+		max-height: min(64vh, 620px);
+		padding: 0;
+		overflow: hidden;
+		box-shadow: 0 18px 50px -16px rgba(20, 18, 15, .55);
+	}
+	.mla-dossier.has-selection .mla-dossier-sheet-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 54px; border: 0; border-bottom: 1px solid var(--mla-line); background: var(--mla-well); padding: 10px 13px; text-align: left; font-weight: 650; }
+	.mla-dossier.has-selection .mla-dossier-sheet-toggle::after { content: "−"; color: var(--mla-indigo); font-size: 20px; font-weight: 400; }
+	.mla-dossier.has-selection.is-collapsed .mla-dossier-sheet-toggle { border-bottom: 0; }
+	.mla-dossier.has-selection.is-collapsed .mla-dossier-sheet-toggle::after { content: "+"; }
+	.mla-dossier.has-selection .mla-dossier-sheet-body { max-height: calc(min(64vh, 620px) - 54px); overflow: auto; overscroll-behavior: contain; padding: 12px 14px 18px; }
+	.mla-dossier.has-selection.is-collapsed .mla-dossier-sheet-body { display: none; }
+	.mla-dossier.has-selection #mlaTimeControls { margin: -12px -14px 12px; border-top: 0; border-bottom: 1px solid var(--mla-line); }
 	.mla-fact-grid { grid-template-columns: 1fr 1fr; }
 	.mla-record-grid { grid-template-columns: 1fr; }
 	.mla-chart-wide { grid-column: auto; }
@@ -511,6 +552,7 @@
 	.mla-chart-head .mla-field { width: 100%; margin-top: 8px; }
 	.mla-profile-metric-groups { grid-template-columns: 1fr; }
 	.mla-genesis-chart { height: 360px !important; }
+	.mla-subset-section-chart { height: 330px; }
 	.mla-btn,
 	.mla-tab { min-height: 44px; }
 }
@@ -562,7 +604,8 @@
 			<div class="mla-filter-primary">
 				<label class="mla-field" for="mlaSearch">
 					<span class="mla-label">Find a system</span>
-					<input class="mla-control" id="mlaSearch" type="search" placeholder="Cyclone, ID, year, YYYY-MM-DD or YYYY-MM-DD HH:00">
+					<input class="mla-control" id="mlaSearch" type="search" list="mlaSearchSuggestions" autocomplete="off" placeholder="Cyclone, ID, year, YYYY-MM-DD or YYYY-MM-DD HH:00">
+					<datalist id="mlaSearchSuggestions"></datalist>
 				</label>
 				<div class="mla-field">
 					<div class="mla-period-head"><span class="mla-label" id="mlaPeriodLabel">Genesis years</span><div class="mla-period-toggle" role="group" aria-label="Filter by genesis years or active dates"><button class="mla-btn mla-btn-small" id="mlaTimeModeYears" type="button" aria-pressed="true">Years</button><button class="mla-btn mla-btn-small" id="mlaTimeModeDates" type="button" aria-pressed="false">Dates</button></div></div>
@@ -591,7 +634,7 @@
 
 			<div class="mla-filter-disclosures" id="mlaAdvancedFilters">
 				<details class="mla-filter-disclosure">
-					<summary>Time, climate, IBTrACS and location</summary>
+					<summary><span>Time and climate (MJO, BSISO, ENSO), IBTrACS and location</span><span class="mla-filter-count" id="mlaContextFilterCount" aria-label="Active filters in this group"></span></summary>
 					<div class="mla-filter-grid">
 					<div class="mla-filter-group">
 						<h3>Months</h3>
@@ -666,7 +709,7 @@
 					</div>
 				</details>
 				<details class="mla-filter-disclosure" id="mlaPercentileFilters">
-					<summary>Catalogue percentiles</summary>
+					<summary><span>Catalogue percentiles</span><span class="mla-filter-count" id="mlaPercentileFilterCount" aria-label="Active percentile filters"></span></summary>
 					<div class="mla-percentile-grid">
 							<label class="mla-percentile-filter" for="mlaPercentileDeficit"><span class="mla-label">Pressure deficit: <output id="mlaPercentileDeficitValue">0%</output></span><input class="mla-range" id="mlaPercentileDeficit" data-percentile-filter="deficit" type="range" min="0" max="100" step="1" value="0"></label>
 							<label class="mla-percentile-filter" for="mlaPercentileVort"><span class="mla-label">Smoothed vorticity: <output id="mlaPercentileVortValue">0%</output></span><input class="mla-range" id="mlaPercentileVort" data-percentile-filter="vort" type="range" min="0" max="100" step="1" value="0"></label>
@@ -677,11 +720,12 @@
 				</details>
 			</div>
 			<div class="mla-filter-summary">
-				<strong class="mla-result-count" id="mlaResultCount">Preparing systems…</strong>
+				<div class="mla-filter-summary-main"><strong class="mla-result-count" id="mlaResultCount">Preparing systems…</strong><div class="mla-active-filters" id="mlaActiveFilters" aria-label="Active filters"></div></div>
 				<div class="mla-toolbar-group">
 					<button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaResetFilters" type="button">Reset filters</button>
 				</div>
 			</div>
+			<div class="mla-filter-notice" id="mlaFilterNotice" role="status" hidden><p id="mlaFilterNoticeText"></p><button class="mla-btn mla-btn-small" id="mlaClearConflicts" type="button">Clear conflicting filters</button></div>
 		</section>
 
 		<section class="mla-panel" id="mlaPanelExplore" role="tabpanel" aria-labelledby="mlaTabExplore" data-panel="explore">
@@ -710,6 +754,7 @@
 						<canvas class="mla-map-layer" id="mlaMapOverlay" role="img" aria-describedby="mlaMapDescription">Interactive map of filtered atlas tracks. Use the systems table for a keyboard-accessible alternative.</canvas>
 						<div class="mla-map-tip" id="mlaMapTip" role="tooltip"></div>
 					</div>
+					<div id="mlaTimeControlsAnchor"></div>
 					<div class="mla-time-controls" id="mlaTimeControls" hidden>
 						<button class="mla-btn mla-btn-small" id="mlaPreviousHour" type="button" aria-label="Previous track hour">−1 h</button>
 						<label class="mla-track-time-control" for="mlaTrackHour"><span>Track hour</span><input class="mla-time-slider" id="mlaTrackHour" type="range" min="0" max="0" value="0" step="1" aria-label="Selected track hour"></label>
@@ -728,7 +773,8 @@
 					<details class="mla-a11y-data" id="mlaStateRainfallPanel" hidden><summary>State rainfall values</summary><div id="mlaStateRainfallData"></div></details>
 				</section>
 				<aside class="mla-card mla-dossier" id="mlaDossier" aria-live="polite">
-					<p class="mla-dossier-empty">Select a track on the map or from a table to open its dossier.</p>
+					<button class="mla-dossier-sheet-toggle" id="mlaMobileDossierToggle" type="button" aria-expanded="true" aria-controls="mlaDossierSheetBody"><span id="mlaMobileDossierSummary">Selected system</span></button>
+					<div class="mla-dossier-sheet-body" id="mlaDossierSheetBody"><div id="mlaMobileTimelineSlot"></div><div id="mlaDossierContent"><p class="mla-dossier-empty">Select a track on the map or from a table to open its dossier.</p></div></div>
 				</aside>
 			</div>
 			<div class="mla-chart-grid mla-explore-evolution-grid" id="mlaExploreEvolutionGrid" style="margin-top:14px">
@@ -754,27 +800,37 @@
 		<section class="mla-panel" id="mlaPanelClimatology" role="tabpanel" aria-labelledby="mlaTabClimatology" data-panel="climatology" hidden>
 			<div class="mla-panel-heading">
 				<h2>Climatology</h2>
-				<p>Counts and rates use complete selected-month exposure across the fully audited 1940–2025 source period.</p>
+				<p>Frequency, timing, movement, climate context and storm-centred structure for the shared filtered subset.</p>
 			</div>
+			<div class="mla-stat-grid" id="mlaClimatologyStats"></div>
 			<div class="mla-chart-grid">
-				<section class="mla-card mla-chart-card mla-chart-wide"><h3>Annual genesis count</h3><p>Complete selected-month exposure only; the line is an event count, not a trend attribution.</p><canvas class="mla-chart" id="mlaAnnualChart" role="img" aria-label="Annual genesis counts for the filtered subset"></canvas><details class="mla-a11y-data"><summary>Accessible annual data</summary><div id="mlaAnnualData"></div></details></section>
-				<section class="mla-card mla-chart-card"><h3>Seasonal cycle</h3><p>Genesis systems, peak-metric systems or active event-months according to the shared month definition.</p><canvas class="mla-chart" id="mlaMonthChart" role="img" aria-label="Monthly distribution for the filtered subset"></canvas><details class="mla-a11y-data"><summary>Accessible monthly data</summary><div id="mlaMonthData"></div></details></section>
+				<section class="mla-card mla-chart-card mla-chart-wide"><div class="mla-chart-head"><div><h3 id="mlaAnnualHeading">Annual selected-system frequency</h3><p id="mlaAnnualSubtitle">Annual values and centred 11-year mean; years without complete selected-month exposure are excluded.</p></div><label class="mla-field" for="mlaClimatologyMeasure"><span class="mla-label">Measure</span><select class="mla-select" id="mlaClimatologyMeasure"><option value="systems">Selected systems</option><option value="rate">Systems per 100 selected days</option><option value="system_days">LPS system-days</option></select></label></div><canvas class="mla-chart" id="mlaAnnualChart" role="img" aria-label="Annual frequency for the filtered subset"></canvas><p class="mla-chart-status" id="mlaAnnualStatus"></p><details class="mla-a11y-data"><summary>Accessible annual data</summary><div id="mlaAnnualData"></div></details></section>
+				<section class="mla-card mla-chart-card"><div class="mla-chart-head"><div><h3>Seasonal cycle and class mix</h3><p>Each system contributes according to the shared active, genesis or peak-month definition.</p></div><label class="mla-field" for="mlaSeasonalMode"><span class="mla-label">Display</span><select class="mla-select" id="mlaSeasonalMode"><option value="count">Counts</option><option value="share">Class share</option></select></label></div><canvas class="mla-chart" id="mlaMonthChart" role="img" aria-label="Monthly class composition for the filtered subset"></canvas><details class="mla-a11y-data"><summary>Accessible monthly data</summary><div id="mlaMonthData"></div></details></section>
 				<section class="mla-card mla-chart-card"><h3>Atlas-derived class by decade</h3><p>Annualised within each exposed decade; category 6 means VSCS or stronger.</p><canvas class="mla-chart" id="mlaClassChart" role="img" aria-label="Annualised atlas-derived classes by decade"></canvas><details class="mla-a11y-data"><summary>Accessible class data</summary><div id="mlaClassData"></div></details></section>
 				<section class="mla-card mla-chart-card mla-chart-wide"><h3>Track density</h3><p>Unique tracks per half-degree cell for the selected months; colour intensity uses a square-root count scale.</p><canvas class="mla-chart mla-genesis-chart" id="mlaGenesisChart" role="img" aria-label="Unique-track density map for the filtered subset"></canvas></section>
+				<section class="mla-card mla-chart-card"><h3>Genesis-to-lysis pathways</h3><p>Row percentages show where systems from each genesis region ultimately finish.</p><canvas class="mla-chart" id="mlaEndpointChart" role="img" aria-label="Genesis to lysis region transition matrix"></canvas><details class="mla-a11y-data"><summary>Accessible pathway data</summary><div id="mlaEndpointData"></div></details></section>
+				<section class="mla-card mla-chart-card"><div class="mla-chart-head"><div><h3>Climate-state composition</h3><p>Share of LPS genesis by climate category, compared with all LPSs in the selected time and months.</p></div><label class="mla-field" for="mlaClimateIndex"><span class="mla-label">Index</span><select class="mla-select" id="mlaClimateIndex"><option value="mjo">MJO RMM</option><option value="bsiso">BSISO-1</option><option value="enso">ENSO ONI</option></select></label></div><canvas class="mla-chart mla-climate-chart" id="mlaClimateChart" role="img" aria-label="Climate-state composition of the filtered subset"></canvas><p class="mla-chart-status" id="mlaClimateStatus"></p><details class="mla-a11y-data"><summary>Accessible climate composition</summary><div id="mlaClimateData"></div></details></section>
+				<section class="mla-card mla-chart-card mla-chart-wide"><div class="mla-toolbar"><div><h3>Storm-centred vertical structure</h3><p>Lifecycle-mean ERA5 zonal section through 0° relative latitude; both panels use the same fixed scale.</p></div><div class="mla-inline-controls"><label class="mla-field" for="mlaSubsetSectionVariable"><span class="mla-label">Variable</span><select class="mla-select" id="mlaSubsetSectionVariable"><option value="relative_vorticity">Relative vorticity</option><option value="theta_e">Equivalent potential temperature (θₑ)</option></select></label><button class="mla-btn mla-btn-small" id="mlaPinSectionReference" type="button">Pin subset as reference</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClearSectionReference" type="button" hidden>Use full catalogue</button></div></div><div class="mla-section-compare-grid"><section class="mla-section-compare-panel"><h4>Current filtered subset</h4><canvas class="mla-subset-section-chart" id="mlaSubsetSectionChart" role="img" aria-label="Storm-centred vertical composite for the current filtered subset"></canvas><p class="mla-chart-status" id="mlaSubsetSectionStatus">Open this tab to load subset sections.</p></section><section class="mla-section-compare-panel"><h4 id="mlaReferenceSectionHeading">Complete catalogue reference</h4><canvas class="mla-subset-section-chart" id="mlaReferenceSectionChart" role="img" aria-label="Storm-centred vertical composite for the reference subset"></canvas><p class="mla-chart-status" id="mlaReferenceSectionStatus">Reference section pending.</p></section></div><details class="mla-a11y-data"><summary>Composite method and provenance</summary><div id="mlaSubsetSectionData"></div></details></section>
 			</div>
 		</section>
 
 		<section class="mla-panel" id="mlaPanelExtremes" role="tabpanel" aria-labelledby="mlaTabExtremes" data-panel="extremes" hidden>
-			<div class="mla-panel-heading"><h2>Catalogue diagnostic extremes</h2><p>These are extremes within the ERA5-derived catalogue, not authoritative meteorological records. Eligibility is metric-specific.</p></div>
+			<div class="mla-panel-heading"><h2>Catalogue diagnostic extremes</h2><p>Rankings, distributions, relationships and timing within the ERA5-derived catalogue—not authoritative meteorological records.</p></div>
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
 					<div class="mla-toolbar-group">
-						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Diagnostic</span><select class="mla-select" id="mlaExtremeMetric"><optgroup label="Track and intensity"><option value="duration">Longest duration</option><option value="distance">Longest path</option><option value="meanSpeed">Mean translation speed</option><option value="deficit">Largest pressure deficit</option><option value="wind">Highest circulation wind</option><option value="rain">Highest 24 h precipitation</option><option value="vort">Highest smoothed vorticity</option><option value="mslp">Lowest minimum MSLP</option><option value="q850">Highest q850</option><option value="rh850">Highest RH850</option></optgroup><optgroup label="Support and continuity"><option value="observedPositions">Most observed positions</option><option value="qualifyingPositions">Most release-domain qualifying positions</option><option value="lowestCoverage">Lowest observed coverage</option><option value="posteriorShare">Largest posterior-position share</option><option value="missingRun">Longest supported missing run</option><option value="maxStepSpeed">Highest step speed</option><option value="rainDays">Most UTC rain days</option><option value="stateRain">Highest crossed-state mean rain</option></optgroup><optgroup label="Genesis location"><option value="northGenesis">Northernmost</option><option value="southGenesis">Southernmost</option><option value="eastGenesis">Easternmost</option><option value="westGenesis">Westernmost</option></optgroup></select></label>
+						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Rank by</span><select class="mla-select" id="mlaExtremeMetric"><optgroup label="Track and compound intensity"><option value="compoundIntensity">Highest compound intensity</option><option value="duration">Longest duration</option><option value="distance">Longest path</option><option value="meanSpeed">Mean translation speed</option><option value="deficit">Largest pressure deficit</option><option value="wind">Highest circulation wind</option><option value="rain">Highest 24 h precipitation</option><option value="vort">Highest smoothed vorticity</option><option value="mslp">Lowest minimum MSLP</option><option value="q850">Highest q850</option><option value="rh850">Highest RH850</option></optgroup><optgroup label="Evolution and persistence"><option value="deepening24">Fastest 24 h pressure-deficit growth</option><option value="windGrowth24">Fastest 24 h circulation-wind growth</option><option value="vortGrowth24">Fastest 24 h vorticity growth</option><option value="closedIsobars">Most closed isobars</option><option value="depressionHours">Most hours at depression strength or above</option><option value="landHours">Most hours over majority land</option></optgroup><optgroup label="Support and continuity"><option value="observedPositions">Most observed positions</option><option value="qualifyingPositions">Most release-domain qualifying positions</option><option value="lowestCoverage">Lowest observed coverage</option><option value="posteriorShare">Largest posterior-position share</option><option value="missingRun">Longest supported missing run</option><option value="maxStepSpeed">Highest step speed</option><option value="rainDays">Most UTC rain days</option><option value="stateRain">Highest crossed-state mean rain</option></optgroup><optgroup label="Genesis location"><option value="northGenesis">Northernmost</option><option value="southGenesis">Southernmost</option><option value="eastGenesis">Easternmost</option><option value="westGenesis">Westernmost</option></optgroup></select></label>
 						<label class="mla-field" for="mlaExtremeEligibility" hidden><span class="mla-label">Eligibility</span><select class="mla-select" id="mlaExtremeEligibility"><option value="all">All filtered systems</option></select></label>
 					</div>
 					<span class="mla-badge" data-tone="review" id="mlaExtremeCaveat">Catalogue diagnostics · not externally validated records</span>
 				</div>
 				<div class="mla-record-grid" id="mlaRecordCards"></div>
+				<div class="mla-chart-grid mla-extreme-analysis-grid">
+					<section class="mla-card mla-chart-card"><h3>Distribution</h3><p id="mlaExtremeDistributionSubtitle">Filtered-subset distribution with the selected system marked when applicable.</p><canvas class="mla-chart" id="mlaExtremeHistogram" role="img" aria-label="Distribution of the selected extreme diagnostic"></canvas><details class="mla-a11y-data"><summary>Distribution summary</summary><div id="mlaExtremeDistributionData"></div></details></section>
+					<section class="mla-card mla-chart-card"><h3>Distribution by peak class</h3><p>Boxes show the interquartile range; whiskers show the 5th–95th percentiles.</p><canvas class="mla-chart" id="mlaExtremeBoxPlot" role="img" aria-label="Selected extreme diagnostic by atlas peak class"></canvas><details class="mla-a11y-data"><summary>Class distribution summary</summary><div id="mlaExtremeClassData"></div></details></section>
+					<section class="mla-card mla-chart-card mla-chart-wide"><div class="mla-chart-head"><div><h3>Compound relationship</h3><p>Every point is a physical event; click a point to open that system.</p></div><div class="mla-inline-controls"><label class="mla-field" for="mlaExtremeX"><span class="mla-label">Horizontal</span><select class="mla-select" id="mlaExtremeX"></select></label><label class="mla-field" for="mlaExtremeY"><span class="mla-label">Vertical</span><select class="mla-select" id="mlaExtremeY"></select></label></div></div><canvas class="mla-chart mla-extreme-scatter" id="mlaExtremeScatter" role="img" tabindex="0" aria-label="Relationship between two selected catalogue diagnostics"></canvas><p class="mla-chart-status" id="mlaExtremeScatterStatus">Move over a point for its system and values.</p></section>
+					<section class="mla-card mla-chart-card mla-chart-wide"><h3>Timing of the most extreme decile</h3><p>Genesis month by peak class for the strongest 10% of the filtered subset under the selected ranking direction.</p><canvas class="mla-chart" id="mlaExtremeTiming" role="img" aria-label="Genesis timing of the most extreme decile"></canvas><details class="mla-a11y-data"><summary>Extreme timing data</summary><div id="mlaExtremeTimingData"></div></details></section>
+				</div>
 				<div class="mla-table-wrap"><table class="mla-table" id="mlaExtremeTable"><thead></thead><tbody></tbody></table></div>
 			</section>
 		</section>
@@ -796,9 +852,9 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.524b8cb36a5f.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.d539d78b2f0a.js"></script>
+<script src="assets/atlas-app.00f77fad9bc5.js"></script>
 
 </body>
 </html>

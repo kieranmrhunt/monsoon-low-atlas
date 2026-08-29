@@ -19,6 +19,7 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - The state/UT filter requires at least one hourly published centre inside the selected administrative boundary.
 - Genesis and lysis filters use the first and last published centres respectively. Indian land uses the atlas state/UT polygons; All land uses the Natural Earth land mask. The Bay of Bengal and Arabian Sea require a water endpoint in 0–30 degrees north and 45–100 degrees east, split at 77.5 degrees east. Indian Ocean covers water endpoints in 30 degrees south–30 degrees north and 30–120 degrees east, including both named seas.
 - The map draws positions in the selected months.
+- Every active constraint is repeated in an always-visible filter bar and can be removed independently. An exact physical-event ID, atlas label or unique cyclone name is resolved against the complete catalogue: the requested system remains pinned if the surrounding subset excludes it, and the atlas states which filters conflict without silently clearing them. Date and free-text searches continue to define the subset.
 - The LPS-layer menu includes a selected-system-only mode that suppresses subset density, tracks and endpoints while retaining the selected track, selected-hour marker and optional matched IBTrACS line. Other subset tracks are neither drawn nor clickable, leaving state rainfall or weather fields unobstructed. The choice is retained in shareable URLs as `layer=none`.
 - The static page makes one country-only request to `api.country.is`, whose provider states that it does not log requests. For an India result, it loads the official Survey of India 1:16-million international outline and removes the conflicting Natural Earth boundary segments around India; Natural Earth remains the source elsewhere. The atlas neither stores the returned IP nor changes analytical geography by visitor location, and falls back to Natural Earth if either request fails. After the atlas opens, a discreet visit counter makes one separate request to Counter API; that provider states that it converts IP and browser details into non-reversible hashes and does not sell the data. The counter stays hidden if unavailable and is read-only outside the production hostname.
 - A search in `YYYY-MM-DD` form highlights the part of every filtered track active on that UTC date and marks its position during the day. Adding an hour, for example `2016-07-16 12:00`, marks every active system at that exact catalogue hour. These time-focus markers are clickable and switch the selected system without changing the focused UTC time or weather frame.
@@ -30,6 +31,9 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - Each precipitation footprint is the lifecycle mean of UTC-day accumulations on a ±10°, 0.25° grid. A touched UTC day's centre is the published position closest to 12 UTC on that day. ERA5 uses hourly mean total precipitation rate accumulated over the day; IMERG Final Run is offered when at least one local contributing day is available (V06 `precipitationCal` or V07 `precipitation`), with its partial temporal coverage reported in the atlas.
 - Each vertical composite is a zonal section through 0° relative latitude, averaged over nine equally spaced lifecycle snapshots and interpolated to 27 pressure levels from 1000 to 100 hPa. The controls switch between ERA5 relative vorticity and equivalent potential temperature calculated from temperature and specific humidity following Bolton (1980). The archive retains every pressure level; the atlas θₑ view omits the anomalously warm 100-hPa level and uses a fixed 330–370 K blue–white–red scale, while relative vorticity retains 100 hPa. Local JASMIN ERA5 model-level analyses supply 1979 onward; the public ARCO ERA5 pressure-level archive supplies earlier snapshots.
 - Climate filters are evaluated at genesis. BSISO-1 uses the APCC daily index during May–October; MJO uses the Bureau of Meteorology all-season Wheeler–Hendon RMM index; and ENSO uses the NOAA CPC three-month ONI anomaly centred on the genesis month. Amplitudes below 1 are inactive, while missing, pre-index and BSISO out-of-season values remain explicitly selectable.
+- On screens up to 760 px wide, the selected-system dossier and the actual map time controls form a collapsible bottom sheet. This is a responsive relocation of the same controls, not a second timeline state.
+- Climatology combines annual systems, exposure-normalised rates or system-days with an 11-year mean and descriptive Theil–Sen slope; monthly class count/share, class frequency by decade, genesis-to-lysis pathways, track density and MJO/BSISO/ENSO composition all honour the current filters. Its storm-centred vertical comparison shows the current subset beside the complete catalogue or a user-pinned reference subset on identical fixed scales.
+- Extremes ranks both physical and QA diagnostics and links the top systems to a histogram, class-stratified 5th–95th-percentile boxes, a clickable two-variable relationship plot and genesis-month/peak-class timing for the most extreme decile. These are catalogue diagnostics, not authoritative meteorological records.
 - The split build loads compressed catalogue payloads from `assets/*.json.gz` and decompresses them in modern browsers.
 
 ## Weather archive and deployment
@@ -73,6 +77,18 @@ python scripts/build_storm_composite.py \
 ```
 
 Serve that directory from a CORS-enabled public GWS and set `compositeBase` in the JSON configuration at the bottom of `index.html`. Assets live at `tracks/track-<track_id>.json.gz`; the manifest records catalogue completeness, source availability, warnings and checksums.
+
+The filterable Climatology sections are packed from that validated per-system archive into one lazy, hashed static asset. The packer preserves all 27 pressure levels, coarsens only relative longitude from 0.25° to 0.5°, verifies physical-event ordering against the core atlas asset, and stores signed 16-bit values losslessly at each source field's published scale:
+
+```bash
+python scripts/build_subset_section_asset.py \
+  --core assets/atlas-core.cefb51e2bde1.json.gz \
+  --composite-dir path/to/atlas-composites-v5.6-r1 \
+  --output-dir assets \
+  --longitude-step 0.5
+```
+
+Set the resulting hashed filename as `sections` in the JSON configuration at the bottom of `index.html`. The browser fetches this archive only when Climatology is opened and computes filtered means locally; changing filters does not make a server-side request.
 
 ## Rebuild the climate-filter asset
 

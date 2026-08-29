@@ -21,6 +21,7 @@ DOCUMENT_STEM="lps-v5.6-era5-1940-2025-core"
 TEMPLATE_CORE="${LPS_TEMPLATE_CORE:-$ATLAS_ROOT/assets/atlas-core.a3eb97565f4a.json.gz}"
 IBTRACS_DIR="$PIPELINE_ROOT/inputs/ibtracs_v04r01"
 RAINFALL_DIR="${LPS_IMD_RAINFALL_DIR:-/home/users/kieran/ncas/data/IMD-gauge}"
+COMPOSITE_DIR="${LPS_COMPOSITE_DIR:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-composites-v5.6-r1}"
 
 for path in "$CATALOGUE" "$TEMPLATE_CORE" \
   "$IBTRACS_DIR/ibtracs.NI.list.v04r01.csv" \
@@ -77,6 +78,19 @@ CORE_NAME="$($PYTHON -c "import json; print(json.load(open('assets/atlas-build-m
   --core "assets/$CORE_NAME" \
   --output figures/lps-v5.6-track-diagnostics.png
 
+if [[ -f "$COMPOSITE_DIR/manifest.json" ]]; then
+  "$PYTHON" scripts/build_subset_section_asset.py \
+    --core "assets/$CORE_NAME" \
+    --composite-dir "$COMPOSITE_DIR" \
+    --output-dir assets \
+    --longitude-step 0.5
+else
+  echo "Skipping filterable vertical sections: no composite manifest at $COMPOSITE_DIR/manifest.json" >&2
+fi
+
 chmod 0644 assets/atlas-build-manifest.json assets/atlas-core.*.json.gz \
   assets/atlas-detail.*.json.gz assets/atlas-climate.*.json.gz \
   data/lps-v5.6-* figures/lps-v5.6-track-diagnostics.png
+if compgen -G "assets/atlas-sections.*.json.gz" > /dev/null; then
+  chmod 0644 assets/atlas-sections.*.json.gz
+fi
