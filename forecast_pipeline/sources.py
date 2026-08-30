@@ -36,6 +36,7 @@ from .forecast_core import (
     validate_cycle_payload,
 )
 from .v56_tracking import parameter_sha256, track_forecast_member
+from .versions import model_version
 
 
 LOGGER = logging.getLogger("mla.forecast.sources")
@@ -67,6 +68,11 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "NOAA Global Ensemble Forecast System control plus 30 perturbed members",
         "https://registry.opendata.aws/noaa-gefs/", "NOAA Open Data cloud mirror", "NOAA public data", "#e8872f",
     ),
+    "gefs-control": ModelDefinition(
+        "gefs-control", "GEFS control", "NOAA/NCEP", "deterministic", 1,
+        "NOAA Global Ensemble Forecast System unperturbed control member, retained for pre-GFS-cloud historical coverage",
+        "https://registry.opendata.aws/noaa-gefs/", "NOAA Open Data cloud mirror", "NOAA public data", "#b46722",
+    ),
     "ifs": ModelDefinition(
         "ifs", "IFS", "ECMWF", "deterministic", 1,
         "ECMWF Integrated Forecasting System deterministic forecast",
@@ -89,7 +95,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
     ),
 }
 
-DEFAULT_MODELS = tuple(MODEL_DEFINITIONS)
+DEFAULT_MODELS = ("gfs", "gefs", "ifs", "ifs-ens", "aifs", "aifs-ens")
 
 
 class DownloadError(RuntimeError):
@@ -276,6 +282,7 @@ class BaseAdapter:
         precipitation_mean_cumulative: np.ndarray,
         warnings: list[str],
         tracking_qa: list[dict[str, Any]],
+        expected_members: int | None = None,
     ) -> dict[str, Any]:
         definition = self.definition
         systems = assign_systems(tracks)
@@ -300,7 +307,7 @@ class BaseAdapter:
             "grid": grid_metadata(),
             "members": {
                 "available": len(member_ids),
-                "expected": definition.expected_members,
+                "expected": definition.expected_members if expected_members is None else expected_members,
                 "ids": member_ids,
             },
             "tracks": tracks,
@@ -317,6 +324,7 @@ class BaseAdapter:
                 "licence": definition.licence,
                 "retrieval": "provider inventory byte ranges; atlas domain resampled to 1 degree",
             },
+            "model_version": model_version(definition.id, cycle),
             "method": {
                 "track_status": "provisional forecast guidance; not an official best track or a v5.6 catalogue event",
                 "detector": "frozen v5.6 catalogue object detector (v5.4.2 continuity parent)",
@@ -349,6 +357,9 @@ class BaseAdapter:
 class NcepAdapter(BaseAdapter):
     LIVE_GFS_ROOT = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
     LIVE_GEFS_ROOT = "https://noaa-gefs-pds.s3.amazonaws.com"
+    GFS_V16_START = datetime(2021, 3, 22, 12)
+    GEFS_V12_START = datetime(2020, 9, 23, 12)
+    GEFS_FOLDER_START = datetime(2018, 7, 27, 0)
 
     def __init__(
         self,
@@ -357,7 +368,7 @@ class NcepAdapter(BaseAdapter):
         workers: int = 16,
         archive_root: str | None = None,
     ):
-        if model not in {"gfs", "gefs"}:
+        if model not in {"gfs", "gefs", "gefs-control"}:
             raise ValueError(model)
         super().__init__(client, workers)
         self.definition = MODEL_DEFINITIONS[model]
@@ -381,13 +392,20 @@ class NcepAdapter(BaseAdapter):
             )
             return base, f"{base}.inv"
         if self.definition.id == "gfs":
-            base = f"{self.LIVE_GFS_ROOT}/gfs.{date}/{hour}/atmos/gfs.t{hour}z.pgrb2.0p25.f{step:03d}"
+            middle = "/atmos" if cycle.replace(tzinfo=None) >= self.GFS_V16_START else ""
+            base = f"{self.LIVE_GFS_ROOT}/gfs.{date}/{hour}{middle}/gfs.t{hour}z.pgrb2.0p25.f{step:03d}"
             return base, f"{base}.idx"
         prefix = "gec00" if member == "c00" else f"ge{member}"
-        base = (
-            f"{self.LIVE_GEFS_ROOT}/gefs.{date}/{hour}/atmos/pgrb2ap5/"
-            f"{prefix}.t{hour}z.pgrb2a.0p50.f{step:03d}"
-        )
+        naive_cycle = cycle.replace(tzinfo=None)
+        if naive_cycle >= self.GEFS_V12_START:
+            base = (
+                f"{self.LIVE_GEFS_ROOT}/gefs.{date}/{hour}/atmos/pgrb2ap5/"
+                f"{prefix}.t{hour}z.pgrb2a.0p50.f{step:03d}"
+            )
+        elif naive_cycle >= self.GEFS_FOLDER_START:
+            base = f"{self.LIVE_GEFS_ROOT}/gefs.{date}/{hour}/pgrb2a/{prefix}.t{hour}z.pgrb2af{step:02d}"
+        else:
+            base = f"{self.LIVE_GEFS_ROOT}/gefs.{date}/{hour}/{prefix}.t{hour}z.pgrb2af{step:03d}"
         return base, f"{base}.idx"
 
     def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
@@ -412,10 +430,13 @@ class NcepAdapter(BaseAdapter):
         except DownloadError:
             return False
 
-    def _member_ids(self, member_limit: int | None) -> list[str]:
+    def _member_ids(self, cycle: datetime, member_limit: int | None) -> list[str]:
         if self.definition.id == "gfs":
             return ["det"]
-        values = ["c00"] + [f"p{number:02d}" for number in range(1, 31)]
+        if self.definition.id == "gefs-control":
+            return ["c00"]
+        perturbed_members = 30 if cycle.replace(tzinfo=None) >= self.GEFS_V12_START else 20
+        values = ["c00"] + [f"p{number:02d}" for number in range(1, perturbed_members + 1)]
         if member_limit is not None:
             return values[: max(1, member_limit)]
         return values
@@ -478,7 +499,7 @@ class NcepAdapter(BaseAdapter):
                 break
         if complete_steps != [int(step) for step in steps]:
             raise DownloadError(f"{member} incomplete ({len(complete_steps)}/{len(steps)} steps): {'; '.join(errors[:2])}")
-        role = "deterministic" if member == "det" else ("control" if member == "c00" else "perturbed")
+        role = "deterministic" if self.definition.kind == "deterministic" else ("control" if member == "c00" else "perturbed")
         cumulative_precipitation = _finalise_precip(precipitation, cumulative_flags)
         tracking = track_forecast_member(
             cycle=cycle,
@@ -509,7 +530,7 @@ class NcepAdapter(BaseAdapter):
 
     def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
         cycle = self.resolve_cycle(requested, int(max(steps)))
-        members = self._member_ids(member_limit)
+        members = self._member_ids(cycle, member_limit)
         results: list[dict[str, Any]] = []
         warnings: list[str] = []
         with ThreadPoolExecutor(max_workers=min(self.workers, len(members))) as executor:
@@ -544,6 +565,11 @@ class NcepAdapter(BaseAdapter):
             precip_mean,
             warnings,
             [result["tracking_qa"] for result in results],
+            expected_members=(
+                1
+                if self.definition.id in {"gfs", "gefs-control"}
+                else 31 if cycle.replace(tzinfo=None) >= self.GEFS_V12_START else 21
+            ),
         )
 
 
@@ -776,7 +802,7 @@ class EcmwfAdapter(BaseAdapter):
 
 
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
-    if model in {"gfs", "gefs"}:
+    if model in {"gfs", "gefs", "gefs-control"}:
         return NcepAdapter(model, workers=workers, archive_root=archive_root)
     if model in {"ifs", "ifs-ens", "aifs", "aifs-ens"}:
         if archive_root:

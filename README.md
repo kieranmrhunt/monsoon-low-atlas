@@ -61,9 +61,11 @@ Repeat finalization for each field. Deploy the common directory at the `weatherB
 
 ## Forecast guidance
 
-The Forecasts tab is a lazy static client backed by compact files on the public JASMIN GWS. It ingests GFS and GEFS from NOAA's official Open Data cloud mirrors, plus IFS, IFS ENS, AIFS Single and AIFS ENS from ECMWF Open Data. Every published member is passed through the frozen v5.6 three-pressure-level detector and continuity linker; a lightweight tracker is retained only as an independent QA comparison and never supplies displayed coordinates. Six-hourly model fields are linearly interpolated onto the linker's hourly clock. Tracks fully observed within the forecast must pass the frozen v5.6 final physical-event gate. Only tracks touching initialization or the forecast horizon may scale its duration requirements, while retaining the same strong release-domain evidence requirement. All forecast labels remain provisional guidance.
+The Forecasts tab is a lazy static client backed by compact files on the public JASMIN GWS. It ingests GFS and GEFS from NOAA's official Open Data cloud mirrors, plus IFS, IFS ENS, AIFS Single and AIFS ENS from ECMWF Open Data. Users can compare any combination of model tracks on one pannable/zoomable map; weather remains an explicit single-model source so fields from unlike grids or ensembles are never blended accidentally. Every published member is passed through the frozen v5.6 three-pressure-level detector and continuity linker; a lightweight tracker is retained only as an independent QA comparison and never supplies displayed coordinates. Six-hourly model fields are linearly interpolated onto the linker's hourly clock. Tracks fully observed within the forecast must pass the frozen v5.6 final physical-event gate. Only tracks touching initialization or the forecast horizon may scale its duration requirements, while retaining the same strong release-domain evidence requirement. All forecast labels remain provisional guidance.
 
-Latest files include positive 850-hPa relative vorticity and trailing-24-hour precipitation on a common 1-degree grid. Ensemble weather is the arithmetic member mean, while individual member tracks remain available. Searchable archive files omit weather and internal tracking QA, and attach a dashed ERA5 v5.6 verification track where the catalogue overlaps by at least six hours and passes the documented distance limits. Superseded gridded files are removed after the manifest changes atomically; the compact track archive is retained.
+Latest files include positive 850-hPa relative vorticity and trailing-24-hour precipitation on a common 1-degree grid. Ensemble weather is the arithmetic member mean, while individual member tracks remain available. Full weather-capable payloads are retained for every six-hourly initialization in a rolling 48-hour window and exposed through the initialization dropdown. Searchable archive files omit weather and internal tracking QA, and attach a dashed ERA5 v5.6 verification track where the catalogue overlaps by at least six hours and passes the documented distance limits. Each compact archive cycle certifies that it retains the complete +0 to +120-hour valid-time axis, every track published by the detector/linker, and zero-disturbance cycles. Cycle-specific operational model-generation labels come from documented NOAA and ECMWF implementation dates rather than being inferred from filenames.
+
+The historical backfill begins with NOAA's directly downloadable GEFS record on 1 January 2017. To keep the older product computationally and semantically honest, the 2017–25 February 2021 segment is explicitly labelled **GEFS control**, not the full ensemble; deterministic GFS takes over from the first cloud-archive cycle on 26 February 2021. The plan samples an initialization 24 hours before each ERA5 v5.6 event and then every 48 hours through that event, collapsing duplicate cycles. This makes the archive event-spanning without pretending that unprocessed six-hourly initializations are present. The manifest records the selection policy, model transition, planned count, completed count and any missing cycles.
 
 Run an update interactively with:
 
@@ -83,6 +85,12 @@ Fast local contract tests are independent of the network:
 
 ```bash
 python -m unittest forecast_pipeline.test_pipeline
+```
+
+To seed or repair the rolling initialization window and historical archive in parallel on Slurm:
+
+```bash
+bash scripts/submit_forecast_backfills.sh
 ```
 
 ## Storm-centred composite archive

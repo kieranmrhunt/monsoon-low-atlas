@@ -8,7 +8,7 @@ import gzip
 import stat
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -24,11 +24,15 @@ from forecast_pipeline.forecast_core import (
 )
 from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
+    NcepAdapter,
     _fetch_record,
     parse_ecmwf_index,
     parse_ncep_index,
 )
+from forecast_pipeline.archive import archive_payload
+from forecast_pipeline.update import replace_recent_entry
 from forecast_pipeline.v56_tracking import _longest_true_run
+from forecast_pipeline.versions import model_version
 
 
 class RecordingClient:
@@ -38,6 +42,11 @@ class RecordingClient:
     def get(self, url: str, *, byte_range: tuple[int, int | None] | None = None) -> bytes:
         self.calls.append((url, byte_range))
         return b"GRIB"
+
+
+class StubVerifier:
+    def verification(self, payload):
+        return {"status": "no_match", "tracks": [], "matches": []}
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
@@ -65,6 +74,23 @@ class ForecastPipelineContractTests(unittest.TestCase):
             definition = MODEL_DEFINITIONS[model]
             self.assertEqual(definition.source_name, "NOAA Open Data cloud mirror")
             self.assertIn("registry.opendata.aws", definition.source_url)
+
+    def test_noaa_legacy_cloud_layouts_and_ensemble_sizes(self) -> None:
+        gfs = NcepAdapter("gfs", client=RecordingClient())
+        old_gfs, unused = gfs._urls(datetime(2021, 3, 21, 12, tzinfo=UTC), 120)
+        new_gfs, unused = gfs._urls(datetime(2021, 3, 22, 12, tzinfo=UTC), 120)
+        self.assertNotIn("/atmos/", old_gfs)
+        self.assertIn("/atmos/", new_gfs)
+
+        gefs = NcepAdapter("gefs", client=RecordingClient())
+        root_layout, unused = gefs._urls(datetime(2017, 1, 1, tzinfo=UTC), 6, "c00")
+        folder_layout, unused = gefs._urls(datetime(2019, 1, 1, tzinfo=UTC), 6, "c00")
+        current_layout, unused = gefs._urls(datetime(2026, 8, 30, tzinfo=UTC), 6, "c00")
+        self.assertTrue(root_layout.endswith("pgrb2af006"))
+        self.assertTrue(folder_layout.endswith("pgrb2a/gec00.t00z.pgrb2af06"))
+        self.assertTrue(current_layout.endswith("pgrb2a.0p50.f006"))
+        self.assertEqual(len(gefs._member_ids(datetime(2019, 1, 1, tzinfo=UTC), None)), 21)
+        self.assertEqual(len(gefs._member_ids(datetime(2026, 1, 1, tzinfo=UTC), None)), 31)
 
     def test_trailing_precipitation_uses_24_hour_difference(self) -> None:
         cumulative = np.asarray([0, 3, 8, 13, 20, 31], dtype=np.float32)[:, None, None]
@@ -109,6 +135,47 @@ class ForecastPipelineContractTests(unittest.TestCase):
             atomic_write_json(target, {"schema": "test"})
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
             self.assertTrue(stat.S_IMODE(target.parent.stat().st_mode) & 0o005)
+
+    def test_recent_cycle_window_keeps_weather_cycles_for_48_hours(self) -> None:
+        def entry(hours_ago: int) -> dict[str, object]:
+            cycle = datetime(2026, 8, 30, 12, tzinfo=UTC) - timedelta(hours=hours_ago)
+            return {
+                "cycle": cycle.strftime("%Y%m%d%H"),
+                "cycle_utc": cycle.isoformat().replace("+00:00", "Z"),
+                "url": f"cycles/gfs/{cycle:%Y%m%d%H}.json.gz",
+            }
+
+        retained = replace_recent_entry([entry(54), entry(48), entry(42), entry(6)], entry(0))
+        self.assertEqual([item["cycle"] for item in retained], [entry(0)["cycle"], entry(6)["cycle"], entry(42)["cycle"], entry(48)["cycle"]])
+
+    def test_compact_archive_preserves_complete_axis_and_tracks(self) -> None:
+        payload = {
+            "schema": "mla-forecast-cycle-v1",
+            "model": {"id": "gfs", "label": "GFS"},
+            "cycle": "2026083000",
+            "cycle_utc": "2026-08-30T00:00:00Z",
+            "valid_times": ["2026-08-30T00:00:00Z", "2026-08-30T06:00:00Z"],
+            "tracks": [{"id": "a", "points": [[0, 80, 20], [1, 81, 21]]}],
+            "systems": [{"id": "s"}],
+            "weather": {"large": True},
+            "tracking_qa": [{"internal": True}],
+        }
+        archived = archive_payload(payload, StubVerifier())
+        self.assertNotIn("weather", archived)
+        self.assertNotIn("tracking_qa", archived)
+        self.assertEqual(archived["valid_times"], payload["valid_times"])
+        self.assertEqual(archived["tracks"], payload["tracks"])
+        self.assertEqual(archived["archive_coverage"]["valid_time_count"], 2)
+        self.assertEqual(archived["archive_coverage"]["published_track_point_count"], 2)
+        self.assertTrue(archived["archive_coverage"]["includes_zero_disturbance_cycles"])
+
+    def test_model_version_crosswalk_uses_cycle_boundaries(self) -> None:
+        before = model_version("gfs", datetime(2021, 3, 22, 11, tzinfo=UTC))
+        after = model_version("gfs", datetime(2021, 3, 22, 12, tzinfo=UTC))
+        current_gefs = model_version("gefs", datetime(2026, 8, 30, 0, tzinfo=UTC))
+        self.assertEqual(before["label"], "GFS v15 family")
+        self.assertEqual(after["label"], "GFS v16 family")
+        self.assertEqual(current_gefs["label"], "GEFS v12.3.20")
 
 
 if __name__ == "__main__":

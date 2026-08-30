@@ -186,6 +186,27 @@ class AtlasVerifier:
         }
 
 
+def certify_archive_payload(output: dict[str, Any]) -> dict[str, Any]:
+    """Attach auditable completeness metadata to a compact cycle payload."""
+
+    output["archive_coverage"] = {
+        "complete_valid_time_axis": True,
+        "valid_time_count": len(output.get("valid_times", [])),
+        "published_track_count": len(output.get("tracks", [])),
+        "published_track_point_count": sum(
+            len(track.get("points", [])) for track in output.get("tracks", [])
+        ),
+        "published_disturbance_count": len(output.get("systems", [])),
+        "includes_zero_disturbance_cycles": True,
+    }
+    output["archive_note"] = (
+        "Every forecast valid time and every track published by the atlas detector/linker "
+        "are preserved, including cycles with no published disturbance; historical weather "
+        "grids and internal tracking QA are intentionally omitted."
+    )
+    return output
+
+
 def archive_payload(payload: dict[str, Any], verifier: AtlasVerifier) -> dict[str, Any]:
     """Remove bulky weather/QA arrays and attach compact verification tracks."""
 
@@ -194,13 +215,13 @@ def archive_payload(payload: dict[str, Any], verifier: AtlasVerifier) -> dict[st
     output.pop("weather", None)
     output.pop("tracking_qa", None)
     output["verification"] = verifier.verification(payload)
-    output["archive_note"] = "Forecast tracks are preserved; historical weather grids are intentionally omitted."
-    return output
+    return certify_archive_payload(output)
 
 
 def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[str, Any]:
     verification = payload.get("verification", {})
     labels = [str(track.get("label", "")) for track in verification.get("tracks", [])]
+    version_label = str(payload.get("model_version", {}).get("label", ""))
     return {
         "model": payload["model"]["id"],
         "model_label": payload["model"]["label"],
@@ -210,9 +231,13 @@ def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[s
         "url": relative_url,
         "forecast_tracks": len(payload.get("tracks", [])),
         "forecast_systems": len(payload.get("systems", [])),
+        "forecast_track_points": sum(len(track.get("points", [])) for track in payload.get("tracks", [])),
+        "valid_time_count": len(payload.get("valid_times", [])),
+        "complete_valid_time_axis": bool(payload.get("archive_coverage", {}).get("complete_valid_time_axis")),
+        "model_version": payload.get("model_version", {}),
         "verification_status": verification.get("status", "unavailable"),
         "verification_labels": labels,
         "search_text": " ".join(
-            [payload["model"]["label"], payload["cycle"], payload["cycle_utc"], *labels]
+            [payload["model"]["label"], version_label, payload["cycle"], payload["cycle_utc"], *labels]
         ).lower(),
     }

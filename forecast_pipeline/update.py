@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
 LOGGER = logging.getLogger("mla.forecast.update")
 NCEI_ARCHIVE_ROOT = "https://www.ncei.noaa.gov/oa/prod-model"
 NOAA_AWS_ARCHIVE_ROOT = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+RECENT_WINDOW_HOURS = 48
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +47,7 @@ def read_manifest(path: Path) -> dict[str, Any]:
         return {
             "schema": "mla-forecast-manifest-v1",
             "latest": {},
+            "recent": {},
             "archive": [],
             "attempts": {},
         }
@@ -74,6 +77,7 @@ def latest_entry(payload: dict[str, Any], relative_url: str) -> dict[str, Any]:
         "members_available": payload["members"]["available"],
         "members_expected": payload["members"]["expected"],
         "qa_status": payload["qa"]["status"],
+        "model_version": payload.get("model_version", {}),
     }
 
 
@@ -84,6 +88,20 @@ def replace_archive_entry(entries: list[dict[str, Any]], new: dict[str, Any]) ->
     ]
     filtered.append(new)
     return sorted(filtered, key=lambda item: (str(item.get("cycle", "")), str(item.get("model", ""))), reverse=True)
+
+
+def replace_recent_entry(entries: list[dict[str, Any]], new: dict[str, Any]) -> list[dict[str, Any]]:
+    """Retain full weather-capable cycles within 48 hours of the newest run."""
+
+    combined = [item for item in entries if str(item.get("cycle", "")) != str(new["cycle"])] + [new]
+    combined.sort(key=lambda item: str(item.get("cycle", "")), reverse=True)
+    newest = datetime.fromisoformat(str(combined[0]["cycle_utc"]).replace("Z", "+00:00"))
+    retained = []
+    for item in combined:
+        cycle = datetime.fromisoformat(str(item["cycle_utc"]).replace("Z", "+00:00"))
+        if (newest - cycle).total_seconds() <= RECENT_WINDOW_HOURS * 3600:
+            retained.append(item)
+    return retained
 
 
 def main() -> int:
@@ -136,9 +154,12 @@ def main() -> int:
             archived = archive_payload(payload, verifier)
             atomic_write_json_gz(args.output_root / archive_relative, archived)
             if not args.archive_only:
+                current_entry = latest_entry(payload, cycle_relative)
                 previous = manifest.setdefault("latest", {}).get(model)
                 if previous is None or str(previous.get("cycle", "")) <= cycle:
-                    manifest["latest"][model] = latest_entry(payload, cycle_relative)
+                    manifest["latest"][model] = current_entry
+                recent = manifest.setdefault("recent", {}).setdefault(model, [])
+                manifest["recent"][model] = replace_recent_entry(recent, current_entry)
             manifest["archive"] = replace_archive_entry(
                 manifest.setdefault("archive", []),
                 archive_manifest_entry(archived, archive_relative),
@@ -175,7 +196,7 @@ def main() -> int:
         "run_started_utc": iso_z(started),
         "schedule": "six-hourly",
         "forecast_horizon_hours": args.horizon,
-        "weather_archive_policy": "latest cycle files include grids; searchable archive files retain tracks and ERA5 verification only",
+        "weather_archive_policy": "latest and rolling 48-hour cycle files include grids; the long searchable archive retains every valid time and full published tracks but omits weather and internal QA",
         "catalogue_verification": {
             "version": verifier.catalogue_version,
             "coverage_start": verifier.coverage_start,
@@ -199,16 +220,20 @@ def main() -> int:
     })
     atomic_write_json(manifest_path, manifest)
     if not args.archive_only:
-        # Weather grids are intentionally a latest-cycle product. Historical
-        # searches use the compact archive payloads, so discard superseded grid
-        # bundles only after the manifest safely points at their replacement.
+        # Keep a rolling 48-hour weather-capable comparison window. Long-term
+        # searches use compact archive payloads, so discard older grid bundles
+        # only after the manifest safely points at the retained cycles.
         for model, entry in manifest.get("latest", {}).items():
             cycle_dir = args.output_root / "cycles" / model
-            keep = cycle_dir / Path(str(entry.get("url", ""))).name
+            keep = {
+                cycle_dir / Path(str(item.get("url", ""))).name
+                for item in manifest.get("recent", {}).get(model, [])
+            }
+            keep.add(cycle_dir / Path(str(entry.get("url", ""))).name)
             if not cycle_dir.is_dir():
                 continue
             for candidate in cycle_dir.glob("*.json.gz"):
-                if candidate != keep:
+                if candidate not in keep:
                     candidate.unlink()
     LOGGER.info("Manifest written to %s (%d/%d models succeeded)", manifest_path, successes, len(requested_models))
     return 0 if successes else 1
