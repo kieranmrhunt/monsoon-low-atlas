@@ -316,11 +316,15 @@
 			if (Number.isFinite(stamp)) times.add(stamp);
 		}
 		state.timelineTimes = [...times].sort((a, b) => a - b);
-		if (previous != null && state.timelineTimes.length) {
+		if (previous != null && state.timelineTimes.length && previous >= state.timelineTimes[0] && previous <= state.timelineTimes[state.timelineTimes.length - 1]) {
 			let nearest = 0;
 			for (let index = 1; index < state.timelineTimes.length; index++) if (Math.abs(state.timelineTimes[index] - previous) < Math.abs(state.timelineTimes[nearest] - previous)) nearest = index;
 			state.leadIndex = nearest;
-		} else state.leadIndex = Math.min(state.leadIndex, Math.max(0, state.timelineTimes.length - 1));
+		} else if (state.timelineTimes.length) {
+			const sharedStart = Math.max(...displayEntries().map(item => new Date(item.payload.cycle_utc).getTime()).filter(Number.isFinite));
+			const firstShared = state.timelineTimes.findIndex(value => value >= sharedStart);
+			state.leadIndex = firstShared >= 0 ? firstShared : 0;
+		} else state.leadIndex = 0;
 		slider.min = 0;
 		slider.max = Math.max(0, state.timelineTimes.length - 1);
 		slider.value = state.leadIndex;
@@ -843,6 +847,7 @@
 		if (selected) {
 			const {model, payload, system} = selected;
 			const current = stepForPayload(payload);
+			const leadLabel = current >= 0 ? `+${current} h` : `${current} h`;
 			const stitched = stitchedTrack(payload, system, model.id);
 			const marker = pointAt(meanTrack(payload, system), current);
 			const historyHours = stitched.history.length ? Math.abs(Number(stitched.history[0][0])) : 0;
@@ -856,7 +861,7 @@
 			node.innerHTML = `<div class="mla-forecast-dossier-head"><h3>${esc(`${model.label} · ${disturbanceLabel(system)}`)}</h3>${state.selectedSystem ? '<button class="mla-btn mla-btn-small mla-btn-quiet" type="button" data-forecast-clear-system>Compare models</button>' : ''}</div>
 				<p>${versionHtml}initialized ${esc(formatUtc(payload.cycle_utc))}. ${payload.model.kind === 'ensemble' ? 'The thick line is the member-mean path.' : 'The deterministic/control path is shown.'}${stitched.history.length ? ` The pre-initialization segment joins continuity-matched ${state.mode === 'archive' ? 'available' : 'six-hourly'} t+0 centres.` : ''}</p>
 				<div class="mla-forecast-facts">
-					<div class="mla-forecast-fact"><span>Lead</span><strong>+${esc(current)} h</strong></div>
+					<div class="mla-forecast-fact"><span>Lead</span><strong>${esc(leadLabel)}</strong></div>
 					<div class="mla-forecast-fact"><span>Members</span><strong>${esc(`${system.member_count}/${payload.members.expected}`)}</strong></div>
 					<div class="mla-forecast-fact"><span>Current mean centre</span><strong>${marker ? `${Number(marker[2]).toFixed(1)}°N, ${Number(marker[1]).toFixed(1)}°E` : 'not active'}</strong></div>
 					<div class="mla-forecast-fact"><span>Prior t+0 history</span><strong>${stitched.history.length ? `${esc(stitched.history.length)} centres · ${esc(historyHours)} h` : 'no confident match'}</strong></div>
