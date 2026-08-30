@@ -60,12 +60,12 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
     "gfs": ModelDefinition(
         "gfs", "GFS", "NOAA/NCEP", "deterministic", 1,
         "NOAA Global Forecast System deterministic forecast",
-        "https://nomads.ncep.noaa.gov/", "NOAA NOMADS", "NOAA public data", "#d14b39",
+        "https://registry.opendata.aws/noaa-gfs-bdp-pds/", "NOAA Open Data cloud mirror", "NOAA public data", "#d14b39",
     ),
     "gefs": ModelDefinition(
         "gefs", "GEFS", "NOAA/NCEP", "ensemble", 31,
         "NOAA Global Ensemble Forecast System control plus 30 perturbed members",
-        "https://nomads.ncep.noaa.gov/", "NOAA NOMADS", "NOAA public data", "#e8872f",
+        "https://registry.opendata.aws/noaa-gefs/", "NOAA Open Data cloud mirror", "NOAA public data", "#e8872f",
     ),
     "ifs": ModelDefinition(
         "ifs", "IFS", "ECMWF", "deterministic", 1,
@@ -347,8 +347,8 @@ class BaseAdapter:
 
 
 class NcepAdapter(BaseAdapter):
-    LIVE_GFS_ROOT = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"
-    LIVE_GEFS_ROOT = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gens/prod"
+    LIVE_GFS_ROOT = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+    LIVE_GEFS_ROOT = "https://noaa-gefs-pds.s3.amazonaws.com"
 
     def __init__(
         self,
