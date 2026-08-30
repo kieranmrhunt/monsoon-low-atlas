@@ -20,10 +20,13 @@ fi
 
 mkdir -p "$OUTPUT" "$ATLAS_ROOT/hpc-logs"
 cd "$ATLAS_ROOT"
+# These workers primarily overlap the providers' small byte-range HTTP
+# requests. Tracking remains in this one process; eight keeps a six-hourly
+# refresh timely without multiplying Slurm allocations per ensemble member.
 exec "$PYTHON" -m forecast_pipeline.update \
   --output-root "$OUTPUT" \
   --atlas-core "$CORE" \
   --cycle latest \
   --models "$MODELS" \
   --horizon 120 \
-  --workers "${LPS_FORECAST_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
+  --workers "${LPS_FORECAST_WORKERS:-8}"

@@ -8,11 +8,12 @@ import fcntl
 import gzip
 import json
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
-from .sources import DEFAULT_MODELS
+from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS
 from .update import read_manifest, replace_archive_entry
 
 
@@ -112,10 +113,17 @@ def main() -> None:
         reference = source_manifests[0]
         for key in (
             "schema", "schedule", "forecast_horizon_hours", "weather_archive_policy",
-            "catalogue_verification", "models", "source_notes",
+            "catalogue_verification", "source_notes",
         ):
             if key in reference:
                 manifest[key] = reference[key]
+        # Provider endpoints can change independently of archived forecast
+        # cycles.  Always publish the definitions used by the currently
+        # deployed updater rather than inheriting stale labels from a seed or
+        # earlier per-model manifest.
+        manifest["models"] = [
+            asdict(MODEL_DEFINITIONS[model]) for model in DEFAULT_MODELS
+        ]
         manifest["generated_utc"] = iso_z(utc_now())
         manifest["run"] = {
             "mode": "parallel-model-merge",

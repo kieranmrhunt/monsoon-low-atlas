@@ -22,7 +22,12 @@ from forecast_pipeline.forecast_core import (
     trailing_24h,
     validate_cycle_payload,
 )
-from forecast_pipeline.sources import _fetch_record, parse_ecmwf_index, parse_ncep_index
+from forecast_pipeline.sources import (
+    MODEL_DEFINITIONS,
+    _fetch_record,
+    parse_ecmwf_index,
+    parse_ncep_index,
+)
 from forecast_pipeline.v56_tracking import _longest_true_run
 
 
@@ -54,6 +59,12 @@ class ForecastPipelineContractTests(unittest.TestCase):
         record = parse_ecmwf_index(line)[0]
         self.assertEqual((record.offset, record.length), (10, 24))
         self.assertEqual(record.attributes["number"], "7")
+
+    def test_noaa_models_disclose_the_operational_cloud_feeds(self) -> None:
+        for model in ("gfs", "gefs"):
+            definition = MODEL_DEFINITIONS[model]
+            self.assertEqual(definition.source_name, "NOAA Open Data cloud mirror")
+            self.assertIn("registry.opendata.aws", definition.source_url)
 
     def test_trailing_precipitation_uses_24_hour_difference(self) -> None:
         cumulative = np.asarray([0, 3, 8, 13, 20, 31], dtype=np.float32)[:, None, None]
