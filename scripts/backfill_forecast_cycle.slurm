@@ -39,7 +39,7 @@ cd "$ATLAS_ROOT"
   --atlas-core "$ATLAS_ROOT/assets/$CORE_NAME" \
   --cycle "$CYCLE" \
   --models "$MODEL" \
-  --horizon 120 \
+  --horizon available \
   --workers "${LPS_FORECAST_WORKERS:-8}" \
   "${ARGS[@]}"
 

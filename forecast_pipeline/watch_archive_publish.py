@@ -13,7 +13,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .forecast_core import atomic_write_json, iso_z, utc_now
+from .forecast_core import (
+    atomic_write_json,
+    iso_z,
+    manifest_entry_horizon_hours,
+    utc_now,
+)
 from .update import read_manifest
 
 
@@ -36,8 +41,8 @@ def archive_key(entry: dict[str, Any]) -> tuple[str, str]:
     return str(entry.get("model", "")), str(entry.get("cycle", ""))
 
 
-def completed_sources(run_root: Path, collection_key: str) -> dict[tuple[str, str], Path]:
-    output: dict[tuple[str, str], Path] = {}
+def completed_sources(run_root: Path, collection_key: str) -> dict[tuple[str, str], tuple[Path, int]]:
+    output: dict[tuple[str, str], tuple[Path, int]] = {}
     for path in sorted(run_root.glob("*/manifest.json")):
         root = path.parent
         try:
@@ -48,7 +53,7 @@ def completed_sources(run_root: Path, collection_key: str) -> dict[tuple[str, st
         for entry in manifest.get(collection_key, []):
             key = archive_key(entry)
             if all(key):
-                output[key] = root
+                output[key] = (root, manifest_entry_horizon_hours(entry))
     return output
 
 
@@ -57,12 +62,15 @@ def target_state(
     collection_key: str,
     manifest_key: str,
     expected_plan: tuple[str, int],
-) -> tuple[set[tuple[str, str]], str]:
+) -> tuple[dict[tuple[str, str], int], str]:
     path = target / "manifest.json"
     if not path.exists():
-        return set(), ""
+        return {}, ""
     manifest = read_manifest(path)
-    available = {archive_key(entry) for entry in manifest.get(collection_key, [])}
+    available = {
+        archive_key(entry): manifest_entry_horizon_hours(entry)
+        for entry in manifest.get(collection_key, [])
+    }
     progress = manifest.get(manifest_key, {})
     identity = (
         str(progress.get("generated_utc", "")),
@@ -95,18 +103,24 @@ def update_progress(
             return
 
         planned = {
-            (str(item.get("model", "")), str(item.get("cycle", "")))
+            (str(item.get("model", "")), str(item.get("cycle", ""))): int(item.get("horizon_hours", 0))
             for item in plan.get("cycles", [])
         }
         available = {
-            archive_key(entry) for entry in manifest.get(collection_key, [])
+            archive_key(entry): manifest_entry_horizon_hours(entry)
+            for entry in manifest.get(collection_key, [])
+        }
+        complete_keys = {
+            key
+            for key, horizon in planned.items()
+            if available.get(key, -1) >= horizon
         }
         now = iso_z(utc_now())
         manifest[manifest_key] = {
             **{key: value for key, value in plan.items() if key not in {"cycles", "pending_cycles"}},
             "status": "running",
             "planned_cycles": len(planned),
-            "available_cycles": len(planned & available),
+            "available_cycles": len(complete_keys),
             "published_utc": now,
         }
         manifest["generated_utc"] = now
@@ -144,9 +158,13 @@ def main() -> int:
         available, status = target_state(
             args.target, collection_key, args.manifest_key, expected_plan
         )
-        pending = sorted(key for key in sources if key not in available)
+        pending = sorted(
+            key
+            for key, (unused_root, horizon) in sources.items()
+            if available.get(key, -1) < horizon
+        )
         if pending:
-            roots = sorted({sources[key] for key in pending})
+            roots = sorted({sources[key][0] for key in pending})
             LOGGER.info("Publishing %d completed cycle(s) from %d staging root(s)", len(pending), len(roots))
             publish(args.target, args.collection, roots)
             update_progress(args.target, collection_key, args.manifest_key, plan)

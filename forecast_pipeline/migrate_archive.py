@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Certify existing compact archives and attach cycle-specific versions."""
+"""Certify existing public archives and attach cycle-specific versions."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def main() -> None:
                 payload = json.load(stream)
             if payload.get("schema") != "mla-forecast-archive-cycle-v1":
                 raise ValueError(f"Unexpected schema in {path}")
-            if "weather" in payload or "tracking_qa" in payload:
-                raise ValueError(f"Compact archive contains forbidden grids/QA: {path}")
+            if "tracking_qa" in payload:
+                raise ValueError(f"Public archive contains internal tracking QA: {path}")
             cycle = datetime.fromisoformat(str(payload["cycle_utc"]).replace("Z", "+00:00"))
             payload["model_version"] = model_version(str(payload["model"]["id"]), cycle)
             certify_archive_payload(payload)

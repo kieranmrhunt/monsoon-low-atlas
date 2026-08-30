@@ -9,7 +9,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .forecast_core import atomic_write_json, iso_z, utc_now
+from .forecast_core import atomic_write_json, iso_z, manifest_entry_horizon_hours, utc_now
+from .sources import available_forecast_steps
 from .update import read_manifest
 from .versions import model_version
 
@@ -69,17 +70,22 @@ def main() -> None:
             "model": "tigge-ecmwf",
             "cycle": cycle.strftime("%Y%m%d%H"),
             "cycle_utc": iso_z(cycle),
+            "horizon_hours": available_forecast_steps("tigge-ecmwf", cycle)[-1],
             "model_version": model_version("tigge-ecmwf", cycle),
         }
         for cycle in sorted(cycles)
     ]
-    available: set[str] = set()
+    available: dict[str, int] = {}
     if args.manifest and args.manifest.exists():
         manifest = read_manifest(args.manifest)
         available = {
-            f"{item.get('model')}:{item.get('cycle')}" for item in manifest.get("tigge_archive", [])
+            f"{item.get('model')}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
+            for item in manifest.get("tigge_archive", [])
         }
-    pending = [item for item in desired if f"{item['model']}:{item['cycle']}" not in available]
+    pending = [
+        item for item in desired
+        if available.get(f"{item['model']}:{item['cycle']}", -1) < int(item["horizon_hours"])
+    ]
     plan = {
         "schema": "mla-forecast-tigge-plan-v1",
         "manifest_key": "tigge_backfill",
@@ -90,7 +96,7 @@ def main() -> None:
         "requested_start_utc": iso_z(min(cycles)) if cycles else None,
         "requested_end_utc": iso_z(max(cycles)) if cycles else None,
         "selection_policy": selection_policy,
-        "cycle_payload_policy": "control plus all available perturbed members; all 21 six-hourly valid times from +0 to +120 h and every track published by the frozen atlas detector/linker",
+        "cycle_payload_policy": "control plus all available perturbed members; every six-hourly valid time from +0 to +360 h and every track published by the frozen atlas detector/linker",
         "desired_cycles": len(desired),
         "cycles": desired,
         "pending_cycles": pending,

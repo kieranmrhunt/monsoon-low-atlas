@@ -9,7 +9,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .forecast_core import atomic_write_json, iso_z, utc_now
+from .forecast_core import atomic_write_json, iso_z, manifest_entry_horizon_hours, utc_now
+from .sources import available_forecast_steps
 from .update import read_manifest
 from .versions import model_version
 
@@ -59,17 +60,22 @@ def main() -> None:
             "model": model,
             "cycle": value.strftime("%Y%m%d%H"),
             "cycle_utc": iso_z(value),
+            "horizon_hours": available_forecast_steps(model, value)[-1],
             "model_version": model_version(model, value),
         }
         for model, value in sorted(cycles, key=lambda item: (item[1], item[0]))
     ]
-    available: set[str] = set()
+    available: dict[str, int] = {}
     if args.manifest and args.manifest.exists():
         manifest = read_manifest(args.manifest)
         available = {
-            f"{item.get('model')}:{item.get('cycle')}" for item in manifest.get("archive", [])
+            f"{item.get('model')}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
+            for item in manifest.get("archive", [])
         }
-    pending = [item for item in desired if f"{item['model']}:{item['cycle']}" not in available]
+    pending = [
+        item for item in desired
+        if available.get(f"{item['model']}:{item['cycle']}", -1) < int(item["horizon_hours"])
+    ]
     plan = {
         "schema": "mla-forecast-archive-plan-v1",
         "generated_utc": iso_z(utc_now()),
@@ -80,7 +86,7 @@ def main() -> None:
         "catalogue_version": str(core["meta"].get("catalogue_version", "v5.6")),
         "catalogue_coverage_end": iso_z(coverage_end),
         "selection_policy": f"initialization 24 h before each ERA5 event, then every {args.spacing_hours} h through its published lifetime; duplicate cycles collapsed; GEFS control through 25 February 2021 and deterministic GFS thereafter",
-        "cycle_payload_policy": "all 21 six-hourly valid times from +0 to +120 h and every track published by the frozen atlas detector/linker, including zero-disturbance cycles",
+        "cycle_payload_policy": "every available six-hourly valid time through +384 h and every track published by the frozen atlas detector/linker, including zero-disturbance cycles",
         "eligible_catalogue_tracks": eligible_tracks,
         "desired_cycles": len(desired),
         "already_available_cycles": len(desired) - len(pending),

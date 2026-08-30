@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge validated compact forecast archives without copying weather grids."""
+"""Merge validated public forecast archive cycles."""
 
 from __future__ import annotations
 
@@ -10,7 +10,13 @@ import json
 import shutil
 from pathlib import Path
 
-from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
+from .forecast_core import (
+    atomic_write_json,
+    atomic_write_json_gz,
+    iso_z,
+    manifest_entry_horizon_hours,
+    utc_now,
+)
 from .update import read_manifest, replace_archive_entry
 
 
@@ -55,9 +61,11 @@ def main() -> None:
                 with gzip.open(source_root / relative, "rt", encoding="utf-8") as stream:
                     payload = json.load(stream)
                 if payload.get("schema") != "mla-forecast-archive-cycle-v1":
-                    raise ValueError(f"{source_root / relative} is not a compact archive cycle")
-                if "weather" in payload or "tracking_qa" in payload:
-                    raise ValueError(f"{source_root / relative} contains fields forbidden from the archive")
+                    raise ValueError(f"{source_root / relative} is not a public archive cycle")
+                if "tracking_qa" in payload:
+                    raise ValueError(f"{source_root / relative} contains internal tracking QA")
+                if args.collection == "tigge" and "weather" in payload:
+                    raise ValueError(f"{source_root / relative} contains weather forbidden from TIGGE")
                 if not payload.get("archive_coverage", {}).get("complete_valid_time_axis"):
                     raise ValueError(f"{source_root / relative} does not certify its complete valid-time axis")
                 atomic_write_json_gz(args.target / relative, payload)
@@ -65,35 +73,55 @@ def main() -> None:
                 merged.append(f"{entry['model']}:{entry['cycle']}")
 
         for key in (
-            "schema", "schedule", "forecast_horizon_hours", "weather_archive_policy",
+            "schema", "schedule", "weather_archive_policy", "forecast_horizon_policy",
             "catalogue_verification", "models", "source_notes",
         ):
-            if key not in manifest and key in source_manifests[0]:
+            if key in source_manifests[0]:
                 manifest[key] = source_manifests[0][key]
         manifest["generated_utc"] = iso_z(utc_now())
+        horizon_groups: dict[str, set[int]] = {}
+        for entry in manifest.get(collection_key, []):
+            horizon_groups.setdefault(str(entry.get("model", "")), set()).add(
+                manifest_entry_horizon_hours(entry)
+            )
+        manifest[f"{collection_key}_horizons_hours"] = {
+            model: sorted(values) for model, values in sorted(horizon_groups.items()) if model
+        }
         seed_key = "tigge_seed" if args.collection == "tigge" else "archive_seed"
         previous_cases = manifest.get(seed_key, {}).get("cases", [])
         manifest[seed_key] = {
             "merged_utc": manifest["generated_utc"],
             "cases": sorted(set(previous_cases) | set(merged)),
-            "policy": "complete valid-time axes and all published tracks; weather and internal QA omitted",
+            "policy": (
+                "complete valid-time axes, all published tracks and ensemble-mean weather; internal QA omitted"
+                if args.collection == "archive"
+                else "complete valid-time axes and all published tracks; weather and internal QA omitted"
+            ),
         }
         complete = True
         if args.plan:
             plan = json.loads(args.plan.read_text(encoding="utf-8"))
-            planned = {f"{item['model']}:{item['cycle']}" for item in plan["cycles"]}
+            planned = {
+                f"{item['model']}:{item['cycle']}": int(item.get("horizon_hours", 0))
+                for item in plan["cycles"]
+            }
             available = {
-                f"{item.get('model')}:{item.get('cycle')}"
+                f"{item.get('model')}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
                 for item in manifest.get(collection_key, [])
             }
-            missing = sorted(planned - available)
+            complete_keys = {
+                key
+                for key, horizon in planned.items()
+                if available.get(key, -1) >= horizon
+            }
+            missing = sorted(set(planned) - complete_keys)
             complete = not missing
             manifest_key = str(plan.get("manifest_key", "archive_backfill"))
             manifest[manifest_key] = {
                 **{key: value for key, value in plan.items() if key not in {"cycles", "pending_cycles"}},
                 "status": "complete" if complete else "incomplete",
                 "planned_cycles": len(planned),
-                "available_cycles": len(planned & available),
+                "available_cycles": len(complete_keys),
                 "missing_cycles": missing,
                 "merged_utc": manifest["generated_utc"],
             }

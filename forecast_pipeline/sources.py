@@ -48,6 +48,23 @@ LOGGER = logging.getLogger("mla.forecast.sources")
 USER_AGENT = "monsoon-low-atlas-forecast/1.0 (+https://kieranmrhunt.github.io/monsoon-low-atlas/)"
 
 
+def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
+    """Return every six-hourly lead supplied by the selected forecast stream."""
+
+    value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+    if model in {"gfs", "gefs", "gefs-control"}:
+        horizon = 384
+    elif model in {"ifs", "ifs-ens"}:
+        horizon = 360 if value.hour in {0, 12} else 144
+    elif model in {"aifs", "aifs-ens", "tigge-ecmwf"}:
+        horizon = 360
+    elif model == "ukmo-global":
+        horizon = 144
+    else:
+        raise ValueError(f"No available-lead policy is defined for {model}")
+    return list(range(0, horizon + 1, 6))
+
+
 @dataclass(frozen=True)
 class ModelDefinition:
     id: str
@@ -285,6 +302,20 @@ class BaseAdapter:
     def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
         raise NotImplementedError
 
+    def resolve_available_cycle(self, requested: str) -> tuple[datetime, list[int]]:
+        """Resolve the newest cycle and retain its complete provider lead axis."""
+
+        if requested != "latest":
+            value = parse_cycle(requested)
+            steps = available_forecast_steps(self.definition.id, value)
+            resolved = self.resolve_cycle(requested, int(steps[-1]))
+            return resolved, steps
+        for value in candidate_cycles(limit=8):
+            steps = available_forecast_steps(self.definition.id, value)
+            if self.cycle_complete(value, int(steps[-1])):
+                return value, steps
+        raise DownloadError(f"No recent {self.definition.label} cycle has its complete provider lead axis")
+
     def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -320,6 +351,7 @@ class BaseAdapter:
             "valid_times": [iso_z(cycle + timedelta(hours=int(step))) for step in steps],
             "horizon_hours": int(max(steps)),
             "temporal_resolution_hours": 6,
+            "provider_maximum_available_lead": [int(step) for step in steps] == available_forecast_steps(definition.id, cycle),
             "grid": grid_metadata(),
             "members": {
                 "available": len(member_ids),
@@ -353,7 +385,7 @@ class BaseAdapter:
                     "10-m wind",
                     "850/700/500-hPa steering wind",
                 ],
-                "native_to_linker_time": "continuous fields linearly interpolated from six-hourly forecast output to the hourly linker clock",
+                "native_to_linker_time": "continuous fields linearly interpolated from the complete six-hourly provider output to the hourly linker clock",
                 "spatial_derivatives": "relative vorticity is derived from winds after every provider is resampled to the common 1-degree atlas grid",
                 "minimum_published_support_hours": 18,
                 "forecast_physical_gate": "full frozen v5.6 physical-event gate when the forecast observes a complete 72-hour span, including physical continuity and release-domain support",

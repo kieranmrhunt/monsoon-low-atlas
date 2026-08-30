@@ -16,7 +16,7 @@ from typing import Any
 
 from .analysis_history import analysis_entry, replace_analysis_entry
 from .archive import AtlasVerifier, archive_manifest_entry, archive_payload
-from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
+from .forecast_core import atomic_write_json, atomic_write_json_gz, cycle_id, iso_z, utc_now
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
 
 
@@ -32,7 +32,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--atlas-core", type=Path, required=True)
     parser.add_argument("--cycle", default="latest", help="latest or YYYYMMDDHH")
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS))
-    parser.add_argument("--horizon", type=int, default=120)
+    parser.add_argument(
+        "--horizon",
+        default="available",
+        help="provider maximum available lead, or an explicit multiple of six",
+    )
     parser.add_argument("--members", type=int, help="development-only member cap")
     parser.add_argument("--workers", type=int, default=20)
     archive_group = parser.add_mutually_exclusive_group()
@@ -43,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         "--archive-collection",
         choices=("archive", "tigge"),
         default="archive",
-        help="write compact cycles to the operational archive or the separate TIGGE collection",
+        help="write cycles to the operational archive or the separate TIGGE collection",
     )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
@@ -119,9 +123,12 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s | %(levelname)-7s | %(message)s",
     )
-    if args.horizon < 24 or args.horizon % 6:
-        raise ValueError("horizon must be a multiple of six and at least 24 hours")
-    steps = list(range(0, args.horizon + 1, 6))
+    horizon_mode = str(args.horizon).strip().lower()
+    explicit_horizon: int | None = None
+    if horizon_mode != "available":
+        explicit_horizon = int(horizon_mode)
+        if explicit_horizon < 24 or explicit_horizon % 6:
+            raise ValueError("horizon must be 'available' or a multiple of six of at least 24 hours")
     requested_models = model_ids(args.models)
     if (args.ncei_archive or args.noaa_aws_archive) and requested_models != ["gfs"]:
         raise ValueError("the public NOAA archive routes currently support only --models gfs")
@@ -144,9 +151,9 @@ def main() -> int:
     verifier = AtlasVerifier(args.atlas_core)
     started = utc_now()
     successes = 0
+    successful_horizons: dict[str, int] = {}
     for model in requested_models:
         definition = MODEL_DEFINITIONS[model]
-        LOGGER.info("Building %s cycle=%s horizon=+%d h", definition.label, args.cycle, args.horizon)
         try:
             adapter = adapter_for(
                 model,
@@ -157,7 +164,20 @@ def main() -> int:
                     else NOAA_AWS_ARCHIVE_ROOT if args.noaa_aws_archive else None
                 ),
             )
-            payload = adapter.build(args.cycle, steps, member_limit=args.members)
+            if explicit_horizon is None:
+                resolved_cycle, steps = adapter.resolve_available_cycle(args.cycle)
+                build_cycle = cycle_id(resolved_cycle)
+            else:
+                steps = list(range(0, explicit_horizon + 1, 6))
+                build_cycle = args.cycle
+            LOGGER.info(
+                "Building %s cycle=%s resolved=%s horizon=+%d h",
+                definition.label,
+                args.cycle,
+                build_cycle,
+                int(steps[-1]),
+            )
+            payload = adapter.build(build_cycle, steps, member_limit=args.members)
             cycle = str(payload["cycle"])
             cycle_relative = f"cycles/{model}/{cycle}.json.gz"
             archive_relative = (
@@ -166,7 +186,11 @@ def main() -> int:
                 else f"archive/{model}/{cycle}.json.gz"
             )
             atomic_write_json_gz(args.output_root / cycle_relative, payload)
-            archived = archive_payload(payload, verifier)
+            archived = archive_payload(
+                payload,
+                verifier,
+                include_weather=args.archive_collection != "tigge",
+            )
             atomic_write_json_gz(args.output_root / archive_relative, archived)
             if not args.archive_only:
                 current_entry = latest_entry(payload, cycle_relative)
@@ -188,9 +212,10 @@ def main() -> int:
                 "status": "success",
                 "attempted_utc": iso_z(utc_now()),
                 "cycle": cycle,
-                "message": "cycle assets and compact archive written",
+                "message": "cycle assets and public archive written",
             }
             successes += 1
+            successful_horizons[model] = int(payload["horizon_hours"])
             LOGGER.info(
                 "%s %s complete: tracks=%d systems=%d members=%d/%d verification=%s",
                 definition.label,
@@ -215,8 +240,18 @@ def main() -> int:
         "generated_utc": iso_z(utc_now()),
         "run_started_utc": iso_z(started),
         "schedule": "six-hourly",
-        "forecast_horizon_hours": args.horizon,
-        "weather_archive_policy": "latest and rolling 48-hour cycle files include grids; the long searchable archive retains every valid time and full published tracks but omits weather and internal QA",
+        "forecast_horizon_hours": (
+            max(successful_horizons.values())
+            if successful_horizons
+            else explicit_horizon
+        ),
+        "forecast_horizons_hours": successful_horizons,
+        "forecast_horizon_policy": (
+            "complete provider/model lead axis"
+            if explicit_horizon is None
+            else f"explicit +{explicit_horizon} h"
+        ),
+        "weather_archive_policy": "latest, rolling 48-hour cycles and the operational archive include ensemble-mean vorticity and trailing-24-hour precipitation; TIGGE omits weather; all public archives omit internal tracking QA",
         "analysis_stitch_policy": "displayed history uses continuity-matched t+0 centres from the same model and operational version; live history retains 14 days and archive history uses the processed archive cadence",
         "catalogue_verification": {
             "version": verifier.catalogue_version,
@@ -241,9 +276,9 @@ def main() -> int:
     })
     atomic_write_json(manifest_path, manifest)
     if not args.archive_only:
-        # Keep a rolling 48-hour weather-capable comparison window. Long-term
-        # searches use compact archive payloads, so discard older grid bundles
-        # only after the manifest safely points at the retained cycles.
+        # Keep a rolling 48-hour comparison window in the full-cycle namespace.
+        # Long-term operational searches retain weather in their archive assets,
+        # so discard older duplicate cycle bundles only after the manifest is safe.
         for model, entry in manifest.get("latest", {}).items():
             cycle_dir = args.output_root / "cycles" / model
             keep = {

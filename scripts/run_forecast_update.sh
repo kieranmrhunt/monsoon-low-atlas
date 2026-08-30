@@ -28,5 +28,5 @@ exec "$PYTHON" -m forecast_pipeline.update \
   --atlas-core "$CORE" \
   --cycle latest \
   --models "$MODELS" \
-  --horizon 120 \
+  --horizon available \
   --workers "${LPS_FORECAST_WORKERS:-8}"

@@ -7,8 +7,8 @@ import argparse
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .forecast_core import atomic_write_json, iso_z, utc_now
-from .sources import BadcUkmoAdapter
+from .forecast_core import atomic_write_json, iso_z, manifest_entry_horizon_hours, utc_now
+from .sources import BadcUkmoAdapter, available_forecast_steps
 from .update import read_manifest
 from .versions import model_version
 
@@ -25,7 +25,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=BadcUkmoAdapter.DEFAULT_ROOT)
     parser.add_argument("--start", default=DEFAULT_START.strftime("%Y%m%d%H"))
     parser.add_argument("--end", default=DEFAULT_END.strftime("%Y%m%d%H"))
-    parser.add_argument("--horizon", type=int, default=120)
     return parser.parse_args()
 
 
@@ -36,6 +35,7 @@ def main() -> None:
     if start > end or start.hour not in {0, 12} or end.hour not in {0, 12}:
         raise ValueError("start/end must be ordered 00/12 UTC cycles")
     adapter = BadcUkmoAdapter(root=args.root)
+    horizon = available_forecast_steps("ukmo-global", start)[-1]
     candidates = []
     missing_source_cycles = []
     cycle = start
@@ -44,21 +44,26 @@ def main() -> None:
             "model": "ukmo-global",
             "cycle": cycle.strftime("%Y%m%d%H"),
             "cycle_utc": iso_z(cycle),
+            "horizon_hours": horizon,
             "model_version": model_version("ukmo-global", cycle),
         }
-        if adapter.cycle_complete(cycle, args.horizon):
+        if adapter.cycle_complete(cycle, horizon):
             candidates.append(item)
         else:
             missing_source_cycles.append(item["cycle"])
         cycle += timedelta(hours=12)
 
-    available: set[str] = set()
+    available: dict[str, int] = {}
     if args.manifest and args.manifest.exists():
         manifest = read_manifest(args.manifest)
         available = {
-            f"{item.get('model')}:{item.get('cycle')}" for item in manifest.get("archive", [])
+            f"{item.get('model')}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
+            for item in manifest.get("archive", [])
         }
-    pending = [item for item in candidates if f"{item['model']}:{item['cycle']}" not in available]
+    pending = [
+        item for item in candidates
+        if available.get(f"{item['model']}:{item['cycle']}", -1) < int(item["horizon_hours"])
+    ]
     plan = {
         "schema": "mla-forecast-badc-archive-plan-v1",
         "manifest_key": "archive_backfill_badc_ukmo",
@@ -68,7 +73,7 @@ def main() -> None:
         "source_start_utc": iso_z(start),
         "source_end_utc": iso_z(end),
         "selection_policy": "every complete 00 and 12 UTC Met Office Global initialization in the audited 2016 BADC GRIB interval",
-        "cycle_payload_policy": "all 21 six-hourly valid times from +0 to +120 h and every track published by the frozen atlas detector/linker, including zero-disturbance cycles",
+        "cycle_payload_policy": "all 25 six-hourly valid times from +0 to +144 h and every track published by the frozen atlas detector/linker, including zero-disturbance cycles",
         "candidate_cycles": int((end - start).total_seconds() // (12 * 3600)) + 1,
         "source_complete_cycles": len(candidates),
         "source_missing_cycle_count": len(missing_source_cycles),

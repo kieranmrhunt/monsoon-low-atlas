@@ -473,10 +473,9 @@
 
 .mla-forecast-modebar { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
 .mla-forecast-modebar .mla-btn[aria-pressed="true"] { background: var(--mla-indigo-deep); border-color: var(--mla-indigo-deep); color: #fffdf6 !important; }
-.mla-forecast-availability { display: grid; gap: 8px; margin-bottom: 12px; padding: 11px 12px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-well); }
-.mla-forecast-availability-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.mla-forecast-availability-head strong { font-weight: 550; }
-.mla-forecast-availability-head span { color: var(--mla-muted); font-size: 12px; }
+.mla-forecast-availability { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-well); }
+.mla-forecast-availability summary { cursor: pointer; color: var(--mla-muted); font-size: 12px; font-weight: 550; }
+.mla-forecast-availability[open] summary { margin-bottom: 8px; }
 .mla-forecast-coverage-models { display: flex; flex-wrap: wrap; gap: 6px; }
 .mla-forecast-coverage-model { display: inline-flex; gap: 5px; align-items: baseline; padding: 4px 7px; border: 1px solid var(--mla-line); border-radius: 999px; background: var(--mla-card); font-size: 11px; color: var(--mla-muted); }
 .mla-forecast-coverage-model strong { color: var(--mla-ink); font-size: 11px; }
@@ -499,7 +498,7 @@
 .mla-forecast-model-choice input:checked + i { background: var(--model-colour); box-shadow: 0 0 0 2px var(--mla-card) inset; }
 .mla-forecast-model-choice input:focus-visible + i { outline: 2px solid var(--mla-ink); outline-offset: 3px; }
 .mla-forecast-options { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; align-items: end; margin-top: 10px; }
-.mla-forecast-archive-controls { display: grid; grid-template-columns: minmax(230px, 1.5fr) minmax(150px, .65fr) minmax(125px, .45fr); gap: 9px; padding: 12px; border-bottom: 1px solid var(--mla-line); }
+.mla-forecast-archive-controls { display: grid; grid-template-columns: minmax(230px, 1.5fr) minmax(150px, .65fr) minmax(125px, .45fr) minmax(155px, .7fr) minmax(190px, .9fr); gap: 9px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card); }
 #mlaForecastArchiveMembersLabel { grid-column: 1 / -1; justify-self: start; }
 .mla-forecast-archive-sidebar { grid-area: selector; position: sticky; top: 72px; max-height: min(78vh, 760px); overflow-y: auto; padding: 12px; scrollbar-width: thin; }
 .mla-forecast-archive-results { display: grid; gap: 9px; min-height: 34px; }
@@ -548,8 +547,12 @@
 .mla-forecast-time { min-width: 174px; text-align: right; font-variant-numeric: tabular-nums; }
 .mla-forecast-map-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 12px 11px; color: var(--mla-muted); font-size: 12px; }
 .mla-forecast-key { display: inline-flex; align-items: center; gap: 6px; }
+.mla-forecast-run-key { display: flex; flex: 1 0 100%; flex-wrap: wrap; gap: 6px 12px; padding-top: 8px; border-top: 1px solid var(--mla-line); }
+.mla-forecast-run-key[hidden] { display: none; }
+.mla-forecast-run-key span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
+.mla-forecast-run-key i { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--run-colour); border-radius: 999px; }
 .mla-forecast-key-ramp { width: 120px; height: 10px; border-radius: 999px; background: linear-gradient(90deg, transparent, #54bce4, #75cd6e, #ffd34d, #f4713d, #8f2938); }
-.mla-forecast-era5-key i { display: inline-block; width: 30px; height: 0; border-top: 2px dashed var(--mla-ink); }
+.mla-forecast-era5-key i { display: inline-block; width: 30px; height: 0; border-top: 2px solid #000; }
 
 @media (max-width: 1180px) {
 	.mla-filter-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -561,7 +564,7 @@
 	.mla-dossier .mla-dossier-actions,
 	.mla-dossier .mla-match-box { grid-column: 1 / -1; }
 	.mla-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-	.mla-forecast-layout { grid-template-columns: 1fr; grid-template-areas: "selector" "map"; }
+	.mla-forecast-layout { grid-template-columns: 1fr; grid-template-areas: "map" "selector"; }
 	.mla-forecast-layout[data-mode="latest"] { grid-template-areas: "map"; }
 	.mla-forecast-archive-sidebar { position: static; max-height: none; }
 }
@@ -811,25 +814,26 @@
 				<button class="mla-btn mla-btn-small" id="mlaForecastModeTigge" type="button" aria-pressed="false">TIGGE ensembles</button>
 			</div>
 			<div class="mla-forecast-notice" id="mlaForecastNotice" role="status" aria-live="polite"><span>Open this tab to load forecast guidance.</span><button class="mla-btn mla-btn-small" id="mlaForecastRetry" type="button" hidden>Retry</button></div>
-			<div class="mla-forecast-availability" id="mlaForecastAvailability" aria-label="Forecast archive availability" hidden></div>
+			<div class="mla-forecast-archive-controls" id="mlaForecastArchiveControls" hidden>
+				<label class="mla-field" for="mlaForecastArchiveSearch"><span class="mla-label" id="mlaForecastArchiveSearchLabel">Storm or valid time</span><input class="mla-control" id="mlaForecastArchiveSearch" type="search" placeholder="Hamoon, 2023-10-21 00 or 2023102100"></label>
+				<label class="mla-field" for="mlaForecastArchiveDate"><span class="mla-label">Valid date</span><input class="mla-control" id="mlaForecastArchiveDate" type="date"></label>
+				<label class="mla-field" for="mlaForecastArchiveHour"><span class="mla-label">Valid hour (UTC)</span><select class="mla-select" id="mlaForecastArchiveHour"><option value="00">00 UTC</option><option value="06">06 UTC</option><option value="12">12 UTC</option><option value="18">18 UTC</option></select></label>
+				<label class="mla-field" id="mlaForecastArchiveWeatherField" for="mlaForecastArchiveWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastArchiveWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
+				<label class="mla-field" id="mlaForecastArchiveWeatherSourceField" for="mlaForecastArchiveWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastArchiveWeatherModel"><option value="">Select a run below</option></select></label>
+				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show individual ensemble members</label>
+			</div>
 			<div class="mla-forecast-layout" id="mlaForecastLayout" data-mode="latest">
 				<section class="mla-card mla-forecast-map-card" aria-labelledby="mlaForecastMapHeading">
 					<h3 class="mla-sr-only" id="mlaForecastMapHeading">Forecast tracks and weather</h3>
 					<div class="mla-forecast-controls" id="mlaForecastLiveControls">
-						<fieldset class="mla-forecast-model-picker"><legend>Models (up to five at one initialization)</legend><div class="mla-forecast-model-checks" id="mlaForecastModelChecks"></div></fieldset>
+						<fieldset class="mla-forecast-model-picker"><legend>Models</legend><div class="mla-forecast-model-checks" id="mlaForecastModelChecks"></div></fieldset>
 						<div class="mla-forecast-options">
 							<label class="mla-field" for="mlaForecastInitialization"><span class="mla-label">Forecast initialization</span><select class="mla-select" id="mlaForecastInitialization"><option value="latest">Latest available</option></select></label>
-							<label class="mla-field" for="mlaForecastRunCount"><span class="mla-label">One-model initializations</span><select class="mla-select" id="mlaForecastRunCount" title="Select exactly one model to compare neighbouring initializations"><option value="1">Current only</option><option value="2">2 initializations</option><option value="3">3 initializations</option><option value="4">4 initializations</option><option value="5">5 initializations</option></select></label>
+							<label class="mla-field" for="mlaForecastRunCount"><span class="mla-label">One-model initializations</span><select class="mla-select" id="mlaForecastRunCount" title="Select exactly one model to compare neighbouring initializations"><option value="1">Current only</option></select></label>
 							<label class="mla-field" for="mlaForecastWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 							<label class="mla-field" for="mlaForecastWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastWeatherModel"></select></label>
 							<label class="mla-map-toggle" for="mlaForecastMembers"><input id="mlaForecastMembers" type="checkbox"> Show individual ensemble members</label>
 						</div>
-					</div>
-					<div class="mla-forecast-archive-controls" id="mlaForecastArchiveControls" hidden>
-						<label class="mla-field" for="mlaForecastArchiveSearch"><span class="mla-label" id="mlaForecastArchiveSearchLabel">Storm or valid time</span><input class="mla-control" id="mlaForecastArchiveSearch" type="search" placeholder="Hamoon, 2023-10-21 00 or 2023102100"></label>
-						<label class="mla-field" for="mlaForecastArchiveDate"><span class="mla-label">Valid date</span><input class="mla-control" id="mlaForecastArchiveDate" type="date"></label>
-						<label class="mla-field" for="mlaForecastArchiveHour"><span class="mla-label">Valid hour (UTC)</span><select class="mla-select" id="mlaForecastArchiveHour"><option value="00">00 UTC</option><option value="06">06 UTC</option><option value="12">12 UTC</option><option value="18">18 UTC</option></select></label>
-						<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show individual ensemble members</label>
 					</div>
 					<div class="mla-forecast-map-stack" id="mlaForecastMapStack">
 						<canvas id="mlaForecastBase" aria-hidden="true"></canvas>
@@ -843,10 +847,11 @@
 						<button class="mla-btn mla-btn-small" id="mlaForecastNext" type="button" aria-label="Next forecast time">+6 h</button>
 						<output class="mla-forecast-time" id="mlaForecastTime">—</output>
 					</div>
-					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-key mla-forecast-era5-key" id="mlaForecastEra5Key" hidden><i aria-hidden="true"></i><span>ERA5 v5.6 catalogue track</span></span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span></div>
+					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-key mla-forecast-era5-key" id="mlaForecastEra5Key" hidden><i aria-hidden="true"></i><span>ERA5 v5.6 catalogue track</span></span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span><div class="mla-forecast-run-key" id="mlaForecastRunKey" aria-label="Forecast track colours" hidden></div></div>
 				</section>
 				<aside class="mla-card mla-forecast-archive-sidebar" id="mlaForecastArchiveSidebar" hidden><h3 class="mla-sr-only">Forecast model and lead-time selection</h3><div class="mla-forecast-archive-results" id="mlaForecastArchiveResults" aria-live="polite"></div></aside>
 			</div>
+			<details class="mla-forecast-availability" id="mlaForecastAvailability" aria-label="Forecast archive availability" hidden></details>
 		</section>
 
 		<section class="mla-panel" id="mlaPanelExplore" role="tabpanel" aria-labelledby="mlaTabExplore" data-panel="explore">
@@ -974,7 +979,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.4dbc0deb2e5e.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.04e4759ab0e0.js"></script>
-<script src="assets/forecast-app.e50fb384f9af.js"></script>
+<script src="assets/forecast-app.ccc99dbf729c.js"></script>
 
 </body>
 </html>

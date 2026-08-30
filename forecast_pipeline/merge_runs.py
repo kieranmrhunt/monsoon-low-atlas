@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from .analysis_history import analysis_centres, analysis_entry, replace_analysis_entry
-from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
+from .forecast_core import (
+    atomic_write_json,
+    atomic_write_json_gz,
+    iso_z,
+    manifest_entry_horizon_hours,
+    utc_now,
+)
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS
 from .update import read_manifest, replace_archive_entry, replace_recent_entry
 
@@ -125,8 +131,8 @@ def main() -> None:
                     args.target / relative,
                     "mla-forecast-archive-cycle-v1",
                 )
-                if "weather" in payload or "tracking_qa" in payload:
-                    raise ValueError(f"{source_root / relative} contains fields forbidden from the archive")
+                if "tracking_qa" in payload:
+                    raise ValueError(f"{source_root / relative} contains internal tracking QA")
                 enriched_entry = {**entry, "analysis_centres": analysis_centres(payload)}
                 manifest["archive"] = replace_archive_entry(
                     manifest.setdefault("archive", []), enriched_entry
@@ -143,7 +149,7 @@ def main() -> None:
 
         reference = source_manifests[0]
         for key in (
-            "schema", "schedule", "forecast_horizon_hours", "weather_archive_policy",
+            "schema", "schedule", "weather_archive_policy",
             "analysis_stitch_policy", "catalogue_verification", "source_notes",
         ):
             if key in reference:
@@ -155,6 +161,14 @@ def main() -> None:
         manifest["models"] = [
             asdict(MODEL_DEFINITIONS[model]) for model in DEFAULT_MODELS
         ]
+        manifest["forecast_horizons_hours"] = {
+            model: manifest_entry_horizon_hours(entry)
+            for model, entry in manifest.get("latest", {}).items()
+        }
+        manifest["forecast_horizon_hours"] = max(
+            manifest["forecast_horizons_hours"].values(), default=None
+        )
+        manifest["forecast_horizon_policy"] = "complete provider/model lead axis"
         manifest["generated_utc"] = iso_z(utc_now())
         manifest["run"] = {
             "mode": "partial-cycle-backfill" if args.partial else "parallel-model-merge",
@@ -164,19 +178,27 @@ def main() -> None:
         }
         if args.plan:
             backfill_plan = json.loads(args.plan.read_text(encoding="utf-8"))
-            planned = {f"{item['model']}:{item['cycle']}" for item in backfill_plan["cycles"]}
+            planned = {
+                f"{item['model']}:{item['cycle']}": int(item.get("horizon_hours", 0))
+                for item in backfill_plan["cycles"]
+            }
             available = {
-                f"{model}:{item.get('cycle')}"
+                f"{model}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
                 for model, entries in manifest.get("recent", {}).items()
                 for item in entries
             }
-            missing = sorted(planned - available)
+            complete_keys = {
+                key
+                for key, horizon in planned.items()
+                if available.get(key, -1) >= horizon
+            }
+            missing = sorted(set(planned) - complete_keys)
             complete = not missing
             manifest["recent_backfill"] = {
                 **{key: value for key, value in backfill_plan.items() if key not in {"cycles", "pending_cycles"}},
                 "status": "complete" if complete else "incomplete",
                 "planned_cycles": len(planned),
-                "available_cycles": len(planned & available),
+                "available_cycles": len(complete_keys),
                 "missing_cycles": missing,
                 "merged_utc": manifest["generated_utc"],
             }

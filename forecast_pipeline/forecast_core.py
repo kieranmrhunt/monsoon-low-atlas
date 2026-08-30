@@ -54,6 +54,17 @@ def cycle_id(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y%m%d%H")
 
 
+def manifest_entry_horizon_hours(entry: dict[str, Any]) -> int:
+    """Return the published lead horizon for a manifest cycle entry."""
+
+    try:
+        start = datetime.fromisoformat(str(entry["cycle_utc"]).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(entry["valid_end_utc"]).replace("Z", "+00:00"))
+        return max(0, int(round((end - start).total_seconds() / 3600.0)))
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 def candidate_cycles(now: datetime | None = None, limit: int = 8) -> list[datetime]:
     """Return recent six-hour cycles, newest first.
 

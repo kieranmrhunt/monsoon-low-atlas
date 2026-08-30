@@ -17,7 +17,6 @@ if [[ ! "$MAX_ACTIVE" =~ ^[1-9][0-9]*$ ]]; then
   echo "LPS_TIGGE_MAX_ACTIVE must be a positive integer" >&2
   exit 2
 fi
-
 mkdir -p "$RUN_ROOT" "$ATLAS_ROOT/hpc-logs"
 cd "$ATLAS_ROOT"
 "$PYTHON" -m forecast_pipeline.plan_tigge_archive \
@@ -36,4 +35,4 @@ fi
 # for interactive/retry work while keeping the TIGGE tape-staging queue full.
 ARRAY_ID="$(sbatch --parsable --time="$TIME_LIMIT" --array="1-$COUNT%$MAX_ACTIVE" scripts/backfill_forecast_cycle.slurm "$JOBS" "$RUN_ROOT" tigge "$OUTPUT")"
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$ARRAY_ID" scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$OUTPUT" tigge)"
-echo "Submitted ECMWF TIGGE array $ARRAY_ID ($COUNT tasks; up to $MAX_ACTIVE active) and finalizer $FINAL_ID"
+echo "Submitted ECMWF TIGGE array $ARRAY_ID ($COUNT tasks; up to $MAX_ACTIVE active, publishing each completed cycle) and finalizer $FINAL_ID"

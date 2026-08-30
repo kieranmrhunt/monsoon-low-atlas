@@ -20,6 +20,7 @@ from forecast_pipeline.forecast_core import (
     atomic_write_json,
     candidate_cycles,
     compact_weather,
+    manifest_entry_horizon_hours,
     trailing_24h,
     validate_cycle_payload,
 )
@@ -27,6 +28,7 @@ from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
     NcepAdapter,
     _fetch_record,
+    available_forecast_steps,
     parse_ecmwf_index,
     parse_ncep_index,
 )
@@ -80,6 +82,22 @@ class ForecastPipelineContractTests(unittest.TestCase):
             definition = MODEL_DEFINITIONS[model]
             self.assertEqual(definition.source_name, "NOAA Open Data cloud mirror")
             self.assertIn("registry.opendata.aws", definition.source_url)
+
+    def test_available_step_schedules_retain_each_provider_horizon(self) -> None:
+        cycle_00 = datetime(2026, 8, 30, 0, tzinfo=UTC)
+        cycle_06 = datetime(2026, 8, 30, 6, tzinfo=UTC)
+        self.assertEqual(available_forecast_steps("gfs", cycle_00)[-1], 384)
+        self.assertEqual(available_forecast_steps("gefs", cycle_00)[-1], 384)
+        self.assertEqual(available_forecast_steps("ifs", cycle_00)[-1], 360)
+        self.assertEqual(available_forecast_steps("ifs", cycle_06)[-1], 144)
+        self.assertEqual(available_forecast_steps("aifs-ens", cycle_06)[-1], 360)
+        self.assertEqual(available_forecast_steps("tigge-ecmwf", cycle_00)[-1], 360)
+        self.assertEqual(available_forecast_steps("ukmo-global", cycle_00)[-1], 144)
+        self.assertTrue(all(step % 6 == 0 for step in available_forecast_steps("gfs", cycle_00)))
+
+    def test_manifest_entry_horizon_is_derived_from_valid_end(self) -> None:
+        entry = {"cycle_utc": "2026-08-30T00:00:00Z", "valid_end_utc": "2026-09-15T00:00:00Z"}
+        self.assertEqual(manifest_entry_horizon_hours(entry), 384)
 
     def test_noaa_legacy_cloud_layouts_and_ensemble_sizes(self) -> None:
         gfs = NcepAdapter("gfs", client=RecordingClient())
@@ -147,7 +165,10 @@ class ForecastPipelineContractTests(unittest.TestCase):
             target = Path(directory)
             manifest = {
                 "schema": "mla-forecast-manifest-v1",
-                "tigge_archive": [{"model": "tigge-ecmwf", "cycle": "2016070100"}],
+                "tigge_archive": [{
+                    "model": "tigge-ecmwf", "cycle": "2016070100",
+                    "cycle_utc": "2016-07-01T00:00:00Z", "valid_end_utc": "2016-07-06T00:00:00Z",
+                }],
                 "tigge_backfill": {
                     "generated_utc": "2026-08-30T18:36:43Z",
                     "planned_cycles": 1,
@@ -161,14 +182,14 @@ class ForecastPipelineContractTests(unittest.TestCase):
                 "tigge_backfill",
                 ("2026-08-30T19:59:22Z", 958),
             )
-            self.assertEqual(available, {("tigge-ecmwf", "2016070100")})
+            self.assertEqual(available, {("tigge-ecmwf", "2016070100"): 120})
             self.assertEqual(status, "")
 
             plan = {
                 "generated_utc": "2026-08-30T19:59:22Z",
                 "cycles": [
-                    {"model": "tigge-ecmwf", "cycle": "2006100100"},
-                    {"model": "tigge-ecmwf", "cycle": "2006102412"},
+                    {"model": "tigge-ecmwf", "cycle": "2006100100", "horizon_hours": 360},
+                    {"model": "tigge-ecmwf", "cycle": "2006102412", "horizon_hours": 360},
                 ],
             }
             update_progress(target, "tigge_archive", "tigge_backfill", plan)
@@ -242,7 +263,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
             [entry(0)["cycle"], entry(6)["cycle"], entry(336)["cycle"]],
         )
 
-    def test_compact_archive_preserves_complete_axis_and_tracks(self) -> None:
+    def test_archive_preserves_complete_axis_tracks_and_optional_weather(self) -> None:
         payload = {
             "schema": "mla-forecast-cycle-v1",
             "model": {"id": "gfs", "label": "GFS"},
@@ -251,7 +272,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
             "valid_times": ["2026-08-30T00:00:00Z", "2026-08-30T06:00:00Z"],
             "tracks": [{"id": "a", "points": [[0, 80, 20], [1, 81, 21]]}],
             "systems": [{"id": "s"}],
-            "weather": {"large": True},
+            "weather": {"basis": "deterministic", "vorticity": {"shape": [2, 2, 2]}},
             "tracking_qa": [{"internal": True}],
         }
         archived = archive_payload(payload, StubVerifier())
@@ -263,6 +284,12 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(archived["archive_coverage"]["published_track_point_count"], 2)
         self.assertTrue(archived["archive_coverage"]["includes_zero_disturbance_cycles"])
         self.assertEqual(archive_manifest_entry(archived, "archive/gfs/x.json.gz")["analysis_centres"], [])
+
+        operational = archive_payload(payload, StubVerifier(), include_weather=True)
+        self.assertEqual(operational["weather"], payload["weather"])
+        entry = archive_manifest_entry(operational, "archive/gfs/x.json.gz")
+        self.assertEqual(entry["weather_fields"], ["vorticity"])
+        self.assertNotIn("tracking_qa", operational)
 
     def test_model_version_crosswalk_uses_cycle_boundaries(self) -> None:
         before = model_version("gfs", datetime(2021, 3, 22, 11, tzinfo=UTC))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compact archive records and ERA5 v5.6 verification overlays."""
+"""Public archive records and ERA5 v5.6 verification overlays."""
 
 from __future__ import annotations
 
@@ -188,7 +188,7 @@ class AtlasVerifier:
 
 
 def certify_archive_payload(output: dict[str, Any]) -> dict[str, Any]:
-    """Attach auditable completeness metadata to a compact cycle payload."""
+    """Attach auditable completeness metadata to an archive cycle payload."""
 
     output["archive_coverage"] = {
         "complete_valid_time_axis": True,
@@ -200,20 +200,31 @@ def certify_archive_payload(output: dict[str, Any]) -> dict[str, Any]:
         "published_disturbance_count": len(output.get("systems", [])),
         "includes_zero_disturbance_cycles": True,
     }
+    weather_note = (
+        "ensemble-mean weather grids are included"
+        if output.get("weather")
+        else "weather grids are omitted"
+    )
     output["archive_note"] = (
         "Every forecast valid time and every track published by the atlas detector/linker "
-        "are preserved, including cycles with no published disturbance; historical weather "
-        "grids and internal tracking QA are intentionally omitted."
+        "are preserved, including cycles with no published disturbance; "
+        f"{weather_note}, and internal tracking QA is omitted."
     )
     return output
 
 
-def archive_payload(payload: dict[str, Any], verifier: AtlasVerifier) -> dict[str, Any]:
-    """Remove bulky weather/QA arrays and attach compact verification tracks."""
+def archive_payload(
+    payload: dict[str, Any],
+    verifier: AtlasVerifier,
+    *,
+    include_weather: bool = False,
+) -> dict[str, Any]:
+    """Prepare a public archive cycle and attach compact verification tracks."""
 
     output = copy.deepcopy(payload)
     output["schema"] = "mla-forecast-archive-cycle-v1"
-    output.pop("weather", None)
+    if not include_weather:
+        output.pop("weather", None)
     output.pop("tracking_qa", None)
     output["verification"] = verifier.verification(payload)
     return certify_archive_payload(output)
@@ -235,6 +246,11 @@ def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[s
         "forecast_track_points": sum(len(track.get("points", [])) for track in payload.get("tracks", [])),
         "valid_time_count": len(payload.get("valid_times", [])),
         "complete_valid_time_axis": bool(payload.get("archive_coverage", {}).get("complete_valid_time_axis")),
+        "weather_fields": sorted(
+            name
+            for name, field in payload.get("weather", {}).items()
+            if isinstance(field, dict) and "shape" in field
+        ),
         "analysis_centres": analysis_centres(payload),
         "model_version": payload.get("model_version", {}),
         "verification_status": verification.get("status", "unavailable"),
