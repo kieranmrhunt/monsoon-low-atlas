@@ -72,9 +72,10 @@ def main() -> None:
                 manifest[key] = source_manifests[0][key]
         manifest["generated_utc"] = iso_z(utc_now())
         seed_key = "tigge_seed" if args.collection == "tigge" else "archive_seed"
+        previous_cases = manifest.get(seed_key, {}).get("cases", [])
         manifest[seed_key] = {
             "merged_utc": manifest["generated_utc"],
-            "cases": sorted(set(merged)),
+            "cases": sorted(set(previous_cases) | set(merged)),
             "policy": "complete valid-time axes and all published tracks; weather and internal QA omitted",
         }
         complete = True

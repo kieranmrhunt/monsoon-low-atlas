@@ -34,6 +34,6 @@ fi
 
 # ECMWF documents a 20-request per-user queue ceiling. Leave four slots free
 # for interactive/retry work while keeping the TIGGE tape-staging queue full.
-ARRAY_ID="$(sbatch --parsable --time="$TIME_LIMIT" --array="1-$COUNT%$MAX_ACTIVE" scripts/backfill_forecast_cycle.slurm "$JOBS" "$RUN_ROOT" tigge)"
+ARRAY_ID="$(sbatch --parsable --time="$TIME_LIMIT" --array="1-$COUNT%$MAX_ACTIVE" scripts/backfill_forecast_cycle.slurm "$JOBS" "$RUN_ROOT" tigge "$OUTPUT")"
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$ARRAY_ID" scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$OUTPUT" tigge)"
 echo "Submitted ECMWF TIGGE array $ARRAY_ID ($COUNT tasks; up to $MAX_ACTIVE active) and finalizer $FINAL_ID"

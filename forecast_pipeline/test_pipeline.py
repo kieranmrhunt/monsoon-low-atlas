@@ -37,6 +37,7 @@ from forecast_pipeline.archive import archive_manifest_entry, archive_payload
 from forecast_pipeline.update import replace_recent_entry
 from forecast_pipeline.v56_tracking import _longest_true_run
 from forecast_pipeline.versions import model_version
+from forecast_pipeline.watch_archive_publish import target_state
 
 
 class RecordingClient:
@@ -139,6 +140,42 @@ class ForecastPipelineContractTests(unittest.TestCase):
             atomic_write_json(target, {"schema": "test"})
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
             self.assertTrue(stat.S_IMODE(target.parent.stat().st_mode) & 0o005)
+
+    def test_progressive_publisher_ignores_a_stale_completed_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            manifest = {
+                "schema": "mla-forecast-manifest-v1",
+                "tigge_archive": [{"model": "tigge-ecmwf", "cycle": "2016070100"}],
+                "tigge_backfill": {
+                    "generated_utc": "2026-08-30T18:36:43Z",
+                    "planned_cycles": 1,
+                    "status": "complete",
+                },
+            }
+            atomic_write_json(target / "manifest.json", manifest)
+            available, status = target_state(
+                target,
+                "tigge_archive",
+                "tigge_backfill",
+                ("2026-08-30T19:59:22Z", 958),
+            )
+            self.assertEqual(available, {("tigge-ecmwf", "2016070100")})
+            self.assertEqual(status, "")
+
+            manifest["tigge_backfill"] = {
+                "generated_utc": "2026-08-30T19:59:22Z",
+                "planned_cycles": 958,
+                "status": "incomplete",
+            }
+            atomic_write_json(target / "manifest.json", manifest)
+            unused, status = target_state(
+                target,
+                "tigge_archive",
+                "tigge_backfill",
+                ("2026-08-30T19:59:22Z", 958),
+            )
+            self.assertEqual(status, "incomplete")
 
     def test_recent_cycle_window_keeps_weather_cycles_for_48_hours(self) -> None:
         def entry(hours_ago: int) -> dict[str, object]:

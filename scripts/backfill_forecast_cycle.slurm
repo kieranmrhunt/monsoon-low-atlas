@@ -15,6 +15,7 @@ ATLAS_ROOT="${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is required}"
 JOBS="${1:?job table is required}"
 RUN_ROOT="${2:?staging root is required}"
 MODE="${3:?recent or archive mode is required}"
+PUBLISH_TARGET="${4:-}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 ROW="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$JOBS")"
 IFS=$'\t' read -r INDEX MODEL CYCLE <<< "$ROW"
@@ -33,7 +34,7 @@ elif [[ "$MODE" != "recent" ]]; then
 fi
 
 cd "$ATLAS_ROOT"
-exec "$PYTHON" -m forecast_pipeline.update \
+"$PYTHON" -m forecast_pipeline.update \
   --output-root "$OUTPUT" \
   --atlas-core "$ATLAS_ROOT/assets/$CORE_NAME" \
   --cycle "$CYCLE" \
@@ -41,3 +42,10 @@ exec "$PYTHON" -m forecast_pipeline.update \
   --horizon 120 \
   --workers "${LPS_FORECAST_WORKERS:-8}" \
   "${ARGS[@]}"
+
+if [[ -n "$PUBLISH_TARGET" && "$MODE" != "recent" ]]; then
+  "$PYTHON" -m forecast_pipeline.merge_archives \
+    --target "$PUBLISH_TARGET" \
+    --collection "$MODE" \
+    "$OUTPUT"
+fi

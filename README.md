@@ -65,7 +65,7 @@ The Forecasts tab is a lazy static client backed by compact files on the public 
 
 Latest files include positive 850-hPa relative vorticity and trailing-24-hour precipitation on a common 1-degree grid. Relative vorticity is derived from winds only after every provider is resampled to that grid; this avoids mixing IFS native spectral vorticity with wind-derived AIFS/GFS fields. Ensemble weather is the arithmetic member mean, while individual member tracks remain available. Full weather-capable payloads are retained for every six-hourly initialization in a rolling 48-hour window. The client can compare up to five models at one initialization or one model across up to five neighbouring initializations, with weather still tied to one explicitly labelled run.
 
-The operational archive reports exact per-model coverage before the controls, then supports a calendar, typed date/cyclone search and direct selection of up to five matching runs. Search results state the matching model, count and first/last initialization so a named storm does not require date guessing. Compact archive files omit weather and internal tracking QA, and attach a dashed ERA5 v5.6 verification track where the catalogue overlaps by at least six hours and passes the documented distance limits. Each cycle certifies that it retains the complete +0 to +120-hour valid-time axis, every track published by the detector/linker, and zero-disturbance cycles. Cycle-specific operational model-generation labels come from documented NOAA and ECMWF implementation dates rather than being inferred from filenames.
+The operational archive reports exact per-model coverage before the controls, then supports a calendar, typed date/cyclone search and progressive dropdown selection of up to five matching runs. Search results state the matching model, count and first/last initialization so a named storm does not require date guessing. Compact archive files omit weather and internal tracking QA, and attach a default-on dashed ERA5 v5.6 verification track where the catalogue overlaps by at least six hours and passes the documented distance limits. The same verification overlay is available in the separate TIGGE collection. Each cycle certifies that it retains the complete +0 to +120-hour valid-time axis, every track published by the detector/linker, and zero-disturbance cycles. Cycle-specific operational model-generation labels come from documented NOAA and ECMWF implementation dates rather than being inferred from filenames.
 
 Displayed forecast paths prepend a compact analysis history when a system is already present at initialization. The service retains 14 days of six-hourly t+0 centres for active guidance and embeds t+0 centres in each processed archive entry. Matching is model- and operational-version-specific: an older forecast signature must reproduce the newer analysed centre, pass distance and motion checks, and be unambiguous relative to contemporaneous systems. The joined history is solid with small centre markers; guidance after the selected valid time is a thinner solid line. Forecast-only genesis therefore remains unstitched, and historical spacing reflects the archive cycles actually processed rather than implying unavailable six-hourly analyses.
 
@@ -106,7 +106,10 @@ bash scripts/submit_tigge_archive_backfill.sh
 
 The default submission permits 16 simultaneous ECDS staging jobs (below
 ECMWF's documented 20-request per-user queue ceiling) and gives each task 12
-hours. `LPS_TIGGE_MAX_ACTIVE` and `LPS_TIGGE_TIME_LIMIT` override those settings.
+hours. Each successfully tracked cycle is merged atomically into the public
+TIGGE collection as soon as it finishes; the finalizer then reconciles the
+whole plan and reports any gaps. `LPS_TIGGE_MAX_ACTIVE` and
+`LPS_TIGGE_TIME_LIMIT` override the submission settings.
 
 ## Storm-centred composite archive
 
