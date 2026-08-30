@@ -97,6 +97,17 @@ To seed or repair the rolling initialization window and historical archive in pa
 bash scripts/submit_forecast_backfills.sh
 ```
 
+The historical ECMWF ensemble collection remains separate from the operational
+archive. Submit or resume its event-spanning TIGGE cycles with:
+
+```bash
+bash scripts/submit_tigge_archive_backfill.sh
+```
+
+The default submission permits 128 simultaneous ECDS staging jobs and gives
+each task 12 hours. `LPS_TIGGE_MAX_ACTIVE` and `LPS_TIGGE_TIME_LIMIT` override
+those settings.
+
 ## Storm-centred composite archive
 
 The atlas loads one small gzipped JSON asset only after a user selects a system. The archive therefore adds no bulk transfer to initial page load. It is generated one system per unthrottled Slurm array task from the v5.6 public Parquet catalogue; the submission helper schedules a validating manifest job after every system succeeds:

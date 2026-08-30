@@ -221,6 +221,25 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(after["label"], "GFS v16 family")
         self.assertEqual(current_gefs["label"], "GEFS v12.3.20")
 
+    def test_tigge_version_crosswalk_covers_the_full_archive_plan(self) -> None:
+        cycle = datetime(2006, 10, 1, 0, tzinfo=UTC)
+        end = datetime(2016, 3, 18, 12, tzinfo=UTC)
+        while cycle <= end:
+            self.assertNotEqual(model_version("tigge-ecmwf", cycle)["label"], "Version not yet crosswalked")
+            cycle += timedelta(hours=12)
+        self.assertEqual(
+            model_version("tigge-ecmwf", datetime(2008, 3, 11, 11, tzinfo=UTC))["label"],
+            "IFS Cycle 32r3",
+        )
+        self.assertEqual(
+            model_version("tigge-ecmwf", datetime(2008, 3, 11, 12, tzinfo=UTC))["label"],
+            "IFS Cycle 32r3V",
+        )
+        self.assertEqual(
+            model_version("tigge-ecmwf", datetime(2015, 5, 12, 12, tzinfo=UTC))["label"],
+            "IFS Cycle 41r1",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
