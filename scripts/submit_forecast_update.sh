@@ -17,9 +17,20 @@ mkdir -p "$RUN_ROOT"
 
 MODELS=(gfs gefs ifs ifs-ens aifs aifs-ens)
 JOB_IDS=()
+ECMWF_PREVIOUS=""
 for model in "${MODELS[@]}"; do
   safe_name="${model//-/_}"
-  JOB_IDS+=("$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")")
+  if [[ "$model" == ifs* || "$model" == aifs* ]]; then
+    if [[ -n "$ECMWF_PREVIOUS" ]]; then
+      job_id="$(sbatch --parsable --dependency="afterany:$ECMWF_PREVIOUS" --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")"
+    else
+      job_id="$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")"
+    fi
+    ECMWF_PREVIOUS="$job_id"
+  else
+    job_id="$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")"
+  fi
+  JOB_IDS+=("$job_id")
 done
 DEPENDENCY="$(IFS=:; echo "${JOB_IDS[*]}")"
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$DEPENDENCY" scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT")"
