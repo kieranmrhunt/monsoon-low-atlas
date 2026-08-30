@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .analysis_history import analysis_entry, replace_analysis_entry
 from .archive import AtlasVerifier, archive_manifest_entry, archive_payload
 from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
@@ -48,6 +49,7 @@ def read_manifest(path: Path) -> dict[str, Any]:
             "schema": "mla-forecast-manifest-v1",
             "latest": {},
             "recent": {},
+            "analysis_history": {},
             "archive": [],
             "attempts": {},
         }
@@ -160,6 +162,10 @@ def main() -> int:
                     manifest["latest"][model] = current_entry
                 recent = manifest.setdefault("recent", {}).setdefault(model, [])
                 manifest["recent"][model] = replace_recent_entry(recent, current_entry)
+                history = manifest.setdefault("analysis_history", {}).setdefault(model, [])
+                manifest["analysis_history"][model] = replace_analysis_entry(
+                    history, analysis_entry(payload)
+                )
             manifest["archive"] = replace_archive_entry(
                 manifest.setdefault("archive", []),
                 archive_manifest_entry(archived, archive_relative),
@@ -197,6 +203,7 @@ def main() -> int:
         "schedule": "six-hourly",
         "forecast_horizon_hours": args.horizon,
         "weather_archive_policy": "latest and rolling 48-hour cycle files include grids; the long searchable archive retains every valid time and full published tracks but omits weather and internal QA",
+        "analysis_stitch_policy": "displayed history uses continuity-matched t+0 centres from the same model and operational version; live history retains 14 days and archive history uses the processed archive cadence",
         "catalogue_verification": {
             "version": verifier.catalogue_version,
             "coverage_start": verifier.coverage_start,

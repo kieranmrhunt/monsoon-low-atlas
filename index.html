@@ -519,6 +519,9 @@
 .mla-forecast-track-legend { display: grid; gap: 5px; margin-top: 8px; color: var(--mla-muted); font-size: 12px; }
 .mla-forecast-track-legend span { display: flex; align-items: center; gap: 7px; }
 .mla-forecast-track-legend i { display: inline-block; width: 28px; height: 0; border-top: 3px solid var(--legend-colour, var(--mla-indigo)); }
+.mla-forecast-track-legend i[data-kind="analysis"] { position: relative; }
+.mla-forecast-track-legend i[data-kind="analysis"]::after { content: ""; position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--legend-colour, var(--mla-indigo)); left: 11px; top: -4px; box-shadow: 0 0 0 1px var(--mla-card); }
+.mla-forecast-track-legend i[data-kind="future"] { border-top-style: dashed; }
 .mla-forecast-track-legend i[data-kind="member"] { border-top-width: 1px; opacity: .65; }
 .mla-forecast-track-legend i[data-kind="era5"] { border-top: 2px dashed var(--mla-ink); }
 .mla-forecast-dossier-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
@@ -785,7 +788,7 @@
 
 		<section class="mla-panel" id="mlaPanelForecast" role="tabpanel" aria-labelledby="mlaTabForecast" data-panel="forecast" hidden>
 			<div class="mla-panel-heading">
-				<div><h2>Forecast guidance</h2><p>Objective LPS tracks from current global forecasts, using the atlas detector and continuity linker. Forecast intensity is provisional.</p></div>
+				<div><h2>Forecast guidance</h2><p>Objective LPS tracks from current global forecasts, using the atlas detector and continuity linker. Active and archived paths prepend confidently matched prior t+0 centres; forecast intensity is provisional.</p></div>
 			</div>
 			<div class="mla-forecast-modebar" role="group" aria-label="Forecast view">
 				<button class="mla-btn mla-btn-small" id="mlaForecastModeLatest" type="button" aria-pressed="true">Latest</button>
@@ -952,7 +955,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.4dbc0deb2e5e.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.04e4759ab0e0.js"></script>
-<script src="assets/forecast-app.9570d903a91c.js"></script>
+<script src="assets/forecast-app.4a31eeeed554.js"></script>
 
 </body>
 </html>

@@ -646,6 +646,98 @@
 		]);
 	}
 
+	function haversineKm(longitudeA, latitudeA, longitudeB, latitudeB) {
+		const radians = value => Number(value) * Math.PI / 180;
+		const latitudeDelta = radians(latitudeB - latitudeA);
+		const longitudeDelta = radians(longitudeB - longitudeA);
+		const value = Math.sin(latitudeDelta / 2) ** 2 + Math.cos(radians(latitudeA)) * Math.cos(radians(latitudeB)) * Math.sin(longitudeDelta / 2) ** 2;
+		return 6371.0088 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(Math.max(0, 1 - value)));
+	}
+
+	function historyEntries(modelId, payload) {
+		if (!state.manifest || !payload) return [];
+		const current = new Date(payload.cycle_utc).getTime();
+		const currentVersion = String(payload.model_version && payload.model_version.label || '');
+		const source = state.mode === 'archive'
+			? (state.manifest.archive || []).filter(entry => entry.model === modelId).map(entry => ({...entry, centres: entry.analysis_centres || []}))
+			: ((state.manifest.analysis_history || {})[modelId] || []);
+		return source.filter(entry => {
+			const cycle = new Date(entry.cycle_utc).getTime();
+			const age = (current - cycle) / 3600000;
+			const entryVersion = String(entry.model_version && entry.model_version.label || '');
+			return Number.isFinite(cycle) && age > 0 && age <= 14 * 24 && (!currentVersion || !entryVersion || currentVersion === entryVersion);
+		}).sort((a, b) => new Date(b.cycle_utc).getTime() - new Date(a.cycle_utc).getTime());
+	}
+
+	function signaturePoint(centre, step) {
+		let best = null;
+		for (const point of centre.match_points || []) if (!best || Math.abs(Number(point[0]) - step) < Math.abs(Number(best[0]) - step)) best = point;
+		return best && Math.abs(Number(best[0]) - step) <= 3.1 ? best : null;
+	}
+
+	function payloadAnalysisCentres(payload) {
+		const output = [];
+		for (const item of payload.systems || []) {
+			const point = meanTrack(payload, item).find(value => Number(value[0]) === 0);
+			if (point) output.push({system_id: String(item.id), longitude: Number(point[1]), latitude: Number(point[2])});
+		}
+		return output;
+	}
+
+	function analysisHistory(payload, system, modelId) {
+		const forecast = meanTrack(payload, system);
+		const initial = forecast.find(point => Number(point[0]) === 0);
+		if (!initial) return [];
+		const currentCycle = new Date(payload.cycle_utc).getTime();
+		let anchor = {time: currentCycle, longitude: Number(initial[1]), latitude: Number(initial[2]), systemId: String(system.id), cohort: payloadAnalysisCentres(payload)};
+		let later = null;
+		const matched = [];
+		const maximumGap = state.mode === 'archive' ? 60 : 30;
+		for (const entry of historyEntries(modelId, payload)) {
+			const entryTime = new Date(entry.cycle_utc).getTime();
+			const gap = (anchor.time - entryTime) / 3600000;
+			if (gap <= 0) continue;
+			if (gap > maximumGap) break;
+			const candidates = [];
+			for (const centre of entry.centres || []) {
+				const signature = signaturePoint(centre, gap);
+				if (!signature) continue;
+				const longitude = Number(centre.longitude);
+				const latitude = Number(centre.latitude);
+				const overlap = haversineKm(signature[1], signature[2], anchor.longitude, anchor.latitude);
+				const origin = haversineKm(longitude, latitude, anchor.longitude, anchor.latitude);
+				if (overlap > 500 || origin > Math.max(450, 45 * gap)) continue;
+				const rival = (anchor.cohort || []).filter(item => String(item.system_id) !== anchor.systemId).some(item => haversineKm(signature[1], signature[2], item.longitude, item.latitude) <= overlap + 75);
+				if (rival) continue;
+				let prediction = 0;
+				if (later) {
+					const laterGap = (later.time - anchor.time) / 3600000;
+					const ratio = laterGap > 0 ? gap / laterGap : 0;
+					const predictedLongitude = anchor.longitude + (anchor.longitude - later.longitude) * ratio;
+					const predictedLatitude = anchor.latitude + (anchor.latitude - later.latitude) * ratio;
+					prediction = haversineKm(longitude, latitude, predictedLongitude, predictedLatitude);
+					if (prediction > Math.max(500, 28 * gap)) continue;
+				}
+				candidates.push({centre, longitude, latitude, score: overlap + .15 * origin + .25 * prediction});
+			}
+			candidates.sort((a, b) => a.score - b.score);
+			if (!candidates.length) continue;
+			if (candidates.length > 1 && candidates[1].score - candidates[0].score < 75 && haversineKm(candidates[0].longitude, candidates[0].latitude, candidates[1].longitude, candidates[1].latitude) > 125) break;
+			const best = candidates[0];
+			const relativeStep = Math.round((entryTime - currentCycle) / 3600000);
+			matched.push([relativeStep, best.longitude, best.latitude, Number(best.centre.member_count || 1), 'analysis']);
+			later = anchor;
+			anchor = {time: entryTime, longitude: best.longitude, latitude: best.latitude, systemId: String(best.centre.system_id), cohort: entry.centres || []};
+		}
+		return matched.reverse();
+	}
+
+	function stitchedTrack(payload, system, modelId) {
+		const forecast = meanTrack(payload, system);
+		const history = analysisHistory(payload, system, modelId);
+		return {history, points: [...history, ...forecast]};
+	}
+
 	function drawPath(context, map, points, colour, width, alpha, current, dashedFuture) {
 		if (!points || points.length < 2) return;
 		for (const phase of dashedFuture ? ['past', 'future'] : ['all']) {
@@ -686,8 +778,14 @@
 					for (const track of tracks) drawPath(target.context, target.projection, track.points, colour, 1, selected ? .48 : .24, current, true);
 				}
 				const mean = meanTrack(payload, system);
-				if (selected) drawPath(target.context, target.projection, mean, '#fffdf6', payload.model.kind === 'ensemble' ? 6.2 : 6.6, .96, current, true);
-				drawPath(target.context, target.projection, mean, colour, payload.model.kind === 'ensemble' ? 3.1 : 3.5, selected ? 1 : .9, current, true);
+				const stitched = stitchedTrack(payload, system, model.id);
+				if (selected) drawPath(target.context, target.projection, stitched.points, '#fffdf6', payload.model.kind === 'ensemble' ? 6.2 : 6.6, .96, current, true);
+				drawPath(target.context, target.projection, stitched.points, colour, payload.model.kind === 'ensemble' ? 3.1 : 3.5, selected ? 1 : .9, current, true);
+				if (selected) for (const point of stitched.history) {
+					const xy = target.projection.project(point[2], point[1]);
+					target.context.beginPath(); target.context.arc(xy[0], xy[1], 2.8, 0, Math.PI * 2);
+					target.context.fillStyle = colour; target.context.fill(); target.context.lineWidth = 1.1; target.context.strokeStyle = '#fffdf6'; target.context.stroke();
+				}
 				const marker = pointAt(mean, current);
 				if (marker) {
 					const xy = target.projection.project(marker[2], marker[1]);
@@ -745,7 +843,9 @@
 		if (selected) {
 			const {model, payload, system} = selected;
 			const current = stepForPayload(payload);
+			const stitched = stitchedTrack(payload, system, model.id);
 			const marker = pointAt(meanTrack(payload, system), current);
+			const historyHours = stitched.history.length ? Math.abs(Number(stitched.history[0][0])) : 0;
 			const systemTracks = tracksForSystem(payload, system);
 			const peakCategory = systemTracks.length ? Math.max(...systemTracks.map(track => Number(track.maximum_provisional_category || 0))) : null;
 			const gateKinds = [...new Set(systemTracks.map(track => track.publication_gate).filter(Boolean))];
@@ -754,18 +854,19 @@
 			const versionHtml = version ? `${payload.model_version.source_url ? `<a href="${esc(payload.model_version.source_url)}" target="_blank" rel="noopener">${esc(version)}</a>` : esc(version)} · ` : '';
 			const archiveCoverage = payload.archive_coverage || null;
 			node.innerHTML = `<div class="mla-forecast-dossier-head"><h3>${esc(`${model.label} · ${disturbanceLabel(system)}`)}</h3>${state.selectedSystem ? '<button class="mla-btn mla-btn-small mla-btn-quiet" type="button" data-forecast-clear-system>Compare models</button>' : ''}</div>
-				<p>${versionHtml}initialized ${esc(formatUtc(payload.cycle_utc))}. ${payload.model.kind === 'ensemble' ? 'The thick line is the member-mean path.' : 'The deterministic/control path is shown.'}</p>
+				<p>${versionHtml}initialized ${esc(formatUtc(payload.cycle_utc))}. ${payload.model.kind === 'ensemble' ? 'The thick line is the member-mean path.' : 'The deterministic/control path is shown.'}${stitched.history.length ? ` The pre-initialization segment joins continuity-matched ${state.mode === 'archive' ? 'available' : 'six-hourly'} t+0 centres.` : ''}</p>
 				<div class="mla-forecast-facts">
 					<div class="mla-forecast-fact"><span>Lead</span><strong>+${esc(current)} h</strong></div>
 					<div class="mla-forecast-fact"><span>Members</span><strong>${esc(`${system.member_count}/${payload.members.expected}`)}</strong></div>
 					<div class="mla-forecast-fact"><span>Current mean centre</span><strong>${marker ? `${Number(marker[2]).toFixed(1)}°N, ${Number(marker[1]).toFixed(1)}°E` : 'not active'}</strong></div>
+					<div class="mla-forecast-fact"><span>Prior t+0 history</span><strong>${stitched.history.length ? `${esc(stitched.history.length)} centres · ${esc(historyHours)} h` : 'no confident match'}</strong></div>
 					<div class="mla-forecast-fact"><span>Peak guidance</span><strong>${peakCategory == null ? '—' : esc(CLASS_LABELS[peakCategory] || `Class ${peakCategory}`)}</strong></div>
 					<div class="mla-forecast-fact"><span>Active leads</span><strong>+${esc(system.start_step)} to +${esc(system.end_step)} h</strong></div>
 					<div class="mla-forecast-fact"><span>Publication gate</span><strong>${gateKinds.length ? esc(gateKinds.join(', ').replaceAll('-', ' ')) : '—'}</strong></div>
 				</div>
 				${verification ? `<h4>ERA5 verification</h4><p>${esc(verification.status.replaceAll('_', ' '))}${verification.tracks && verification.tracks.length ? ` · ${esc(verification.tracks.map(track => track.label).join(', '))}` : ` · catalogue coverage ends ${esc(String(verification.coverage_end || '').slice(0, 10))}`}.</p>` : ''}
 				${archiveCoverage ? `<h4>Archive completeness</h4><p>${esc(archiveCoverage.valid_time_count)} valid times · ${esc(archiveCoverage.published_track_count)} tracks · ${esc(archiveCoverage.published_track_point_count)} track points. Cycles with no detected disturbance are retained.</p>` : ''}
-				<div class="mla-forecast-track-legend" style="--legend-colour:${esc(model.colour || '#233f78')}"><span><i></i>${payload.model.kind === 'ensemble' ? 'Member-mean path' : 'Deterministic/control path'}</span>${payload.model.kind === 'ensemble' ? '<span><i data-kind="member"></i>Individual member</span>' : ''}${verification && verification.tracks && verification.tracks.length ? '<span><i data-kind="era5"></i>Hourly ERA5 v5.6 track</span>' : ''}</div>
+				<div class="mla-forecast-track-legend" style="--legend-colour:${esc(model.colour || '#233f78')}"><span><i></i>${payload.model.kind === 'ensemble' ? 'Member-mean path' : 'Deterministic/control path'}</span>${stitched.history.length ? '<span><i data-kind="analysis"></i>Matched prior t+0 centres</span>' : ''}<span><i data-kind="future"></i>Forecast after selected time</span>${payload.model.kind === 'ensemble' ? '<span><i data-kind="member"></i>Individual member</span>' : ''}${verification && verification.tracks && verification.tracks.length ? '<span><i data-kind="era5"></i>Hourly ERA5 v5.6 track</span>' : ''}</div>
 				<h4>Source and status</h4><p><a href="${esc(payload.source.url)}" target="_blank" rel="noopener">${esc(payload.source.service)}</a> · ${esc(payload.source.licence)} · ${esc(payload.qa.status)} QA.</p><p>${esc(boundary)}. Forecast classes are provisional.</p>${modelStatusHtml()}`;
 			return;
 		}

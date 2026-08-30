@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .analysis_history import analysis_centres, analysis_entry, replace_analysis_entry
 from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS
 from .update import read_manifest, replace_archive_entry, replace_recent_entry
@@ -96,6 +97,10 @@ def main() -> None:
                 previous = manifest.setdefault("latest", {}).get(model)
                 if previous is None or str(previous.get("cycle", "")) <= str(entry.get("cycle", "")):
                     manifest["latest"][model] = entry
+                history = manifest.setdefault("analysis_history", {}).setdefault(model, [])
+                manifest["analysis_history"][model] = replace_analysis_entry(
+                    history, analysis_entry(payload)
+                )
                 successful.append(model)
             for model, entries in source_manifest.get("recent", {}).items():
                 for entry in entries:
@@ -109,6 +114,10 @@ def main() -> None:
                         raise ValueError(f"{model} recent payload failed its embedded QA")
                     current = manifest.setdefault("recent", {}).setdefault(model, [])
                     manifest["recent"][model] = replace_recent_entry(current, entry)
+                    history = manifest.setdefault("analysis_history", {}).setdefault(model, [])
+                    manifest["analysis_history"][model] = replace_analysis_entry(
+                        history, analysis_entry(payload)
+                    )
             for entry in source_manifest.get("archive", []):
                 relative = str(entry["url"])
                 payload = copy_payload(
@@ -118,8 +127,9 @@ def main() -> None:
                 )
                 if "weather" in payload or "tracking_qa" in payload:
                     raise ValueError(f"{source_root / relative} contains fields forbidden from the archive")
+                enriched_entry = {**entry, "analysis_centres": analysis_centres(payload)}
                 manifest["archive"] = replace_archive_entry(
-                    manifest.setdefault("archive", []), entry
+                    manifest.setdefault("archive", []), enriched_entry
                 )
 
         missing_models = [] if args.partial else sorted(set(DEFAULT_MODELS) - staged_models)
@@ -134,7 +144,7 @@ def main() -> None:
         reference = source_manifests[0]
         for key in (
             "schema", "schedule", "forecast_horizon_hours", "weather_archive_policy",
-            "catalogue_verification", "source_notes",
+            "analysis_stitch_policy", "catalogue_verification", "source_notes",
         ):
             if key in reference:
                 manifest[key] = reference[key]

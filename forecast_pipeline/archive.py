@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from .analysis_history import analysis_centres
 from .forecast_core import haversine_km
 
 
@@ -234,6 +235,7 @@ def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[s
         "forecast_track_points": sum(len(track.get("points", [])) for track in payload.get("tracks", [])),
         "valid_time_count": len(payload.get("valid_times", [])),
         "complete_valid_time_axis": bool(payload.get("archive_coverage", {}).get("complete_valid_time_axis")),
+        "analysis_centres": analysis_centres(payload),
         "model_version": payload.get("model_version", {}),
         "verification_status": verification.get("status", "unavailable"),
         "verification_labels": labels,

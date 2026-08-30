@@ -29,7 +29,11 @@ from forecast_pipeline.sources import (
     parse_ecmwf_index,
     parse_ncep_index,
 )
-from forecast_pipeline.archive import archive_payload
+from forecast_pipeline.analysis_history import (
+    analysis_centres,
+    replace_analysis_entry,
+)
+from forecast_pipeline.archive import archive_manifest_entry, archive_payload
 from forecast_pipeline.update import replace_recent_entry
 from forecast_pipeline.v56_tracking import _longest_true_run
 from forecast_pipeline.versions import model_version
@@ -148,6 +152,45 @@ class ForecastPipelineContractTests(unittest.TestCase):
         retained = replace_recent_entry([entry(54), entry(48), entry(42), entry(6)], entry(0))
         self.assertEqual([item["cycle"] for item in retained], [entry(0)["cycle"], entry(6)["cycle"], entry(42)["cycle"], entry(48)["cycle"]])
 
+    def test_analysis_centres_average_t0_and_keep_six_hour_signature(self) -> None:
+        payload = {
+            "systems": [{"id": "S01", "member_count": 2, "track_ids": ["a", "b"]}],
+            "tracks": [
+                {
+                    "id": "a",
+                    "maximum_provisional_category": 1,
+                    "points": [[0, 80, 20], [6, 79, 21], [12, 78, 22]],
+                },
+                {
+                    "id": "b",
+                    "maximum_provisional_category": 2,
+                    "points": [[0, 82, 22], [6, 81, 23], [12, 80, 24]],
+                },
+            ],
+        }
+        centres = analysis_centres(payload)
+        self.assertEqual(len(centres), 1)
+        self.assertEqual((centres[0]["longitude"], centres[0]["latitude"]), (81.0, 21.0))
+        self.assertEqual(centres[0]["peak_category"], 2)
+        self.assertEqual(centres[0]["match_points"], [[0, 81.0, 21.0], [6, 80.0, 22.0], [12, 79.0, 23.0]])
+
+    def test_analysis_history_retains_fourteen_days(self) -> None:
+        newest = datetime(2026, 8, 30, 12, tzinfo=UTC)
+
+        def entry(hours_ago: int) -> dict[str, object]:
+            cycle = newest - timedelta(hours=hours_ago)
+            return {
+                "cycle": cycle.strftime("%Y%m%d%H"),
+                "cycle_utc": cycle.isoformat().replace("+00:00", "Z"),
+                "centres": [],
+            }
+
+        retained = replace_analysis_entry([entry(342), entry(336), entry(6)], entry(0))
+        self.assertEqual(
+            [item["cycle"] for item in retained],
+            [entry(0)["cycle"], entry(6)["cycle"], entry(336)["cycle"]],
+        )
+
     def test_compact_archive_preserves_complete_axis_and_tracks(self) -> None:
         payload = {
             "schema": "mla-forecast-cycle-v1",
@@ -168,6 +211,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(archived["archive_coverage"]["valid_time_count"], 2)
         self.assertEqual(archived["archive_coverage"]["published_track_point_count"], 2)
         self.assertTrue(archived["archive_coverage"]["includes_zero_disturbance_cycles"])
+        self.assertEqual(archive_manifest_entry(archived, "archive/gfs/x.json.gz")["analysis_centres"], [])
 
     def test_model_version_crosswalk_uses_cycle_boundaries(self) -> None:
         before = model_version("gfs", datetime(2021, 3, 22, 11, tzinfo=UTC))
