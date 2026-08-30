@@ -1,0 +1,5 @@
+MAILTO=""
+CRON_TZ=UTC
+
+# Submit the six-hourly Monsoon LPS Atlas forecast refresh after provider lag.
+15 4,10,16,22 * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/bash scripts/submit_forecast_update.sh >> hpc-logs/forecast-cron.log 2>&1

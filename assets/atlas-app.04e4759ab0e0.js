@@ -1556,7 +1556,7 @@
 			button.tabIndex = selected ? 0 : -1;
 		});
 		$$('[data-panel]').forEach(panel => { panel.hidden = panel.dataset.panel !== name; });
-		$('#mlaFilterDock').hidden = name === 'data';
+		$('#mlaFilterDock').hidden = name === 'data' || name === 'forecast';
 		renderCurrentPanel();
 		if (push) writeUrl('push');
 	}
@@ -1636,7 +1636,7 @@
 
 	function readUrl() {
 		const parameters = new URLSearchParams(window.location.search);
-		const validTabs = new Set(['explore', 'climatology', 'extremes', 'data']);
+		const validTabs = new Set(['explore', 'forecast', 'climatology', 'extremes', 'data']);
 		if (validTabs.has(parameters.get('tab'))) state.tab = parameters.get('tab');
 		const years = parameters.get('years');
 		if (years && /^\d{4}-\d{4}$/.test(years)) {
@@ -4854,6 +4854,7 @@
 	function renderCurrentPanel() {
 		if (!CORE) return;
 		if (state.tab === 'explore') renderExplore();
+		else if (state.tab === 'forecast') window.dispatchEvent(new CustomEvent('mla:forecast-visible'));
 		else if (state.tab === 'climatology') renderClimatology();
 		else if (state.tab === 'extremes') renderExtremes();
 		else if (state.tab === 'verification') renderVerification();

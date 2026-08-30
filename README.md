@@ -59,6 +59,32 @@ python scripts/build_vorticity_videos.py \
 
 Repeat finalization for each field. Deploy the common directory at the `weatherBase` URL in `index.html`, or use a field-specific entry in `weatherBases`; the videos live below `vorticity/`, `precipitation/` and `rh500/`.
 
+## Forecast guidance
+
+The Forecasts tab is a lazy static client backed by compact files on the public JASMIN GWS. It ingests GFS, GEFS, IFS, IFS ENS, AIFS Single and AIFS ENS from the providers' official feeds. Every published member is passed through the frozen v5.6 three-pressure-level detector and continuity linker; a lightweight tracker is retained only as an independent QA comparison and never supplies displayed coordinates. Six-hourly model fields are linearly interpolated onto the linker's hourly clock. Tracks fully observed within the forecast must pass the frozen v5.6 final physical-event gate. Only tracks touching initialization or the forecast horizon may scale its duration requirements, while retaining the same strong release-domain evidence requirement. All forecast labels remain provisional guidance.
+
+Latest files include positive 850-hPa relative vorticity and trailing-24-hour precipitation on a common 1-degree grid. Ensemble weather is the arithmetic member mean, while individual member tracks remain available. Searchable archive files omit weather and internal tracking QA, and attach a dashed ERA5 v5.6 verification track where the catalogue overlaps by at least six hours and passes the documented distance limits. Superseded gridded files are removed after the manifest changes atomically; the compact track archive is retained.
+
+Run an update interactively with:
+
+```bash
+bash scripts/run_forecast_update.sh
+```
+
+The production wrapper submits no duplicate while `mla-forecast` is queued or running:
+
+```bash
+bash scripts/submit_forecast_update.sh
+```
+
+Production cron invokes that wrapper at 04:15, 10:15, 16:15 and 22:15 UTC, allowing the providers time to finish the previous synoptic cycle through +120 h. Source discovery falls back through recent six-hour cycles independently for each model. A failed model preserves its prior valid Latest entry and records the failure in `manifest.json`.
+
+Fast local contract tests are independent of the network:
+
+```bash
+python -m unittest forecast_pipeline.test_pipeline
+```
+
 ## Storm-centred composite archive
 
 The atlas loads one small gzipped JSON asset only after a user selects a system. The archive therefore adds no bulk transfer to initial page load. It is generated one system per unthrottled Slurm array task from the v5.6 public Parquet catalogue; the submission helper schedules a validating manifest job after every system succeeds:

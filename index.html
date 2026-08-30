@@ -471,6 +471,46 @@
 }
 .mla-toast[data-visible="true"] { opacity: 1; transform: none; }
 
+.mla-forecast-modebar { display: flex; gap: 7px; margin-bottom: 12px; }
+.mla-forecast-modebar .mla-btn[aria-pressed="true"] { background: var(--mla-indigo-deep); border-color: var(--mla-indigo-deep); color: #fffdf6 !important; }
+.mla-forecast-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-well); color: var(--mla-muted); }
+.mla-forecast-notice[data-tone="flag"] { border-color: color-mix(in srgb, var(--mla-flag) 55%, var(--mla-line)); color: var(--mla-flag); }
+.mla-forecast-notice[data-tone="good"] { border-color: color-mix(in srgb, var(--mla-good) 55%, var(--mla-line)); color: var(--mla-good); }
+.mla-forecast-layout { display: grid; grid-template-columns: minmax(0, 2.35fr) minmax(280px, .8fr); gap: 14px; align-items: start; }
+.mla-forecast-map-card { overflow: hidden; }
+.mla-forecast-controls { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 9px; padding: 12px; border-bottom: 1px solid var(--mla-line); }
+.mla-forecast-archive-controls { display: grid; grid-template-columns: minmax(180px, 1.3fr) minmax(150px, .7fr) minmax(230px, 1.4fr); gap: 9px; padding: 12px; border-bottom: 1px solid var(--mla-line); }
+.mla-forecast-map-stack { position: relative; height: min(62vh, 690px); min-height: 480px; overflow: hidden; background: var(--mla-sea); }
+.mla-forecast-map-stack canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.mla-forecast-timeline { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 9px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--mla-line); }
+.mla-forecast-timeline input { width: 100%; accent-color: var(--mla-indigo); }
+.mla-forecast-time { min-width: 174px; text-align: right; font-variant-numeric: tabular-nums; }
+.mla-forecast-map-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 12px 11px; color: var(--mla-muted); font-size: 12px; }
+.mla-forecast-key { display: inline-flex; align-items: center; gap: 6px; }
+.mla-forecast-key-ramp { width: 120px; height: 10px; border-radius: 999px; background: linear-gradient(90deg, transparent, #54bce4, #75cd6e, #ffd34d, #f4713d, #8f2938); }
+.mla-forecast-dossier { padding: 14px; position: sticky; top: 72px; }
+.mla-forecast-dossier h3 { margin: 0 0 6px; font-family: var(--mla-font); font-size: 22px; font-weight: 500; }
+.mla-forecast-dossier h4 { margin: 16px 0 6px; font-size: 14px; }
+.mla-forecast-dossier p { margin: 6px 0; color: var(--mla-muted); }
+.mla-forecast-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 12px 0; }
+.mla-forecast-fact { padding: 8px; border: 1px solid var(--mla-line); border-radius: 8px; background: var(--mla-well); }
+.mla-forecast-fact span { display: block; color: var(--mla-muted); font-size: 11px; }
+.mla-forecast-fact strong { display: block; margin-top: 2px; font-size: 15px; font-weight: 550; }
+.mla-forecast-model-list { display: grid; gap: 6px; margin-top: 9px; }
+.mla-forecast-model-status { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 0; border-top: 1px solid var(--mla-line); }
+.mla-forecast-model-status i { width: 9px; height: 9px; border-radius: 50%; background: var(--mla-faint); }
+.mla-forecast-model-status[data-status="success"] i { background: var(--mla-good); }
+.mla-forecast-model-status[data-status="failed"] i { background: var(--mla-flag); }
+.mla-forecast-model-status small { color: var(--mla-muted); text-align: right; }
+.mla-forecast-track-legend { display: grid; gap: 5px; margin-top: 8px; color: var(--mla-muted); font-size: 12px; }
+.mla-forecast-track-legend span { display: flex; align-items: center; gap: 7px; }
+.mla-forecast-track-legend i { display: inline-block; width: 28px; height: 0; border-top: 3px solid var(--mla-indigo); }
+.mla-forecast-track-legend i[data-kind="member"] { border-top-width: 1px; opacity: .65; }
+.mla-forecast-track-legend i[data-kind="era5"] { border-top: 2px dashed var(--mla-ink); }
+.mla-forecast-method { margin-top: 14px; }
+.mla-forecast-method summary { cursor: pointer; font-weight: 550; }
+.mla-forecast-method p { max-width: 105ch; }
+
 @media (max-width: 1180px) {
 	.mla-filter-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.mla-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -481,6 +521,8 @@
 	.mla-dossier .mla-dossier-actions,
 	.mla-dossier .mla-match-box { grid-column: 1 / -1; }
 	.mla-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.mla-forecast-layout { grid-template-columns: 1fr; }
+	.mla-forecast-dossier { position: static; }
 }
 
 @media (max-width: 760px) {
@@ -518,6 +560,11 @@
 	.mla-weather-key,
 	.mla-time-controls .mla-map-toggle,
 	#mlaRetryWeather { grid-column: 1 / -1; margin-right: 0; }
+	.mla-forecast-controls,
+	.mla-forecast-archive-controls { grid-template-columns: 1fr 1fr; }
+	.mla-forecast-map-stack { min-height: 400px; height: 56vh; }
+	.mla-forecast-timeline { grid-template-columns: auto minmax(0, 1fr) auto; }
+	.mla-forecast-time { grid-column: 1 / -1; text-align: left; }
 }
 
 @media (max-width: 460px) {
@@ -536,6 +583,9 @@
 	.mla-subset-section-chart { height: 330px; }
 	.mla-btn,
 	.mla-tab { min-height: 44px; }
+	.mla-forecast-controls,
+	.mla-forecast-archive-controls { grid-template-columns: 1fr; }
+	.mla-forecast-map-stack { min-height: 310px; height: 48vh; }
 }
 
 @media (pointer: coarse), (max-width: 760px) {
@@ -569,6 +619,7 @@
 	<div class="mla-nav-shell">
 		<nav class="mla-wrap mla-tabs" role="tablist" aria-label="Atlas sections">
 			<button class="mla-tab" role="tab" id="mlaTabExplore" aria-selected="true" aria-controls="mlaPanelExplore" data-tab="explore" type="button">Explore</button>
+			<button class="mla-tab" role="tab" id="mlaTabForecast" aria-selected="false" aria-controls="mlaPanelForecast" data-tab="forecast" type="button">Forecasts</button>
 			<button class="mla-tab" role="tab" id="mlaTabClimatology" aria-selected="false" aria-controls="mlaPanelClimatology" data-tab="climatology" type="button">Climatology</button>
 			<button class="mla-tab" role="tab" id="mlaTabExtremes" aria-selected="false" aria-controls="mlaPanelExtremes" data-tab="extremes" type="button">Extremes</button>
 			<button class="mla-tab" role="tab" id="mlaTabData" aria-selected="false" aria-controls="mlaPanelData" data-tab="data" type="button">Data & methods</button>
@@ -709,6 +760,51 @@
 			<div class="mla-filter-notice" id="mlaFilterNotice" role="status" hidden><p id="mlaFilterNoticeText"></p><button class="mla-btn mla-btn-small" id="mlaClearConflicts" type="button">Clear conflicting filters</button></div>
 		</section>
 
+		<section class="mla-panel" id="mlaPanelForecast" role="tabpanel" aria-labelledby="mlaTabForecast" data-panel="forecast" hidden>
+			<div class="mla-panel-heading">
+				<div><h2>Forecast guidance</h2><p>Objective LPS tracks from current global forecasts, using the atlas detector and continuity linker. Forecast intensity is provisional.</p></div>
+			</div>
+			<div class="mla-forecast-modebar" role="group" aria-label="Forecast view">
+				<button class="mla-btn mla-btn-small" id="mlaForecastModeLatest" type="button" aria-pressed="true">Latest</button>
+				<button class="mla-btn mla-btn-small" id="mlaForecastModeArchive" type="button" aria-pressed="false">Archive &amp; verification</button>
+			</div>
+			<div class="mla-forecast-notice" id="mlaForecastNotice" role="status" aria-live="polite"><span>Open this tab to load forecast guidance.</span><button class="mla-btn mla-btn-small" id="mlaForecastRetry" type="button" hidden>Retry</button></div>
+			<div class="mla-forecast-layout">
+				<section class="mla-card mla-forecast-map-card" aria-labelledby="mlaForecastMapHeading">
+					<h3 class="mla-sr-only" id="mlaForecastMapHeading">Forecast tracks and weather</h3>
+					<div class="mla-forecast-controls" id="mlaForecastLiveControls">
+						<label class="mla-field" for="mlaForecastModel"><span class="mla-label">Forecast model</span><select class="mla-select" id="mlaForecastModel"></select></label>
+						<label class="mla-field" for="mlaForecastSystem"><span class="mla-label">Forecast system</span><select class="mla-select" id="mlaForecastSystem"><option value="all">All forecast systems</option></select></label>
+						<label class="mla-field" for="mlaForecastWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
+						<label class="mla-map-toggle" for="mlaForecastMembers"><input id="mlaForecastMembers" type="checkbox" checked> Show individual members</label>
+					</div>
+					<div class="mla-forecast-archive-controls" id="mlaForecastArchiveControls" hidden>
+						<label class="mla-field" for="mlaForecastArchiveSearch"><span class="mla-label">Find an archived cycle or storm</span><input class="mla-control" id="mlaForecastArchiveSearch" type="search" placeholder="Hamoon, 2023-10-21 or 2023102100"></label>
+						<label class="mla-field" for="mlaForecastArchiveModel"><span class="mla-label">Model</span><select class="mla-select" id="mlaForecastArchiveModel"><option value="all">All models</option></select></label>
+						<label class="mla-field" for="mlaForecastArchiveCase"><span class="mla-label">Archived forecast</span><select class="mla-select" id="mlaForecastArchiveCase"></select></label>
+					</div>
+					<div class="mla-forecast-map-stack" id="mlaForecastMapStack">
+						<canvas id="mlaForecastBase" aria-hidden="true"></canvas>
+						<canvas id="mlaForecastWeatherMap" aria-hidden="true"></canvas>
+						<canvas id="mlaForecastTracks" role="img" aria-label="Forecast LPS tracks and current forecast positions"></canvas>
+					</div>
+					<div class="mla-forecast-timeline">
+						<button class="mla-btn mla-btn-small" id="mlaForecastPrevious" type="button" aria-label="Previous forecast time">−6 h</button>
+						<label class="mla-sr-only" for="mlaForecastLead">Forecast lead time</label><input id="mlaForecastLead" type="range" min="0" max="0" step="1" value="0">
+						<button class="mla-btn mla-btn-small" id="mlaForecastNext" type="button" aria-label="Next forecast time">+6 h</button>
+						<output class="mla-forecast-time" id="mlaForecastTime">—</output>
+					</div>
+					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span></div>
+				</section>
+				<aside class="mla-card mla-forecast-dossier" id="mlaForecastDossier"><h3>Forecast status</h3><p>Choose Latest for live guidance or Archive to compare a past forecast with the ERA5 v5.6 track.</p></aside>
+			</div>
+			<details class="mla-card mla-prose mla-forecast-method">
+				<summary>Forecast method, sources and limitations</summary>
+				<p>Each deterministic run and each ensemble member is processed independently. Model MSLP, 850/700/500-hPa winds and vorticity, precipitation and 10-m winds are placed on a common 1° South Asian grid. Continuous six-hourly model fields are interpolated to the hourly clock used by the frozen v5.6 object detector and probabilistic continuity linker. No genesis-basin rule is applied.</p>
+				<p>Tracks fully observed within the forecast must pass the frozen v5.6 physical-event gate. Only tracks touching initialization or the forecast horizon may use scaled duration requirements, while retaining the same strong release-domain evidence requirement. Their model-derived intensity classes are provisional guidance, not official IMD classifications or new catalogue events. Latest ensemble weather fields are arithmetic member means. The searchable archive keeps forecast tracks and, when the date falls within catalogue coverage, overlays the verifying hourly ERA5 v5.6 track; archived weather grids are intentionally omitted.</p>
+			</details>
+		</section>
+
 		<section class="mla-panel" id="mlaPanelExplore" role="tabpanel" aria-labelledby="mlaTabExplore" data-panel="explore">
 			<div class="mla-panel-heading">
 				<h2>System explorer</h2>
@@ -831,9 +927,10 @@
 	</main>
 </div>
 
-<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.4dbc0deb2e5e.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
+<script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.4dbc0deb2e5e.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.ba65979d5a6b.js"></script>
+<script src="assets/atlas-app.04e4759ab0e0.js"></script>
+<script src="assets/forecast-app.15d60124ae8e.js"></script>
 
 </body>
 </html>
