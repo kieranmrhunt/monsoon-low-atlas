@@ -24,15 +24,18 @@
 	});
 	const COMPOSITE_PALETTES = Object.freeze({
 		terrain_r: ['#ffffff', '#dfd6d4', '#bfada9', '#9f847e', '#805c54', '#a08566', '#c0ae77', '#e0d788', '#fdff99', '#bdf28c', '#7de57f', '#3dd872', '#00cb6a', '#00abcb', '#0a86ec', '#1f5bc1', '#333399'],
-		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f']
+		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f'],
+		humidity: ['#ffffd9', '#edf8b1', '#c7e9b4', '#7fcdbb', '#41b6c4', '#1d91c0', '#225ea8', '#253494', '#081d58']
 	});
 	const COMPOSITE_SECTION_DEFINITIONS = Object.freeze({
 		relative_vorticity: {label: 'Relative vorticity', unit: '10⁻⁵ s⁻¹', minimum: -20, maximum: 20, palette: 'vorticity'},
-		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 370, palette: 'vorticity', topPressure: 125}
+		theta_e: {label: 'Equivalent potential temperature (θₑ)', unit: 'K', minimum: 330, maximum: 370, palette: 'vorticity', topPressure: 125},
+		relative_humidity: {label: 'Relative humidity', unit: '%', minimum: 0, maximum: 100, palette: 'humidity'}
 	});
 	const SUBSET_COMPOSITE_DEFINITIONS = Object.freeze({
 		relative_vorticity: {...COMPOSITE_SECTION_DEFINITIONS.relative_vorticity, kind: 'vertical_section'},
 		theta_e: {...COMPOSITE_SECTION_DEFINITIONS.theta_e, kind: 'vertical_section'},
+		relative_humidity: {...COMPOSITE_SECTION_DEFINITIONS.relative_humidity, kind: 'vertical_section'},
 		precipitation: {label: 'ERA5 daily precipitation', unit: 'mm day⁻¹', minimum: 0, palette: 'terrain_r', kind: 'horizontal_precipitation'}
 	});
 	const COMPOSITE_TICK_FONT_SIZE = 12;
@@ -3996,6 +3999,13 @@
 			});
 			return;
 		}
+		if (!SECTIONS.fields[variable]) {
+			emptyChart('mlaSubsetSectionChart', `${definition.label} is not available in this composite archive`);
+			emptyChart('mlaReferenceSectionChart', `${definition.label} is not available in this composite archive`);
+			$('#mlaSubsetSectionStatus').textContent = 'This field is not present in the loaded composite archive.';
+			$('#mlaReferenceSectionStatus').textContent = 'This field is not present in the loaded composite archive.';
+			return;
+		}
 		const reference = state.sectionReference || CORE.tracks.map((unused, index) => index);
 		const current = meanSubsetSection(state.active, variable, `current:${filterSignature()}`);
 		const referenceKey = state.sectionReference ? `pinned:${state.sectionReference.join('.')}` : 'all';
@@ -4023,9 +4033,14 @@
 				: `${definition.label} lifecycle-mean storm-centred vertical section for ${baseline.systems} systems in the reference subset`);
 		}
 		const method = precipitation ? SECTIONS.method.precipitation : SECTIONS.method.vertical;
+		const verticalDisplayNote = variable === 'theta_e'
+			? 'The θₑ view omits 100 hPa and uses a fixed 330–370 K scale.'
+			: variable === 'relative_humidity'
+				? 'Relative humidity is derived from ERA5 T and q using mixed-phase saturation vapour pressure, bounded to 0–100%, and shown on that fixed scale.'
+				: 'Relative vorticity uses a fixed −20 to 20 × 10⁻⁵ s⁻¹ scale.';
 		$('#mlaSubsetSectionData').innerHTML = precipitation
 			? `<p>${esc(method)} Each system contributes one lifecycle-mean footprint to the subset mean. The interactive display uses a 0.5° storm-relative latitude–longitude grid. Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`
-			: `<p>${esc(method)} The display uses a 0.5° relative-longitude grid and preserves all ${fmt(SECTIONS.grid.pressure_hpa.length)} pressure levels; θₑ omits 100 hPa in the plotted view. Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`;
+			: `<p>${esc(method)} The display uses a 0.5° relative-longitude grid and preserves all ${fmt(SECTIONS.grid.pressure_hpa.length)} pressure levels. ${esc(verticalDisplayNote)} Source archives: ${esc(SECTIONS.fields[variable].sources.join('; '))}.</p>`;
 	}
 
 	function compositeOptionLabel(key) {
@@ -4124,7 +4139,7 @@
 				return [COMPOSITE_SECTION_DEFINITIONS[key].label, `${field.samples}/${field.requested_samples} lifecycle snapshots`, field.source];
 			})
 		];
-		$('#mlaCompositeData').innerHTML = accessibleTable(['Field', 'Coverage', 'Source'], availabilityRows, `${asset.method.precipitation} ${asset.method.vertical} The θₑ display omits 100 hPa and uses a fixed 330–370 K blue–white–red scale.`);
+		$('#mlaCompositeData').innerHTML = accessibleTable(['Field', 'Coverage', 'Source'], availabilityRows, `${asset.method.precipitation} ${asset.method.vertical} The θₑ display omits 100 hPa and uses a fixed 330–370 K blue–white–red scale. Relative humidity is derived from ERA5 T and q using mixed-phase saturation vapour pressure, bounded to 0–100%, and uses a fixed sequential scale.`);
 	}
 
 	function seriesValues(index, key) {

@@ -21,6 +21,9 @@ EXTRA_ARGS=()
 if [[ "${LPS_COMPOSITE_FORCE:-0}" == "1" ]]; then
   EXTRA_ARGS+=(--force)
 fi
+if [[ "${LPS_COMPOSITE_RH_ONLY:-0}" == "1" ]]; then
+  EXTRA_ARGS+=(--relative-humidity-only)
+fi
 "$PYTHON" scripts/build_storm_composite.py \
   --catalogue "$CATALOGUE" \
   --output "$OUTPUT" \

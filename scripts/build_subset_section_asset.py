@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 NULL_I16 = -32768
-SECTION_FIELDS = ("relative_vorticity", "theta_e")
+SECTION_FIELDS = ("relative_vorticity", "theta_e", "relative_humidity")
 PRECIPITATION_FIELDS = {"precipitation": "era5"}
 FIELDS = SECTION_FIELDS + tuple(PRECIPITATION_FIELDS)
 

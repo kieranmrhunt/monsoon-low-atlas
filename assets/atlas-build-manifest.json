@@ -4,15 +4,15 @@
   "state_rainfall_sha256": "19455971196f61d0effb6cabcbebad003fb8cd5e78d36fa3193fac0944d652ba",
   "core": "atlas-core.cefb51e2bde1.json.gz",
   "detail": "atlas-detail.4ca0b5c25000.json.gz",
-  "sections": "atlas-sections.4dbc0deb2e5e.json.gz",
-  "sections_built_utc": "2026-08-29T11:28:18.263842+00:00",
-  "sections_sha256": "4dbc0deb2e5e10a2b72984bf1ea496599c1a885e457aca1b98e84cdf51d7b8a2",
+  "sections": "atlas-sections.fb73f87d4d7a.json.gz",
+  "sections_built_utc": "2026-08-30T22:47:01.641682+00:00",
+  "sections_sha256": "fb73f87d4d7a10eb90808031f8390af0e82821b65d6f6a667ac29c4b682e1eb3",
   "core_uncompressed_bytes": 3533186,
   "core_compressed_bytes": 1681501,
   "detail_uncompressed_bytes": 49488185,
   "detail_compressed_bytes": 12388468,
-  "sections_uncompressed_bytes": 21981055,
-  "sections_compressed_bytes": 11141342,
+  "sections_uncompressed_bytes": 28225170,
+  "sections_compressed_bytes": 14636919,
   "sections_qa": {
     "tracks": 2115,
     "relative_longitude_step_degrees": 0.5,
@@ -26,6 +26,7 @@
     "fields": [
       "relative_vorticity",
       "theta_e",
+      "relative_humidity",
       "precipitation"
     ]
   },

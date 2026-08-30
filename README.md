@@ -29,7 +29,7 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 - Weather backgrounds are visual context layers, not additional catalogue diagnostics. The menu offers positive ERA5 850-hPa relative vorticity and trailing 24-hour accumulated precipitation at 0.25°, plus RH500 derived from 3-hourly ERA5 temperature and specific humidity and interpolated to the hourly slider at 1°. Precipitation uses a terrain-inspired kiwi–mango–berry sequential ramp, with near-zero amounts transparent. Subset tracks are hidden by default while a weather field is active and can be restored with the map checkbox.
 - Selected-system composites use unrotated storm-relative geographic coordinates: every contributing field is translated so its contemporaneous published centre lies at relative longitude 0°, relative latitude 0°, with north left at the top. The fields are not rotated into the direction of travel.
 - Each precipitation footprint is the lifecycle mean of UTC-day accumulations on a ±10°, 0.25° grid. A touched UTC day's centre is the published position closest to 12 UTC on that day. ERA5 uses hourly mean total precipitation rate accumulated over the day; IMERG Final Run is offered when at least one local contributing day is available (V06 `precipitationCal` or V07 `precipitation`), with its partial temporal coverage reported in the atlas.
-- Each vertical composite is a zonal section through 0° relative latitude, averaged over nine equally spaced lifecycle snapshots and interpolated to 27 pressure levels from 1000 to 100 hPa. The controls switch between ERA5 relative vorticity and equivalent potential temperature calculated from temperature and specific humidity following Bolton (1980). The archive retains every pressure level; the atlas θₑ view omits the anomalously warm 100-hPa level and uses a fixed 330–370 K blue–white–red scale, while relative vorticity retains 100 hPa. Local JASMIN ERA5 model-level analyses supply 1979 onward; the public ARCO ERA5 pressure-level archive supplies earlier snapshots.
+- Each vertical composite is a zonal section through 0° relative latitude, averaged over nine equally spaced lifecycle snapshots and interpolated to 27 pressure levels from 1000 to 100 hPa. The controls switch among ERA5 relative vorticity, equivalent potential temperature calculated from temperature and specific humidity following Bolton (1980), and mixed-phase relative humidity derived from the same temperature and humidity fields. The archive retains every pressure level; the atlas θₑ view omits the anomalously warm 100-hPa level and uses a fixed 330–370 K blue–white–red scale, while vorticity and RH retain 100 hPa. RH is bounded to 0–100% and uses a fixed sequential yellow–green–blue scale. Local JASMIN ERA5 model-level analyses supply 1979 onward; the public ARCO ERA5 pressure-level archive supplies earlier snapshots.
 - Climate filters are evaluated at genesis. BSISO-1 uses the APCC daily index during May–October; MJO uses the Bureau of Meteorology all-season Wheeler–Hendon RMM index; and ENSO uses the NOAA CPC three-month ONI anomaly centred on the genesis month. Amplitudes below 1 are inactive, while missing, pre-index and BSISO out-of-season values remain explicitly selectable.
 - On screens up to 760 px wide, the actual map time controls remain directly beneath the map and the selected-system dossier follows the map card in the normal page flow.
 - Climatology combines annual systems, exposure-normalised rates or system-days with an 11-year mean and descriptive Theil–Sen slope; monthly class count/share, class frequency by decade, genesis-to-lysis pathways, track density and MJO/BSISO/ENSO composition all honour the current filters. Its storm-centred comparison shows vertical structure or an ERA5 precipitation footprint for the current subset beside the complete catalogue or a user-pinned reference subset on a shared scale.
@@ -117,6 +117,13 @@ The atlas loads one small gzipped JSON asset only after a user selects a system.
 
 ```bash
 bash scripts/submit_storm_composites.sh
+```
+
+To add RH to an otherwise complete archive without rereading precipitation or
+wind fields, run the same unthrottled array in incremental mode:
+
+```bash
+LPS_COMPOSITE_RH_ONLY=1 bash scripts/submit_storm_composites.sh
 ```
 
 After every task finishes, validate all assets against the catalogue and create the archive manifest:

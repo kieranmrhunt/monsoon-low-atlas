@@ -472,11 +472,46 @@ def theta_e_bolton(temperature_k: np.ndarray, specific_humidity: np.ndarray) -> 
     return theta_e
 
 
+def relative_humidity_mixed_phase(
+    temperature_k: np.ndarray,
+    specific_humidity: np.ndarray,
+) -> np.ndarray:
+    """Relative humidity from ERA5 T and q using IFS-style mixed-phase saturation."""
+    pressure_pa = PRESSURE_HPA[:, None] * 100.0
+    temperature = np.asarray(temperature_k, dtype=np.float64)
+    q = np.asarray(specific_humidity, dtype=np.float64)
+    epsilon = 0.622
+    vapour_pressure = q * pressure_pa / (epsilon + (1.0 - epsilon) * q)
+    temperature_c = temperature - 273.15
+    saturation_water = 611.21 * np.exp(
+        (18.678 - temperature_c / 234.5)
+        * (temperature_c / (257.14 + temperature_c))
+    )
+    saturation_ice = 611.15 * np.exp(
+        (23.036 - temperature_c / 333.7)
+        * (temperature_c / (279.82 + temperature_c))
+    )
+    water_weight = np.clip((temperature - 250.16) / 23.0, 0.0, 1.0) ** 2
+    saturation_pressure = (
+        water_weight * saturation_water + (1.0 - water_weight) * saturation_ice
+    )
+    relative_humidity = 100.0 * vapour_pressure / saturation_pressure
+    invalid = (
+        ~np.isfinite(temperature)
+        | ~np.isfinite(q)
+        | ~np.isfinite(relative_humidity)
+        | (saturation_pressure <= 0.0)
+    )
+    relative_humidity = np.clip(relative_humidity, 0.0, 100.0)
+    relative_humidity[invalid] = np.nan
+    return relative_humidity
+
+
 def arco_vertical_snapshot(
     timestamp: pd.Timestamp,
     centre_lat: float,
     centre_lon: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     target_longitudes = centre_lon + RELATIVE_DEGREES
     temperature_global = arco_chunk("temperature", timestamp)
     temperature = regular_line_from_global(
@@ -510,7 +545,28 @@ def arco_vertical_snapshot(
         + u_centre * math.tan(latitude_radians) / EARTH_RADIUS_M
     )
     theta_e = theta_e_bolton(temperature, humidity)
-    return relative_vorticity * 1.0e5, theta_e
+    relative_humidity = relative_humidity_mixed_phase(temperature, humidity)
+    return relative_vorticity * 1.0e5, theta_e, relative_humidity
+
+
+def arco_relative_humidity_snapshot(
+    timestamp: pd.Timestamp,
+    centre_lat: float,
+    centre_lon: float,
+) -> np.ndarray:
+    """Read only the thermodynamic ARCO fields needed for an RH augmentation."""
+    target_longitudes = centre_lon + RELATIVE_DEGREES
+    temperature_global = arco_chunk("temperature", timestamp)
+    temperature = regular_line_from_global(
+        temperature_global[ARCO_TARGET_INDICES], centre_lat, target_longitudes
+    )
+    del temperature_global
+    humidity_global = arco_chunk("specific_humidity", timestamp)
+    humidity = regular_line_from_global(
+        humidity_global[ARCO_TARGET_INDICES], centre_lat, target_longitudes
+    )
+    del humidity_global
+    return relative_humidity_mixed_phase(temperature, humidity)
 
 
 def model_file(root: Path, timestamp: pd.Timestamp, variable: str) -> Path:
@@ -589,7 +645,7 @@ def badc_vertical_snapshot(
     timestamp: pd.Timestamp,
     centre_lat: float,
     centre_lon: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     target_longitudes = centre_lon + RELATIVE_DEGREES
     sources = {key: model_file(root, timestamp, key) for key in ("vo", "t", "q", "lnsp")}
     missing = [str(path) for path in sources.values() if not path.exists()]
@@ -611,7 +667,41 @@ def badc_vertical_snapshot(
     vorticity = pressure_interpolate_model_line(vorticity_model, surface_pressure) * 1.0e5
     temperature = pressure_interpolate_model_line(temperature_model, surface_pressure)
     humidity = pressure_interpolate_model_line(humidity_model, surface_pressure)
-    return vorticity, theta_e_bolton(temperature, humidity)
+    return (
+        vorticity,
+        theta_e_bolton(temperature, humidity),
+        relative_humidity_mixed_phase(temperature, humidity),
+    )
+
+
+def badc_relative_humidity_snapshot(
+    root: Path,
+    timestamp: pd.Timestamp,
+    centre_lat: float,
+    centre_lon: float,
+) -> np.ndarray:
+    """Read only local ERA5 T, q and surface pressure for an RH augmentation."""
+    target_longitudes = centre_lon + RELATIVE_DEGREES
+    sources = {key: model_file(root, timestamp, key) for key in ("t", "q", "lnsp")}
+    missing = [str(path) for path in sources.values() if not path.exists()]
+    if missing:
+        raise FileNotFoundError("; ".join(missing))
+    surface_pressure = np.exp(
+        read_model_line(sources["lnsp"], "lnsp", None, centre_lat, target_longitudes)
+    )
+    temperature = pressure_interpolate_model_line(
+        read_model_line(
+            sources["t"], "t", MODEL_LEVEL_INDICES, centre_lat, target_longitudes
+        ),
+        surface_pressure,
+    )
+    humidity = pressure_interpolate_model_line(
+        read_model_line(
+            sources["q"], "q", MODEL_LEVEL_INDICES, centre_lat, target_longitudes
+        ),
+        surface_pressure,
+    )
+    return relative_humidity_mixed_phase(temperature, humidity)
 
 
 def build_vertical_sections(
@@ -623,29 +713,33 @@ def build_vertical_sections(
     totals = {
         "relative_vorticity": np.zeros(shape, dtype=np.float64),
         "theta_e": np.zeros(shape, dtype=np.float64),
+        "relative_humidity": np.zeros(shape, dtype=np.float64),
     }
     counts = {
         "relative_vorticity": np.zeros(shape, dtype=np.int16),
         "theta_e": np.zeros(shape, dtype=np.int16),
+        "relative_humidity": np.zeros(shape, dtype=np.int16),
     }
-    samples = {"relative_vorticity": 0, "theta_e": 0}
+    samples = {"relative_vorticity": 0, "theta_e": 0, "relative_humidity": 0}
     errors: list[str] = []
     source_names: set[str] = set()
     for timestamp, centre_lat, centre_lon in centres:
         try:
             if timestamp.year >= 1979:
                 try:
-                    vorticity, theta_e = badc_vertical_snapshot(
+                    vorticity, theta_e, relative_humidity = badc_vertical_snapshot(
                         paths.badc_model, timestamp, centre_lat, centre_lon
                     )
                     source_name = "BADC ERA5 model-level analysis"
                 except (FileNotFoundError, OSError, KeyError, IndexError, ValueError):
-                    vorticity, theta_e = arco_vertical_snapshot(
+                    vorticity, theta_e, relative_humidity = arco_vertical_snapshot(
                         timestamp, centre_lat, centre_lon
                     )
                     source_name = "ARCO ERA5 pressure-level analysis (BADC fallback)"
             else:
-                vorticity, theta_e = arco_vertical_snapshot(timestamp, centre_lat, centre_lon)
+                vorticity, theta_e, relative_humidity = arco_vertical_snapshot(
+                    timestamp, centre_lat, centre_lon
+                )
                 source_name = "ARCO ERA5 pressure-level analysis"
         except Exception as error:
             errors.append(f"vertical {timestamp:%Y-%m-%d %H:%M}: {error}")
@@ -655,6 +749,7 @@ def build_vertical_sections(
         for key, field in (
             ("relative_vorticity", vorticity),
             ("theta_e", theta_e),
+            ("relative_humidity", relative_humidity),
         ):
             if np.isfinite(field).any():
                 add_field(totals[key], counts[key], field)
@@ -665,6 +760,11 @@ def build_vertical_sections(
     definitions = {
         "relative_vorticity": (0.01, "10-5 s-1", source_kind),
         "theta_e": (0.1, "K", f"{source_kind}; Bolton (1980) theta-e from T and q"),
+        "relative_humidity": (
+            0.1,
+            "%",
+            f"{source_kind}; mixed-phase relative humidity from ERA5 T and q",
+        ),
     }
     for key, (scale, units, source) in definitions.items():
         packed = pack_field(
@@ -678,6 +778,54 @@ def build_vertical_sections(
         if packed is not None:
             fields[key] = packed
     return fields, errors, source_kind
+
+
+def build_relative_humidity_section(
+    track: pd.DataFrame,
+    paths: SourcePaths,
+) -> tuple[dict[str, Any] | None, list[str], str]:
+    """Build RH alone so the existing public composite archive can be augmented."""
+    centres = lifecycle_centres(track)
+    shape = (len(PRESSURE_HPA), len(RELATIVE_DEGREES))
+    total = np.zeros(shape, dtype=np.float64)
+    count = np.zeros(shape, dtype=np.int16)
+    samples = 0
+    errors: list[str] = []
+    source_names: set[str] = set()
+    for timestamp, centre_lat, centre_lon in centres:
+        try:
+            if timestamp.year >= 1979:
+                try:
+                    field = badc_relative_humidity_snapshot(
+                        paths.badc_model, timestamp, centre_lat, centre_lon
+                    )
+                    source_name = "BADC ERA5 model-level analysis"
+                except (FileNotFoundError, OSError, KeyError, IndexError, ValueError):
+                    field = arco_relative_humidity_snapshot(
+                        timestamp, centre_lat, centre_lon
+                    )
+                    source_name = "ARCO ERA5 pressure-level analysis (BADC fallback)"
+            else:
+                field = arco_relative_humidity_snapshot(timestamp, centre_lat, centre_lon)
+                source_name = "ARCO ERA5 pressure-level analysis"
+        except Exception as error:
+            errors.append(f"relative humidity {timestamp:%Y-%m-%d %H:%M}: {error}")
+            print(errors[-1], file=sys.stderr, flush=True)
+            continue
+        source_names.add(source_name)
+        if np.isfinite(field).any():
+            add_field(total, count, field)
+            samples += 1
+    source_kind = " + ".join(sorted(source_names)) or "unavailable"
+    packed = pack_field(
+        finite_mean(total, count),
+        scale=0.1,
+        units="%",
+        samples=samples,
+        requested_samples=len(centres),
+        source=f"{source_kind}; mixed-phase relative humidity from ERA5 T and q",
+    )
+    return packed, errors, source_kind
 
 
 def composite_asset(
@@ -720,6 +868,10 @@ def composite_asset(
             ),
             "vertical_source": vertical_source,
             "theta_e": "Bolton (1980) equivalent potential temperature from ERA5 T and q.",
+            "relative_humidity": (
+                "ERA5 relative humidity from T and q using mixed-phase saturation vapour "
+                "pressure, bounded to 0-100%."
+            ),
         },
         "precipitation": precipitation,
         "section": sections,
@@ -749,6 +901,33 @@ def atomic_gzip_json(payload: dict[str, Any], output: Path) -> None:
 
 def build_one(args: argparse.Namespace, track_id: int) -> Path:
     output = args.output / "tracks" / f"track-{track_id}.json.gz"
+    if args.relative_humidity_only and output.exists():
+        with gzip.open(output, "rt", encoding="utf-8") as stream:
+            asset = json.load(stream)
+        if asset.get("section", {}).get("relative_humidity") is not None and not args.force:
+            print(f"relative humidity exists {output}", flush=True)
+            return output
+        track = track_rows(args.catalogue, track_id)
+        paths = SourcePaths(args.era5_precip, args.imerg_daily, args.badc_model)
+        started = time.monotonic()
+        field, errors, source_kind = build_relative_humidity_section(track, paths)
+        if field is None:
+            raise RuntimeError(f"no relative-humidity snapshots available for track {track_id}")
+        asset.setdefault("section", {})["relative_humidity"] = field
+        asset.setdefault("method", {})["relative_humidity"] = (
+            "ERA5 relative humidity from T and q using mixed-phase saturation vapour "
+            "pressure, bounded to 0-100%."
+        )
+        asset["method"]["relative_humidity_source"] = source_kind
+        asset["built_utc"] = utc_now()
+        asset["warnings"] = (list(asset.get("warnings", [])) + errors)[:80]
+        atomic_gzip_json(asset, output)
+        print(
+            f"augmented relative humidity for track {track_id} in "
+            f"{time.monotonic() - started:.1f}s -> {output}",
+            flush=True,
+        )
+        return output
     if output.exists() and not args.force:
         print(f"exists {output}", flush=True)
         return output
@@ -865,7 +1044,7 @@ def build_manifest(output: Path, catalogue: Path) -> Path:
                         field, (len(RELATIVE_DEGREES), len(RELATIVE_DEGREES)), f"precipitation.{key}"
                     )
                 )
-            for key in ("relative_vorticity", "theta_e"):
+            for key in ("relative_vorticity", "theta_e", "relative_humidity"):
                 if key not in sections:
                     qa_errors.append(f"track {track_id}: missing section.{key}")
             for key, field in sections.items():
@@ -906,8 +1085,9 @@ def build_manifest(output: Path, catalogue: Path) -> Path:
         "tracks_with_imerg_precipitation": sum(
             "imerg" in value["precipitation"] for value in tracks.values()
         ),
-        "tracks_with_both_sections": sum(
-            value["section"] == ["relative_vorticity", "theta_e"]
+        "tracks_with_all_sections": sum(
+            value["section"]
+            == ["relative_humidity", "relative_vorticity", "theta_e"]
             for value in tracks.values()
         ),
         "tracks_with_source_read_warnings": sum(
@@ -987,6 +1167,11 @@ def parser() -> argparse.ArgumentParser:
         default=Path("/badc/ecmwf-era5/data/oper/an_ml"),
     )
     result.add_argument("--force", action="store_true")
+    result.add_argument(
+        "--relative-humidity-only",
+        action="store_true",
+        help="augment an existing per-track asset with RH without rereading other fields",
+    )
     return result
 
 
