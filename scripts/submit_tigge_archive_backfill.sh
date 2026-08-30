@@ -4,7 +4,7 @@ set -euo pipefail
 ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
-MAX_ACTIVE="${LPS_TIGGE_MAX_ACTIVE:-128}"
+MAX_ACTIVE="${LPS_TIGGE_MAX_ACTIVE:-16}"
 TIME_LIMIT="${LPS_TIGGE_TIME_LIMIT:-12:00:00}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_ROOT="$ATLAS_ROOT/.forecast-runs/tigge-ecmwf-backfill-$RUN_ID"
@@ -32,8 +32,8 @@ if [[ "$COUNT" == "0" ]]; then
   exit 0
 fi
 
-# ECDS performs its own server-side staging. This cap permits a large Slurm
-# wave while avoiding a single burst of nearly one thousand API submissions.
+# ECMWF documents a 20-request per-user queue ceiling. Leave four slots free
+# for interactive/retry work while keeping the TIGGE tape-staging queue full.
 ARRAY_ID="$(sbatch --parsable --time="$TIME_LIMIT" --array="1-$COUNT%$MAX_ACTIVE" scripts/backfill_forecast_cycle.slurm "$JOBS" "$RUN_ROOT" tigge)"
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$ARRAY_ID" scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$OUTPUT" tigge)"
 echo "Submitted ECMWF TIGGE array $ARRAY_ID ($COUNT tasks; up to $MAX_ACTIVE active) and finalizer $FINAL_ID"

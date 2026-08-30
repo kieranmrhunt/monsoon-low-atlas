@@ -104,9 +104,9 @@ archive. Submit or resume its event-spanning TIGGE cycles with:
 bash scripts/submit_tigge_archive_backfill.sh
 ```
 
-The default submission permits 128 simultaneous ECDS staging jobs and gives
-each task 12 hours. `LPS_TIGGE_MAX_ACTIVE` and `LPS_TIGGE_TIME_LIMIT` override
-those settings.
+The default submission permits 16 simultaneous ECDS staging jobs (below
+ECMWF's documented 20-request per-user queue ceiling) and gives each task 12
+hours. `LPS_TIGGE_MAX_ACTIVE` and `LPS_TIGGE_TIME_LIMIT` override those settings.
 
 ## Storm-centred composite archive
 
