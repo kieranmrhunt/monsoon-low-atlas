@@ -90,6 +90,28 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
             "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/620418893/Implementation%2Bof%2BAIFS%2BENS%2Bv2",
         },
     ),
+    "ukmo-global": (
+        {
+            "from": "2016031900",
+            "label": "Met Office Global 17 km archive product",
+            "source_url": "https://catalogue.ceda.ac.uk/uuid/86df725b793b4b4cb0ca0646686bd783",
+            "basis": "BADC product family; the exact operational suite is not encoded consistently in these GRIB files",
+        },
+    ),
+    "tigge-ecmwf": (
+        {
+            "from": "2016112212",
+            "label": "IFS Cycle 43r1",
+            "source_url": "https://confluence.ecmwf.int/spaces/TIGGE/pages/53523308/Model+upgrades",
+            "basis": "ECMWF TIGGE model-upgrade history",
+        },
+        {
+            "from": "2016030812",
+            "label": "IFS Cycle 41r2",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/51726000/Detailed+information+of+implementation+of+IFS+cycle+41r2",
+            "basis": "documented operational implementation interval",
+        },
+    ),
 }
 
 # The archive-only GEFS control product shares the operational GEFS model
@@ -111,7 +133,7 @@ def model_version(model: str, cycle: datetime) -> dict[str, Any]:
                 "label": record["label"],
                 "valid_from_utc": valid_from.isoformat().replace("+00:00", "Z"),
                 "source_url": record["source_url"],
-                "basis": "documented operational implementation interval",
+                "basis": record.get("basis", "documented operational implementation interval"),
             }
     return {
         "label": "Version not yet crosswalked",

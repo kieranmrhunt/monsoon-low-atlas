@@ -7,17 +7,21 @@ import json
 import logging
 import math
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import timedelta, datetime
+from datetime import UTC, timedelta, datetime
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+from eccodes import codes_get, codes_get_message, codes_grib_new_from_file, codes_release
 
 from .forecast_core import (
+    GridField,
     GRID_LATS,
     GRID_LONS,
     assign_systems,
@@ -25,6 +29,7 @@ from .forecast_core import (
     compact_weather,
     cycle_id,
     decode_grib_message,
+    decode_grib_messages,
     grid_metadata,
     iso_z,
     parse_cycle,
@@ -92,6 +97,17 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "aifs-ens", "AIFS ENS", "ECMWF", "ensemble", 51,
         "ECMWF Artificial Intelligence Forecasting System control plus 50 perturbed members",
         "https://data.ecmwf.int/forecasts/", "ECMWF Open Data", "CC BY 4.0", "#9a54ad",
+    ),
+    "ukmo-global": ModelDefinition(
+        "ukmo-global", "Met Office Global", "Met Office", "deterministic", 1,
+        "Archived Met Office operational global deterministic forecast",
+        "https://catalogue.ceda.ac.uk/uuid/86df725b793b4b4cb0ca0646686bd783",
+        "CEDA/BADC Met Office Global archive", "CC BY-NC-SA 4.0", "#007e88",
+    ),
+    "tigge-ecmwf": ModelDefinition(
+        "tigge-ecmwf", "ECMWF TIGGE ENS", "ECMWF", "ensemble", 51,
+        "Historical ECMWF control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#73539b",
     ),
 }
 
@@ -338,6 +354,7 @@ class BaseAdapter:
                     "850/700/500-hPa steering wind",
                 ],
                 "native_to_linker_time": "continuous fields linearly interpolated from six-hourly forecast output to the hourly linker clock",
+                "spatial_derivatives": "relative vorticity is derived from winds after every provider is resampled to the common 1-degree atlas grid",
                 "minimum_published_support_hours": 18,
                 "forecast_physical_gate": "full frozen v5.6 physical-event gate when the forecast observes a complete 72-hour span, including physical continuity and release-domain support",
                 "retrospective_gate_exception": "only tracks touching initialization or the forecast horizon may scale the v5.6 duration requirements; three strong release-domain positions remain mandatory",
@@ -351,6 +368,448 @@ class BaseAdapter:
         payload["qa"] = validate_cycle_payload(payload)
         if payload["qa"]["status"] == "failed":
             raise ValueError(f"{definition.id} payload failed QA: {payload['qa']['errors']}")
+        return payload
+
+
+@dataclass(frozen=True)
+class LocalGribRecord:
+    start_step: int
+    end_step: int
+    payload: bytes
+
+
+def _read_local_grib(path: Path, cycle: datetime, maximum_step: int) -> list[LocalGribRecord]:
+    """Read and validate the useful messages in one BADC multi-message file."""
+
+    records: list[LocalGribRecord] = []
+    with path.open("rb") as stream:
+        while True:
+            handle = codes_grib_new_from_file(stream)
+            if handle is None:
+                break
+            try:
+                data_date = int(codes_get(handle, "dataDate"))
+                data_time = int(codes_get(handle, "dataTime"))
+                start_step = int(codes_get(handle, "startStep"))
+                end_step = int(codes_get(handle, "endStep"))
+                if data_date != int(cycle.strftime("%Y%m%d")) or data_time != int(cycle.strftime("%H%M")):
+                    raise DownloadError(
+                        f"BADC header {data_date:08d}{data_time:04d} disagrees with requested {cycle:%Y%m%d%H%M} in {path}"
+                    )
+                if end_step <= maximum_step:
+                    records.append(LocalGribRecord(start_step, end_step, bytes(codes_get_message(handle))))
+            finally:
+                codes_release(handle)
+    if not records:
+        raise DownloadError(f"No forecast messages through +{maximum_step} h in {path}")
+    return records
+
+
+class BadcUkmoAdapter(BaseAdapter):
+    """Met Office operational global forecasts mounted in the local BADC archive."""
+
+    DEFAULT_ROOT = Path("/badc/ukmo-nwp/data/global-grib")
+    AREAS = ("B", "F")
+    PRODUCT = "WSGlobal17km"
+    FIELD_NAMES = {
+        "mslp": "mean_sea_level_pressure",
+        "u10": "wind_u_10m",
+        "v10": "wind_v_10m",
+        "u850": "wind_u_sl_850hPa",
+        "v850": "wind_v_sl_850hPa",
+        "u700": "wind_u_sl_700hPa",
+        "v700": "wind_v_sl_700hPa",
+        "u500": "wind_u_sl_500hPa",
+        "v500": "wind_v_sl_500hPa",
+    }
+
+    def __init__(self, root: str | Path | None = None, workers: int = 1):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["ukmo-global"]
+        self.root = Path(root) if root else self.DEFAULT_ROOT
+
+    def _folder(self, cycle: datetime) -> Path:
+        return self.root / cycle.strftime("%Y/%m/%d")
+
+    def _field_path(self, cycle: datetime, field_name: str, area: str, horizon: int) -> Path:
+        prefix = f"{cycle:%Y%m%d%H}_{self.PRODUCT}_{field_name}_Area{area}_"
+        candidates: list[tuple[int, Path]] = []
+        for path in self._folder(cycle).glob(f"{prefix}*.grib"):
+            match = re.search(r"_(\d{6})\.grib$", path.name)
+            if match and int(match.group(1)) >= horizon:
+                candidates.append((int(match.group(1)), path))
+        if not candidates:
+            raise DownloadError(
+                f"BADC lacks {field_name} Area{area} for {cycle:%Y%m%d%H} through +{horizon} h"
+            )
+        return min(candidates, key=lambda item: item[0])[1]
+
+    def resolve_cycle(self, requested: str, horizon: int) -> datetime:
+        if requested == "latest":
+            raise DownloadError("The BADC Met Office source is historical and requires an explicit cycle")
+        value = parse_cycle(requested)
+        if not self.cycle_complete(value, horizon):
+            raise DownloadError(f"Met Office Global cycle {requested} is not complete to +{horizon} h in BADC")
+        return value
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        if cycle.tzinfo is None:
+            cycle = cycle.replace(tzinfo=UTC)
+        if cycle.hour not in {0, 12}:
+            return False
+        try:
+            for field_name in self.FIELD_NAMES.values():
+                for area in self.AREAS:
+                    self._field_path(cycle, field_name, area, horizon)
+            for field_name in ("accumulated_dynamic_rain", "accumulated_convective_rain"):
+                for area in self.AREAS:
+                    self._field_path(cycle, field_name, area, horizon)
+            # A handful of otherwise present files omit one accumulation
+            # interval.  Audit one representative tile/component here so such
+            # cycles are described as BADC source gaps rather than tracker
+            # failures or silently patched precipitation.
+            rain_path = self._field_path(cycle, "accumulated_dynamic_rain", self.AREAS[0], horizon)
+            rain_records = sorted(_read_local_grib(rain_path, cycle, horizon), key=lambda item: item.end_step)
+            previous_end = 0
+            for record in rain_records:
+                if record.end_step <= 0:
+                    continue
+                if record.start_step != previous_end:
+                    return False
+                previous_end = record.end_step
+                if previous_end >= horizon:
+                    break
+            if previous_end < horizon:
+                return False
+            return True
+        except DownloadError:
+            return False
+
+    def _records_by_area(self, cycle: datetime, field_name: str, maximum_step: int) -> dict[str, list[LocalGribRecord]]:
+        return {
+            area: _read_local_grib(
+                self._field_path(cycle, field_name, area, maximum_step), cycle, maximum_step
+            )
+            for area in self.AREAS
+        }
+
+    def _instantaneous(self, cycle: datetime, field_name: str, steps: Sequence[int]) -> np.ndarray:
+        records = self._records_by_area(cycle, field_name, int(max(steps)))
+        lookups = {
+            area: {record.end_step: record for record in values}
+            for area, values in records.items()
+        }
+        output: list[np.ndarray] = []
+        for step in steps:
+            messages = []
+            for area in self.AREAS:
+                record = lookups[area].get(int(step))
+                if record is None:
+                    raise DownloadError(f"BADC {field_name} Area{area} lacks +{int(step)} h")
+                messages.append(record.payload)
+            output.append(decode_grib_messages(messages).values)
+        return np.stack(output)
+
+    def _precipitation(self, cycle: datetime, steps: Sequence[int]) -> np.ndarray:
+        maximum_step = int(max(steps))
+        components: dict[str, dict[tuple[int, int], np.ndarray]] = {}
+        for field_name in ("accumulated_dynamic_rain", "accumulated_convective_rain"):
+            records = self._records_by_area(cycle, field_name, maximum_step)
+            by_area = {
+                area: {(record.start_step, record.end_step): record for record in values}
+                for area, values in records.items()
+            }
+            intervals = sorted(set(by_area[self.AREAS[0]]) & set(by_area[self.AREAS[1]]))
+            components[field_name] = {
+                interval: np.maximum(
+                    decode_grib_messages([by_area[area][interval].payload for area in self.AREAS]).values,
+                    0.0,
+                )
+                for interval in intervals
+                if interval[1] > 0
+            }
+        intervals = sorted(set.intersection(*(set(value) for value in components.values())))
+        if not intervals:
+            raise DownloadError("BADC precipitation components have no common forecast intervals")
+        cumulative = np.zeros((GRID_LATS.size, GRID_LONS.size), dtype=np.float32)
+        output = [np.zeros_like(cumulative)]
+        target_steps = [int(step) for step in steps]
+        next_target = 1
+        previous_end = 0
+        for start, end in intervals:
+            if start != previous_end:
+                raise DownloadError(f"BADC precipitation intervals are discontinuous at +{previous_end} to +{start} h")
+            cumulative = cumulative + sum(value[(start, end)] for value in components.values())
+            previous_end = end
+            while next_target < len(target_steps) and target_steps[next_target] == end:
+                output.append(cumulative.copy())
+                next_target += 1
+            if end >= maximum_step:
+                break
+        if next_target != len(target_steps):
+            raise DownloadError(
+                f"BADC precipitation only supplied {next_target}/{len(target_steps)} requested cumulative frames"
+            )
+        return np.stack(output)
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        if member_limit not in {None, 1}:
+            raise ValueError("Met Office Global is deterministic; --members must be omitted or one")
+        cycle = self.resolve_cycle(requested, int(max(steps)))
+        fields = {
+            key: self._instantaneous(cycle, field_name, steps)
+            for key, field_name in self.FIELD_NAMES.items()
+        }
+        mslp = np.stack([
+            to_mslp_hpa(GridField(frame, "msl", "Pa", str(step), None))
+            for frame, step in zip(fields["mslp"], steps, strict=True)
+        ])
+        winds = {
+            level: (fields[f"u{level}"], fields[f"v{level}"])
+            for level in (850, 700, 500)
+        }
+        vorticity = {
+            level: np.stack([
+                relative_vorticity_x1e5(u, v)
+                for u, v in zip(winds[level][0], winds[level][1], strict=True)
+            ])
+            for level in (850, 700, 500)
+        }
+        precipitation = self._precipitation(cycle, steps)
+        tracking = track_forecast_member(
+            cycle=cycle,
+            steps=steps,
+            member="det",
+            role="deterministic",
+            mslp_hpa=mslp,
+            vorticity_by_level=vorticity,
+            wind_by_level=winds,
+            wind_10m=(fields["u10"], fields["v10"]),
+            precipitation_cumulative_mm=precipitation,
+        )
+        payload = self._payload(
+            cycle,
+            steps,
+            tracking.tracks,
+            ["det"],
+            vorticity[850],
+            precipitation,
+            [],
+            [{
+                "member": "det",
+                "detector_candidates": tracking.detector_candidates,
+                "linker": tracking.linker_summary,
+                "crosscheck": tracking.qa_crosscheck,
+            }],
+        )
+        payload["source"]["retrieval"] = (
+            "local BADC multi-message GRIB; Area B/F tiles joined and nearest-neighbour sampled to 1 degree"
+        )
+        return payload
+
+
+class TiggeEcmwfAdapter(BaseAdapter):
+    """Historical ECMWF ensembles retrieved from the ECDS TIGGE archive."""
+
+    ECDS_URL = "https://ecds.ecmwf.int/api"
+    DATASET = "tigge-forecasts"
+    ARCHIVE_START = datetime(2006, 10, 1, 0, tzinfo=UTC)
+
+    def __init__(self, workers: int = 8):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["tigge-ecmwf"]
+
+    def resolve_cycle(self, requested: str, horizon: int) -> datetime:
+        if requested == "latest":
+            raise DownloadError("TIGGE is a delayed historical archive and requires an explicit cycle")
+        value = parse_cycle(requested)
+        if not self.cycle_complete(value, horizon):
+            raise DownloadError(f"ECMWF TIGGE cycle {requested} is outside the supported archive/cadence")
+        return value
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        if cycle.tzinfo is None:
+            cycle = cycle.replace(tzinfo=UTC)
+        return cycle >= self.ARCHIVE_START and cycle.hour in {0, 12} and 0 <= horizon <= 360
+
+    @staticmethod
+    def _credentials() -> str:
+        config: dict[str, str] = {}
+        path = Path.home() / ".cdsapirc"
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if ":" in line:
+                name, value = line.split(":", 1)
+                config[name.strip()] = value.strip()
+        if not config.get("key"):
+            raise DownloadError(f"ECDS credentials are missing from {path}")
+        return config["key"]
+
+    def _retrieve(self, cycle: datetime, steps: Sequence[int], target: Path, forecast_type: str, levtype: str) -> None:
+        try:
+            import cdsapi
+        except ImportError as error:
+            raise DownloadError("cdsapi is required for TIGGE retrieval") from error
+        request = {
+            "class": "ti",
+            "date": cycle.strftime("%Y-%m-%d"),
+            "expver": "prod",
+            "grid": "1/1",
+            "area": "45/45/-15/120",
+            "levtype": levtype,
+            "origin": "ecmf",
+            "param": "131/132" if levtype == "pl" else "151/165/166/228",
+            "step": "/".join(str(int(step)) for step in steps),
+            "time": cycle.strftime("%H:00:00"),
+            "type": forecast_type,
+        }
+        if levtype == "pl":
+            request["levelist"] = "500/700/850"
+        client = cdsapi.Client(url=self.ECDS_URL, key=self._credentials(), quiet=True)
+        client.retrieve(self.DATASET, request, str(target))
+
+    @staticmethod
+    def _read_fields(paths: Sequence[Path], cycle: datetime) -> dict[tuple[str, int, str, int], GridField]:
+        output: dict[tuple[str, int, str, int], GridField] = {}
+        for path in paths:
+            with path.open("rb") as stream:
+                while True:
+                    handle = codes_grib_new_from_file(stream)
+                    if handle is None:
+                        break
+                    try:
+                        data_date = int(codes_get(handle, "dataDate"))
+                        data_time = int(codes_get(handle, "dataTime"))
+                        if data_date != int(cycle.strftime("%Y%m%d")) or data_time != int(cycle.strftime("%H%M")):
+                            raise DownloadError(f"TIGGE header date disagrees with {cycle:%Y%m%d%H} in {path}")
+                        forecast_type = str(codes_get(handle, "type"))
+                        number = int(codes_get(handle, "perturbationNumber"))
+                        member = "c00" if forecast_type == "cf" else f"p{number:02d}"
+                        step = int(codes_get(handle, "endStep"))
+                        short_name = str(codes_get(handle, "shortName"))
+                        try:
+                            level = int(codes_get(handle, "level"))
+                        except Exception:
+                            level = 0
+                        field = decode_grib_message(bytes(codes_get_message(handle)))
+                    finally:
+                        codes_release(handle)
+                    key = (member, step, short_name, level)
+                    if key in output:
+                        raise DownloadError(f"Duplicate TIGGE field {key} in {path}")
+                    output[key] = field
+        return output
+
+    @staticmethod
+    def _member_ids(fields: dict[tuple[str, int, str, int], GridField]) -> list[str]:
+        values = {key[0] for key in fields}
+        return sorted(values, key=lambda value: (value != "c00", int(value[1:])))
+
+    def _load_member(
+        self,
+        cycle: datetime,
+        steps: Sequence[int],
+        member: str,
+        fields: dict[tuple[str, int, str, int], GridField],
+    ) -> dict[str, Any]:
+        def values(short_name: str, level: int = 0) -> np.ndarray:
+            frames = []
+            for step in steps:
+                key = (member, int(step), short_name, level)
+                if key not in fields:
+                    raise DownloadError(f"TIGGE member {member} lacks {short_name}/{level} at +{int(step)} h")
+                frames.append(fields[key].values)
+            return np.stack(frames)
+
+        mslp = np.stack([
+            to_mslp_hpa(fields[(member, int(step), "msl", 0)])
+            for step in steps
+        ])
+        winds = {
+            level: (values("u", level), values("v", level))
+            for level in (850, 700, 500)
+        }
+        vorticity = {
+            level: np.stack([
+                relative_vorticity_x1e5(u, v)
+                for u, v in zip(winds[level][0], winds[level][1], strict=True)
+            ])
+            for level in (850, 700, 500)
+        }
+        precipitation = np.maximum.accumulate(np.stack([
+            to_precip_mm(fields[(member, int(step), "tp", 0)])
+            for step in steps
+        ]), axis=0)
+        role = "control" if member == "c00" else "perturbed"
+        tracking = track_forecast_member(
+            cycle=cycle,
+            steps=steps,
+            member=member,
+            role=role,
+            mslp_hpa=mslp,
+            vorticity_by_level=vorticity,
+            wind_by_level=winds,
+            wind_10m=(values("10u", 10), values("10v", 10)),
+            precipitation_cumulative_mm=precipitation,
+        )
+        return {
+            "member": member,
+            "tracks": tracking.tracks,
+            "vorticity": vorticity[850],
+            "precipitation": precipitation,
+            "tracking_qa": {
+                "member": member,
+                "detector_candidates": tracking.detector_candidates,
+                "linker": tracking.linker_summary,
+                "crosscheck": tracking.qa_crosscheck,
+            },
+        }
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        cycle = self.resolve_cycle(requested, int(max(steps)))
+        with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
+            root = Path(directory)
+            paths = []
+            for forecast_type in ("cf", "pf"):
+                for levtype in ("pl", "sfc"):
+                    target = root / f"{forecast_type}-{levtype}.grib"
+                    self._retrieve(cycle, steps, target, forecast_type, levtype)
+                    paths.append(target)
+            fields = self._read_fields(paths, cycle)
+
+        members = self._member_ids(fields)
+        if member_limit is not None:
+            members = members[:max(1, member_limit)]
+        if "c00" not in members:
+            raise DownloadError("ECMWF TIGGE control member is missing")
+        results: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        with ThreadPoolExecutor(max_workers=min(self.workers, len(members))) as executor:
+            future_map = {
+                executor.submit(self._load_member, cycle, steps, member, fields): member
+                for member in members
+            }
+            for future in as_completed(future_map):
+                member = future_map[future]
+                try:
+                    results.append(future.result())
+                except Exception as error:
+                    warnings.append(f"{member} unavailable: {error}")
+        results.sort(key=lambda item: members.index(item["member"]))
+        minimum = 1 if member_limit is not None else max(3, math.ceil(len(members) * 0.7))
+        if len(results) < minimum:
+            raise DownloadError(f"Only {len(results)}/{len(members)} ECMWF TIGGE members completed")
+        payload = self._payload(
+            cycle,
+            steps,
+            [track for result in results for track in result["tracks"]],
+            [result["member"] for result in results],
+            np.mean(np.stack([result["vorticity"] for result in results]), axis=0),
+            np.mean(np.stack([result["precipitation"] for result in results]), axis=0),
+            warnings,
+            [result["tracking_qa"] for result in results],
+            expected_members=len(members),
+        )
+        payload["source"]["retrieval"] = "ECMWF ECDS TIGGE subset at 1 degree; all available control/perturbed members"
         return payload
 
 
@@ -704,16 +1163,13 @@ class EcmwfAdapter(BaseAdapter):
                 ).values
                 winds[level]["u"].append(u)
                 winds[level]["v"].append(v)
-                try:
-                    vort = decode_grib_message(
-                        _fetch_record(
-                            self.client,
-                            data_url,
-                            _ecmwf_record(records, "vo", level=str(level), number=number),
-                        )
-                    ).values * 1.0e5
-                except DownloadError:
-                    vort = relative_vorticity_x1e5(u, v)
+                # Apply one model-neutral derivative. IFS publishes native
+                # spectral vorticity whereas AIFS and GFS do not; sampling
+                # that 0.25-degree diagnostic directly onto the 1-degree
+                # atlas grid retained grid-scale variance and made IFS look
+                # artificially speckled. Deriving from the already resampled
+                # winds keeps the tracker and map comparable across models.
+                vort = relative_vorticity_x1e5(u, v)
                 vorticity[level].append(vort.astype(np.float32))
             u10_values.append(
                 decode_grib_message(
@@ -802,6 +1258,12 @@ class EcmwfAdapter(BaseAdapter):
 
 
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
+    if model == "ukmo-global":
+        return BadcUkmoAdapter(root=archive_root, workers=workers)
+    if model == "tigge-ecmwf":
+        if archive_root:
+            raise ValueError("TIGGE retrieval uses ECDS and does not accept archive_root")
+        return TiggeEcmwfAdapter(workers=workers)
     if model in {"gfs", "gefs", "gefs-control"}:
         return NcepAdapter(model, workers=workers, archive_root=archive_root)
     if model in {"ifs", "ifs-ens", "aifs", "aifs-ens"}:

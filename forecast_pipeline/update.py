@@ -39,6 +39,12 @@ def parse_args() -> argparse.Namespace:
     archive_group.add_argument("--ncei-archive", action="store_true", help="read an explicit GFS cycle from NCEI")
     archive_group.add_argument("--noaa-aws-archive", action="store_true", help="read an explicit GFS cycle from NOAA's public AWS archive")
     parser.add_argument("--archive-only", action="store_true", help="seed archive without replacing Latest")
+    parser.add_argument(
+        "--archive-collection",
+        choices=("archive", "tigge"),
+        default="archive",
+        help="write compact cycles to the operational archive or the separate TIGGE collection",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
@@ -51,6 +57,7 @@ def read_manifest(path: Path) -> dict[str, Any]:
             "recent": {},
             "analysis_history": {},
             "archive": [],
+            "tigge_archive": [],
             "attempts": {},
         }
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -120,6 +127,8 @@ def main() -> int:
         raise ValueError("the public NOAA archive routes currently support only --models gfs")
     if (args.ncei_archive or args.noaa_aws_archive) and args.cycle == "latest":
         raise ValueError("a NOAA archive route requires an explicit --cycle")
+    if args.archive_collection == "tigge" and not args.archive_only:
+        raise ValueError("the TIGGE collection is historical and requires --archive-only")
 
     args.output_root.mkdir(parents=True, exist_ok=True)
     lock_path = args.output_root / ".update.lock"
@@ -151,7 +160,11 @@ def main() -> int:
             payload = adapter.build(args.cycle, steps, member_limit=args.members)
             cycle = str(payload["cycle"])
             cycle_relative = f"cycles/{model}/{cycle}.json.gz"
-            archive_relative = f"archive/{model}/{cycle}.json.gz"
+            archive_relative = (
+                f"tigge/{model}/{cycle}.json.gz"
+                if args.archive_collection == "tigge"
+                else f"archive/{model}/{cycle}.json.gz"
+            )
             atomic_write_json_gz(args.output_root / cycle_relative, payload)
             archived = archive_payload(payload, verifier)
             atomic_write_json_gz(args.output_root / archive_relative, archived)
@@ -166,8 +179,9 @@ def main() -> int:
                 manifest["analysis_history"][model] = replace_analysis_entry(
                     history, analysis_entry(payload)
                 )
-            manifest["archive"] = replace_archive_entry(
-                manifest.setdefault("archive", []),
+            collection_key = "tigge_archive" if args.archive_collection == "tigge" else "archive"
+            manifest[collection_key] = replace_archive_entry(
+                manifest.setdefault(collection_key, []),
                 archive_manifest_entry(archived, archive_relative),
             )
             manifest.setdefault("attempts", {})[model] = {

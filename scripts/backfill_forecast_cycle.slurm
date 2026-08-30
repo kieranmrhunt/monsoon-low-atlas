@@ -25,8 +25,10 @@ OUTPUT="$RUN_ROOT/${MODEL}-${CYCLE}"
 ARGS=()
 if [[ "$MODE" == "archive" ]]; then
   ARGS+=(--archive-only)
+elif [[ "$MODE" == "tigge" ]]; then
+  ARGS+=(--archive-only --archive-collection tigge)
 elif [[ "$MODE" != "recent" ]]; then
-  echo "Unknown backfill mode: $MODE" >&2
+  echo "Unknown backfill mode: $MODE (expected recent, archive or tigge)" >&2
   exit 2
 fi
 

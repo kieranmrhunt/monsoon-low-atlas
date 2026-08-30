@@ -88,51 +88,94 @@ def _normalise_lon(values: np.ndarray) -> np.ndarray:
     return np.mod(values, 360.0)
 
 
+def decode_grib_messages(payloads: Sequence[bytes]) -> GridField:
+    """Decode one or more regular-grid GRIB tiles onto the 1-degree domain.
+
+    Most public forecast feeds provide one message covering the whole atlas
+    domain.  The Met Office BADC archive instead splits the globe into eight
+    tiles; accepting several messages here lets the source adapter join only
+    the two tiles intersecting the atlas without first creating a global file.
+    """
+
+    if not payloads:
+        raise ValueError("No GRIB messages were supplied")
+    subset = np.full((GRID_LATS.size, GRID_LONS.size), np.nan, dtype=np.float32)
+    metadata: tuple[str, str, str, str | None] | None = None
+    for payload in payloads:
+        handle = codes_new_from_message(payload)
+        if handle is None:
+            raise ValueError("Downloaded byte range does not contain a GRIB message")
+        try:
+            grid_type = str(codes_get(handle, "gridType"))
+            if grid_type not in {"regular_ll", "regular_gg"}:
+                raise ValueError(f"Unsupported GRIB grid type {grid_type!r}; regular lat/lon is required")
+            ni = int(codes_get(handle, "Ni"))
+            nj = int(codes_get(handle, "Nj"))
+            latitude = np.asarray(codes_get_array(handle, "latitudes"), dtype=np.float64).reshape(nj, ni)
+            longitude = _normalise_lon(np.asarray(codes_get_array(handle, "longitudes"), dtype=np.float64)).reshape(nj, ni)
+            values = np.asarray(codes_get_array(handle, "values"), dtype=np.float64).reshape(nj, ni)
+            short_name = str(codes_get(handle, "shortName"))
+            units = str(codes_get(handle, "units"))
+            step_range = str(codes_get(handle, "stepRange"))
+            try:
+                member = str(codes_get(handle, "perturbationNumber"))
+            except Exception:
+                member = None
+        finally:
+            codes_release(handle)
+
+        current_metadata = (short_name, units, step_range, member)
+        if metadata is None:
+            metadata = current_metadata
+        elif (metadata[0], metadata[2], metadata[3]) != (short_name, step_range, member):
+            raise ValueError(
+                "GRIB tiles disagree on field identity "
+                f"({metadata[0]}/{metadata[2]}/{metadata[3]} versus {short_name}/{step_range}/{member})"
+            )
+
+        source_lats = latitude[:, 0]
+        source_lons = longitude[0, :]
+        if source_lats[0] > source_lats[-1]:
+            source_lats = source_lats[::-1]
+            values = values[::-1, :]
+        lon_order = np.argsort(source_lons)
+        source_lons = source_lons[lon_order]
+        values = values[:, lon_order]
+
+        target_lat_mask = (
+            (GRID_LATS >= float(np.min(source_lats)) - 0.51)
+            & (GRID_LATS <= float(np.max(source_lats)) + 0.51)
+        )
+        target_lon_mask = (
+            (GRID_LONS >= float(np.min(source_lons)) - 0.51)
+            & (GRID_LONS <= float(np.max(source_lons)) + 0.51)
+        )
+        target_lat_indices = np.flatnonzero(target_lat_mask)
+        target_lon_indices = np.flatnonzero(target_lon_mask)
+        if not target_lat_indices.size or not target_lon_indices.size:
+            continue
+        lat_index = np.abs(source_lats[:, None] - GRID_LATS[target_lat_indices][None, :]).argmin(axis=0)
+        lon_index = np.abs(source_lons[:, None] - GRID_LONS[target_lon_indices][None, :]).argmin(axis=0)
+        maximum_lat_error = float(np.max(np.abs(source_lats[lat_index] - GRID_LATS[target_lat_indices])))
+        maximum_lon_error = float(np.max(np.abs(source_lons[lon_index] - GRID_LONS[target_lon_indices])))
+        if maximum_lat_error > 0.51 or maximum_lon_error > 0.51:
+            raise ValueError(
+                f"Source grid cannot represent its part of the target domain at 1 degree "
+                f"(lat error {maximum_lat_error:.2f}, lon error {maximum_lon_error:.2f})"
+            )
+        tile_values = values[np.ix_(lat_index, lon_index)].astype(np.float32)
+        subset[np.ix_(target_lat_indices, target_lon_indices)] = tile_values
+
+    if metadata is None or np.isnan(subset).any():
+        missing = int(np.isnan(subset).sum())
+        raise ValueError(f"GRIB message tiles leave {missing} atlas-grid cells uncovered")
+    return GridField(subset, *metadata)
+
+
 def decode_grib_message(payload: bytes) -> GridField:
     """Decode one regular latitude/longitude GRIB message onto the 1-degree domain."""
 
-    handle = codes_new_from_message(payload)
-    if handle is None:
-        raise ValueError("Downloaded byte range does not contain a GRIB message")
-    try:
-        grid_type = str(codes_get(handle, "gridType"))
-        if grid_type not in {"regular_ll", "regular_gg"}:
-            raise ValueError(f"Unsupported GRIB grid type {grid_type!r}; regular lat/lon is required")
-        ni = int(codes_get(handle, "Ni"))
-        nj = int(codes_get(handle, "Nj"))
-        latitude = np.asarray(codes_get_array(handle, "latitudes"), dtype=np.float64).reshape(nj, ni)
-        longitude = _normalise_lon(np.asarray(codes_get_array(handle, "longitudes"), dtype=np.float64)).reshape(nj, ni)
-        values = np.asarray(codes_get_array(handle, "values"), dtype=np.float64).reshape(nj, ni)
-        short_name = str(codes_get(handle, "shortName"))
-        units = str(codes_get(handle, "units"))
-        step_range = str(codes_get(handle, "stepRange"))
-        try:
-            member = str(codes_get(handle, "perturbationNumber"))
-        except Exception:
-            member = None
-    finally:
-        codes_release(handle)
-
-    source_lats = latitude[:, 0]
-    source_lons = longitude[0, :]
-    if source_lats[0] > source_lats[-1]:
-        source_lats = source_lats[::-1]
-        values = values[::-1, :]
-    lon_order = np.argsort(source_lons)
-    source_lons = source_lons[lon_order]
-    values = values[:, lon_order]
-
-    lat_index = np.abs(source_lats[:, None] - GRID_LATS[None, :]).argmin(axis=0)
-    lon_index = np.abs(source_lons[:, None] - GRID_LONS[None, :]).argmin(axis=0)
-    maximum_lat_error = float(np.max(np.abs(source_lats[lat_index] - GRID_LATS)))
-    maximum_lon_error = float(np.max(np.abs(source_lons[lon_index] - GRID_LONS)))
-    if maximum_lat_error > 0.51 or maximum_lon_error > 0.51:
-        raise ValueError(
-            f"Source grid cannot represent the target domain at 1 degree "
-            f"(lat error {maximum_lat_error:.2f}, lon error {maximum_lon_error:.2f})"
-        )
-    subset = values[np.ix_(lat_index, lon_index)].astype(np.float32)
-    return GridField(subset, short_name, units, step_range, member)
+    return decode_grib_messages([payload])
 
 
 def to_mslp_hpa(field: GridField) -> np.ndarray:
