@@ -71,7 +71,7 @@ Run an update interactively with:
 bash scripts/run_forecast_update.sh
 ```
 
-The production wrapper submits no duplicate while `mla-forecast` is queued or running:
+The production wrapper submits the six models as independent one-CPU Slurm jobs and one `afterany` finalizer. The finalizer validates and merges every completed model into the public manifest atomically; a failed model retains its previous Latest cycle. The wrapper submits no duplicate while that finalizer is queued or running:
 
 ```bash
 bash scripts/submit_forecast_update.sh

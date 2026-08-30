@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Atomically merge independent model runs into the public forecast service."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import gzip
+import json
+import shutil
+from pathlib import Path
+from typing import Any
+
+from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
+from .sources import DEFAULT_MODELS
+from .update import read_manifest, replace_archive_entry
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", type=Path, required=True)
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--keep-staging", action="store_true")
+    return parser.parse_args()
+
+
+def read_gzip_json(path: Path) -> dict[str, Any]:
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        return json.load(stream)
+
+
+def copy_payload(source: Path, target: Path, schema: str) -> dict[str, Any]:
+    payload = read_gzip_json(source)
+    if payload.get("schema") != schema:
+        raise ValueError(f"{source} has schema {payload.get('schema')!r}, expected {schema!r}")
+    atomic_write_json_gz(target, payload)
+    return payload
+
+
+def clean_superseded_weather(target: Path, manifest: dict[str, Any]) -> None:
+    for model, entry in manifest.get("latest", {}).items():
+        cycle_dir = target / "cycles" / model
+        keep = cycle_dir / Path(str(entry.get("url", ""))).name
+        if not cycle_dir.is_dir():
+            continue
+        for candidate in cycle_dir.glob("*.json.gz"):
+            if candidate != keep:
+                candidate.unlink()
+
+
+def main() -> None:
+    args = parse_args()
+    if not args.run_root.is_dir():
+        raise FileNotFoundError(args.run_root)
+    source_paths = sorted(args.run_root.glob("*/manifest.json"))
+    if not source_paths:
+        raise RuntimeError(f"No completed model manifests below {args.run_root}")
+
+    args.target.mkdir(parents=True, exist_ok=True)
+    lock_path = args.target / ".update.lock"
+    with lock_path.open("a+") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+        target_manifest_path = args.target / "manifest.json"
+        manifest = read_manifest(target_manifest_path)
+        successful: list[str] = []
+        attempted: list[str] = []
+        source_manifests: list[dict[str, Any]] = []
+        staged_models = {path.parent.name for path in source_paths}
+
+        for source_path in source_paths:
+            source_root = source_path.parent
+            source_manifest = read_manifest(source_path)
+            source_manifests.append(source_manifest)
+            for model, attempt in source_manifest.get("attempts", {}).items():
+                attempted.append(model)
+                manifest.setdefault("attempts", {})[model] = attempt
+            for model, entry in source_manifest.get("latest", {}).items():
+                relative = str(entry["url"])
+                payload = copy_payload(
+                    source_root / relative,
+                    args.target / relative,
+                    "mla-forecast-cycle-v1",
+                )
+                if payload.get("qa", {}).get("status") == "failed":
+                    raise ValueError(f"{model} latest payload failed its embedded QA")
+                previous = manifest.setdefault("latest", {}).get(model)
+                if previous is None or str(previous.get("cycle", "")) <= str(entry.get("cycle", "")):
+                    manifest["latest"][model] = entry
+                successful.append(model)
+            for entry in source_manifest.get("archive", []):
+                relative = str(entry["url"])
+                payload = copy_payload(
+                    source_root / relative,
+                    args.target / relative,
+                    "mla-forecast-archive-cycle-v1",
+                )
+                if "weather" in payload or "tracking_qa" in payload:
+                    raise ValueError(f"{source_root / relative} contains fields forbidden from the archive")
+                manifest["archive"] = replace_archive_entry(
+                    manifest.setdefault("archive", []), entry
+                )
+
+        missing_models = sorted(set(DEFAULT_MODELS) - staged_models)
+        for model in missing_models:
+            attempted.append(model)
+            manifest.setdefault("attempts", {})[model] = {
+                "status": "failed",
+                "attempted_utc": iso_z(utc_now()),
+                "message": "model job produced no staging manifest; previous Latest cycle retained",
+            }
+
+        reference = source_manifests[0]
+        for key in (
+            "schema", "schedule", "forecast_horizon_hours", "weather_archive_policy",
+            "catalogue_verification", "models", "source_notes",
+        ):
+            if key in reference:
+                manifest[key] = reference[key]
+        manifest["generated_utc"] = iso_z(utc_now())
+        manifest["run"] = {
+            "mode": "parallel-model-merge",
+            "attempted_models": sorted(set(attempted)),
+            "successful_models": sorted(set(successful)),
+            "source_manifests": len(source_manifests),
+        }
+        atomic_write_json(target_manifest_path, manifest)
+        clean_superseded_weather(args.target, manifest)
+
+    if not args.keep_staging:
+        resolved = args.run_root.resolve()
+        if ".forecast-runs" not in resolved.parts:
+            raise ValueError(f"Refusing to remove unexpected staging path {resolved}")
+        shutil.rmtree(resolved)
+    print(
+        f"Published {len(set(successful))}/{len(set(attempted))} successful model runs "
+        f"to {target_manifest_path}"
+    )
+
+
+if __name__ == "__main__":
+    main()

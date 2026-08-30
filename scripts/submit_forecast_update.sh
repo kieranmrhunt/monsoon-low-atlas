@@ -10,5 +10,17 @@ if [[ -n "$(squeue -h -u "$USER" -n mla-forecast -o '%A')" ]]; then
 fi
 
 cd "$ATLAS_ROOT"
-JOB_ID="$(sbatch --parsable scripts/update_forecasts.slurm)"
-echo "Submitted forecast update job $JOB_ID"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_ROOT="$ATLAS_ROOT/.forecast-runs/$RUN_ID"
+OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
+mkdir -p "$RUN_ROOT"
+
+MODELS=(gfs gefs ifs ifs-ens aifs aifs-ens)
+JOB_IDS=()
+for model in "${MODELS[@]}"; do
+  safe_name="${model//-/_}"
+  JOB_IDS+=("$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")")
+done
+DEPENDENCY="$(IFS=:; echo "${JOB_IDS[*]}")"
+FINAL_ID="$(sbatch --parsable --dependency="afterany:$DEPENDENCY" scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT")"
+echo "Submitted model jobs ${JOB_IDS[*]} and finalizer $FINAL_ID"
