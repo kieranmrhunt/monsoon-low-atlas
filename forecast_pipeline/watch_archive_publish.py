@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import logging
 import subprocess
@@ -12,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .forecast_core import atomic_write_json, iso_z, utc_now
 from .update import read_manifest
 
 
@@ -70,6 +72,47 @@ def target_state(
     return available, status
 
 
+def update_progress(
+    target: Path,
+    collection_key: str,
+    manifest_key: str,
+    plan: dict[str, Any],
+) -> None:
+    """Atomically advertise the current plan without overwriting final status."""
+
+    target.mkdir(parents=True, exist_ok=True)
+    manifest_path = target / "manifest.json"
+    with (target / ".update.lock").open("a+") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+        manifest = read_manifest(manifest_path)
+        expected_identity = (str(plan.get("generated_utc", "")), len(plan.get("cycles", [])))
+        existing = manifest.get(manifest_key, {})
+        existing_identity = (
+            str(existing.get("generated_utc", "")),
+            int(existing.get("planned_cycles", -1)),
+        )
+        if existing_identity == expected_identity and existing.get("status") in {"complete", "incomplete"}:
+            return
+
+        planned = {
+            (str(item.get("model", "")), str(item.get("cycle", "")))
+            for item in plan.get("cycles", [])
+        }
+        available = {
+            archive_key(entry) for entry in manifest.get(collection_key, [])
+        }
+        now = iso_z(utc_now())
+        manifest[manifest_key] = {
+            **{key: value for key, value in plan.items() if key not in {"cycles", "pending_cycles"}},
+            "status": "running",
+            "planned_cycles": len(planned),
+            "available_cycles": len(planned & available),
+            "published_utc": now,
+        }
+        manifest["generated_utc"] = now
+        atomic_write_json(manifest_path, manifest)
+
+
 def publish(target: Path, collection: str, sources: list[Path]) -> None:
     command = [
         sys.executable,
@@ -94,6 +137,7 @@ def main() -> int:
     expected_plan = (str(plan.get("generated_utc", "")), len(plan.get("cycles", [])))
     if not expected_plan[0] or not expected_plan[1]:
         raise ValueError(f"Backfill plan identity is incomplete in {args.plan}")
+    update_progress(args.target, collection_key, args.manifest_key, plan)
 
     while True:
         sources = completed_sources(args.run_root, collection_key)
@@ -105,6 +149,7 @@ def main() -> int:
             roots = sorted({sources[key] for key in pending})
             LOGGER.info("Publishing %d completed cycle(s) from %d staging root(s)", len(pending), len(roots))
             publish(args.target, args.collection, roots)
+            update_progress(args.target, collection_key, args.manifest_key, plan)
             available, status = target_state(
                 args.target, collection_key, args.manifest_key, expected_plan
             )

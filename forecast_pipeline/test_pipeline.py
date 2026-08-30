@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import json
 import stat
 import tempfile
 import unittest
@@ -37,7 +38,7 @@ from forecast_pipeline.archive import archive_manifest_entry, archive_payload
 from forecast_pipeline.update import replace_recent_entry
 from forecast_pipeline.v56_tracking import _longest_true_run
 from forecast_pipeline.versions import model_version
-from forecast_pipeline.watch_archive_publish import target_state
+from forecast_pipeline.watch_archive_publish import target_state, update_progress
 
 
 class RecordingClient:
@@ -162,6 +163,19 @@ class ForecastPipelineContractTests(unittest.TestCase):
             )
             self.assertEqual(available, {("tigge-ecmwf", "2016070100")})
             self.assertEqual(status, "")
+
+            plan = {
+                "generated_utc": "2026-08-30T19:59:22Z",
+                "cycles": [
+                    {"model": "tigge-ecmwf", "cycle": "2006100100"},
+                    {"model": "tigge-ecmwf", "cycle": "2006102412"},
+                ],
+            }
+            update_progress(target, "tigge_archive", "tigge_backfill", plan)
+            updated = json.loads((target / "manifest.json").read_text())
+            self.assertEqual(updated["tigge_backfill"]["status"], "running")
+            self.assertEqual(updated["tigge_backfill"]["planned_cycles"], 2)
+            self.assertEqual(updated["tigge_backfill"]["available_cycles"], 0)
 
             manifest["tigge_backfill"] = {
                 "generated_utc": "2026-08-30T19:59:22Z",
