@@ -14,7 +14,7 @@
 		selectedModels: new Set(), latestPayloads: new Map(), modelLoads: new Map(),
 		selectedSystem: null, initialization: 'latest', initializationCount: 1, archiveModel: 'all', archiveDate: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
-		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: false,
+		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: false, showEra5: true,
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0,
@@ -325,7 +325,38 @@
 		}).join('');
 		const subject = query ? `Forecasts matching “${esc(query)}”` : state.archiveDate ? `Forecasts initialized ${esc(formatUtc(`${state.archiveDate}T00:00:00Z`, false))}` : 'Matching forecasts';
 		const selected = state.archiveSelected.size;
-		return `<div class="mla-forecast-match-summary"><div class="mla-forecast-match-head"><strong>${subject}</strong>${selected ? `<button class="mla-btn mla-btn-small mla-btn-quiet" type="button" data-forecast-clear-runs>Clear ${esc(selected)}</button>` : ''}</div><small>${esc(`${entries.length} processed cycle${entries.length === 1 ? '' : 's'} across ${groups.size} model${groups.size === 1 ? '' : 's'}`)}</small><div>${coverage}</div><p>Select up to five initializations below to compare them on the same map.</p></div>`;
+		return `<div class="mla-forecast-match-summary"><div class="mla-forecast-match-head"><strong>${subject}</strong>${selected ? `<small>${esc(selected)} selected</small>` : ''}</div><small>${esc(`${entries.length} processed cycle${entries.length === 1 ? '' : 's'} across ${groups.size} model${groups.size === 1 ? '' : 's'}`)}</small><div>${coverage}</div><p>Use the selectors below to compare up to five initializations on the same map; choose “No run” to remove one.</p></div>`;
+	}
+
+	function archiveRunLabel(entry) {
+		const names = (entry.verification_labels || []).join(', ');
+		const version = versionLabel(entry.model_version);
+		return [formatUtc(entry.cycle_utc), entry.model_label || entry.model, version, names].filter(Boolean).join(' · ');
+	}
+
+	function archiveRunSelectors(entries) {
+		const selected = [...state.archiveSelected];
+		if (!entries.length && !selected.length) return '';
+		const byKey = new Map(archiveEntries().map(entry => [`${entry.model}:${entry.cycle}`, entry]));
+		const choices = [...entries.slice(0, 250)];
+		for (const key of selected) {
+			const entry = byKey.get(key);
+			if (entry && !choices.some(item => `${item.model}:${item.cycle}` === key)) choices.unshift(entry);
+		}
+		const slots = Math.min(5, Math.max(1, selected.length + (selected.length < 5 ? 1 : 0)));
+		const controls = [];
+		for (let index = 0; index < slots; index += 1) {
+			const current = selected[index] || '';
+			const options = choices.map(entry => {
+				const key = `${entry.model}:${entry.cycle}`;
+				const unavailable = key !== current && state.archiveSelected.has(key);
+				return `<option value="${esc(key)}" ${key === current ? 'selected' : ''} ${unavailable ? 'disabled' : ''}>${esc(archiveRunLabel(entry))}</option>`;
+			}).join('');
+			const label = current ? `Run ${index + 1}` : selected.length ? 'Compare with' : 'Forecast initialization';
+			controls.push(`<label class="mla-field" for="mlaForecastArchiveRun${index}"><span class="mla-label">${esc(label)}</span><select class="mla-select" id="mlaForecastArchiveRun${index}" data-forecast-archive-select data-current="${esc(current)}"><option value="">${current ? 'No run' : selected.length ? 'No additional run' : 'Choose an initialization…'}</option>${options}</select></label>`);
+		}
+		const narrowed = entries.length > 250 ? `<p>${esc(entries.length - 250)} additional matches are hidden from the selectors; narrow the date, model or search text.</p>` : '';
+		return `<div class="mla-forecast-run-selectors">${controls.join('')}</div>${narrowed}`;
 	}
 
 	function populateArchive(loadFirst) {
@@ -338,14 +369,7 @@
 		}
 		const entries = filteredArchive();
 		const results = $('#mlaForecastArchiveResults');
-		const buttons = entries.slice(0, 72).map(entry => {
-			const key = `${entry.model}:${entry.cycle}`;
-			const names = (entry.verification_labels || []).join(', ');
-			const version = versionLabel(entry.model_version);
-			return `<button class="mla-forecast-archive-result" type="button" data-forecast-archive="${esc(key)}" aria-pressed="${state.archiveSelected.has(key)}"><span>${esc(`${formatUtc(entry.cycle_utc)} · ${entry.model_label}`)}</span>${version || names ? `<small>${esc([version, names].filter(Boolean).join(' · '))}</small>` : ''}</button>`;
-		}).join('');
-		results.innerHTML = entries.length ? `${archiveMatchSummary(entries)}${buttons}` : '<p>No matching forecast initializations.</p>';
-		if (entries.length > 72) results.insertAdjacentHTML('beforeend', `<p>${esc(entries.length - 72)} more matches; narrow the date, model or search text.</p>`);
+		results.innerHTML = `${entries.length ? archiveMatchSummary(entries) : '<p>No matching forecast initializations.</p>'}${archiveRunSelectors(entries)}`;
 		const selected = loadFirst && !state.archiveSelected.size ? entries[0] || null : null;
 		if (selected) loadArchive(selected);
 		if (!entries.length) {
@@ -411,15 +435,7 @@
 	async function loadArchive(entry) {
 		if (!entry) return;
 		const key = payloadKey(entry.model, entry);
-		if (state.archiveSelected.has(key)) {
-			state.archiveSelected.delete(key);
-			state.archiveEntry = null;
-			state.selectedSystem = null;
-			configureTimeline(true);
-			populateArchive(false);
-			notice(state.archiveSelected.size ? `${state.archiveSelected.size} archived runs remain in the comparison.` : 'No archived runs selected. Choose up to five initializations below.', '', false);
-			return render();
-		}
+		if (state.archiveSelected.has(key)) return;
 		if (state.archiveSelected.size >= 5) {
 			notice('You can compare up to five forecast runs. Remove one before adding another.', 'flag', false);
 			return;
@@ -445,6 +461,19 @@
 			notice(`Forecast could not be loaded: ${error.message || error}`, 'flag', true);
 			render();
 		}
+	}
+
+	function removeArchiveRun(key) {
+		if (!key || !state.archiveSelected.has(key)) return;
+		state.archiveSelected.delete(key);
+		state.archiveEntry = null;
+		if (state.selectedSystem && state.selectedSystem.runKey === key) state.selectedSystem = null;
+		const remaining = displayEntries();
+		state.payload = remaining.length ? remaining[remaining.length - 1].payload : null;
+		configureTimeline(Boolean(remaining.length));
+		populateArchive(false);
+		notice(remaining.length ? `${remaining.length} archived run${remaining.length === 1 ? '' : 's'} remain in the comparison.` : 'No archived runs selected. Choose an initialization above.', '', false);
+		render();
 	}
 
 	function clearArchiveRuns() {
@@ -555,6 +584,7 @@
 		$('#mlaForecastWeather').disabled = mode !== 'latest';
 		$('#mlaForecastArchiveSearchLabel').textContent = mode === 'tigge' ? 'TIGGE storm, date or initialization' : 'Storm, date or initialization';
 		$('#mlaForecastArchiveMembersLabel').hidden = mode !== 'tigge';
+		$('#mlaForecastEra5').checked = state.showEra5;
 		state.showMembers = false;
 		$('#mlaForecastArchiveMembers').checked = false;
 		if (!state.initialised) { initialise(); return; }
@@ -983,14 +1013,15 @@
 				}
 			}
 		}
-		if (state.mode !== 'latest') {
+		if (state.mode !== 'latest' && state.showEra5) {
 			const verificationTracks = new Map();
 			for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!verificationTracks.has(String(track.id))) verificationTracks.set(String(track.id), {entry, track});
 			for (const {entry, track} of verificationTracks.values()) {
 				const current = stepForPayload(entry.payload);
 				target.context.beginPath();
 				track.points.forEach((point, index) => { const xy = target.projection.project(point[2], point[1]); if (!index) target.context.moveTo(...xy); else target.context.lineTo(...xy); });
-				target.context.setLineDash([7, 5]); target.context.strokeStyle = '#282119'; target.context.lineWidth = 2.2; target.context.globalAlpha = .9; target.context.stroke(); target.context.setLineDash([]); target.context.globalAlpha = 1;
+				target.context.setLineDash([7, 5]); target.context.strokeStyle = '#fffdf6'; target.context.lineWidth = 5; target.context.globalAlpha = .92; target.context.stroke();
+				target.context.strokeStyle = '#282119'; target.context.lineWidth = 2.3; target.context.globalAlpha = 1; target.context.stroke(); target.context.setLineDash([]);
 				const marker = pointAt(track.points, current);
 				if (marker) { const xy = target.projection.project(marker[2], marker[1]); target.context.beginPath(); target.context.arc(xy[0], xy[1], 4, 0, Math.PI * 2); target.context.fillStyle = '#fffdf6'; target.context.fill(); target.context.strokeStyle = '#282119'; target.context.lineWidth = 2; target.context.stroke(); }
 			}
@@ -1106,13 +1137,17 @@
 		const systems = entries.reduce((sum, item) => sum + (item.payload.systems || []).length, 0);
 		const models = new Set(entries.map(item => item.model.id)).size;
 		const weatherEntry = entries.find(item => item.runKey === state.weatherModel);
+		const era5TrackIds = new Set();
+		if (state.mode !== 'latest' && state.showEra5) for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
+		const era5Tracks = era5TrackIds.size;
 		const mapStack = $('#mlaForecastMapStack');
 		mapStack.dataset.zoom = state.mapZoom.toFixed(3);
 		mapStack.dataset.centerLon = state.mapCenterLon.toFixed(3);
 		mapStack.dataset.centerLat = state.mapCenterLat.toFixed(3);
 		$('#mlaForecastMapStatus').textContent = entries.length
-			? `${entries.length} run${entries.length === 1 ? '' : 's'} · ${models} model${models === 1 ? '' : 's'} · ${systems} disturbance${systems === 1 ? '' : 's'} · ${count} member track${count === 1 ? '' : 's'} · ${state.mode !== 'latest' ? 'ERA5 verification where available' : state.weather === 'none' ? 'weather off' : `${weatherEntry ? weatherEntry.model.label : 'selected run'} weather`}`
+			? `${entries.length} run${entries.length === 1 ? '' : 's'} · ${models} model${models === 1 ? '' : 's'} · ${systems} disturbance${systems === 1 ? '' : 's'} · ${count} member track${count === 1 ? '' : 's'} · ${state.mode !== 'latest' ? era5Tracks ? `${era5Tracks} ERA5 verification track${era5Tracks === 1 ? '' : 's'}` : 'no matched ERA5 track' : state.weather === 'none' ? 'weather off' : `${weatherEntry ? weatherEntry.model.label : 'selected run'} weather`}`
 			: 'Forecast data not loaded.';
+		$('#mlaForecastEra5Key').hidden = !era5Tracks;
 	}
 
 	let renderFrame = 0;
@@ -1262,6 +1297,7 @@
 	$('#mlaForecastWeatherModel').addEventListener('change', async event => { state.weatherModel = event.target.value; await render(); });
 	$('#mlaForecastMembers').addEventListener('change', event => { state.showMembers = event.target.checked; render(); });
 	$('#mlaForecastArchiveMembers').addEventListener('change', event => { state.showMembers = event.target.checked; render(); });
+	$('#mlaForecastEra5').addEventListener('change', event => { state.showEra5 = event.target.checked; render(); });
 	$('#mlaForecastLead').addEventListener('input', event => { state.leadIndex = Number(event.target.value); render(); });
 	$('#mlaForecastPrevious').addEventListener('click', () => { state.leadIndex = Math.max(0, state.leadIndex - 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
 	$('#mlaForecastNext').addEventListener('click', () => { if (!state.timelineTimes.length) return; state.leadIndex = Math.min(state.timelineTimes.length - 1, state.leadIndex + 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
@@ -1281,12 +1317,19 @@
 		clearTimeout(state.archiveSearchTimer);
 		state.archiveSearchTimer = setTimeout(() => populateArchive(false), 250);
 	});
-	$('#mlaForecastArchiveResults').addEventListener('click', event => {
-		if (event.target.closest('[data-forecast-clear-runs]')) { clearArchiveRuns(); return; }
-		const button = event.target.closest('[data-forecast-archive]');
-		if (!button) return;
-		const entry = archiveEntries().find(item => `${item.model}:${item.cycle}` === button.dataset.forecastArchive);
-		if (!entry) return;
+	$('#mlaForecastArchiveResults').addEventListener('change', event => {
+		const select = event.target.closest('[data-forecast-archive-select]');
+		if (!select) return;
+		const previous = select.dataset.current || '';
+		const next = select.value;
+		if (next === previous) return;
+		if (!next) { removeArchiveRun(previous); return; }
+		if (previous) {
+			state.archiveSelected.delete(previous);
+			if (state.selectedSystem && state.selectedSystem.runKey === previous) state.selectedSystem = null;
+		}
+		const entry = archiveEntries().find(item => `${item.model}:${item.cycle}` === next);
+		if (!entry) { populateArchive(false); return; }
 		loadArchive(entry);
 	});
 	$('#mlaForecastDossier').addEventListener('click', event => {
