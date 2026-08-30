@@ -55,6 +55,7 @@
 
 	function notice(message, tone, retry) {
 		const node = $('#mlaForecastNotice');
+		node.hidden = !message;
 		node.dataset.tone = tone || '';
 		node.querySelector('span').textContent = message;
 		$('#mlaForecastRetry').hidden = !retry;
@@ -456,9 +457,7 @@
 		if (!entries.length) {
 			notice(noArchiveMatchMessage(), 'flag', false);
 			render();
-		} else if (!state.archiveSelected.size && !selected) {
-			notice('Choose up to five available model–lead cells for this valid time.', '', false);
-		}
+		} else if (!state.archiveSelected.size && !selected) notice('', '', false);
 	}
 
 	async function loadArchivePayload(entry) {
@@ -507,11 +506,9 @@
 		if (state.selectedSystem && !loaded.some(item => item.runKey === state.selectedSystem.runKey && (item.payload.systems || []).some(system => system.id === state.selectedSystem.systemId))) state.selectedSystem = null;
 		populateWeatherModels();
 		configureTimeline(true);
-		const cycles = [...new Set(loaded.map(item => formatUtc(item.payload.cycle_utc)))];
-		const message = loaded.length
-			? `${loaded.length} run${loaded.length === 1 ? '' : 's'} compared · initialized ${cycles.join(' / ')}${failures.length ? ` · ${failures.length} unavailable` : ''}.`
-			: `Selected forecasts could not be loaded${failures[0] ? `: ${failures[0].reason.message || failures[0].reason}` : '.'}`;
-		notice(message, loaded.length ? (failures.length ? 'flag' : 'good') : 'flag', !loaded.length);
+		if (!loaded.length) notice(`Selected forecasts could not be loaded${failures[0] ? `: ${failures[0].reason.message || failures[0].reason}` : '.'}`, 'flag', true);
+		else if (failures.length) notice(`${failures.length} selected forecast run${failures.length === 1 ? '' : 's'} could not be loaded.`, 'flag', false);
+		else notice('', '', false);
 		await render();
 	}
 
@@ -534,8 +531,7 @@
 			if (!state.archiveSelected.has(key)) return;
 			state.payload = payload;
 			configureTimeline(hadRuns, archiveTargetTime());
-			const lead = entryLeadAt(entry, archiveTargetTime());
-			notice(`${entry.model_label || entry.model}${lead == null ? '' : ` +${lead} h`} loaded for ${formatUtc(archiveTargetTime())}.`, 'good', false);
+			notice('', '', false);
 			populateArchive(false);
 			await render();
 		} catch (error) {
@@ -555,7 +551,7 @@
 		state.payload = remaining.length ? remaining[remaining.length - 1].payload : null;
 		configureTimeline(Boolean(remaining.length), archiveTargetTime());
 		populateArchive(false);
-		notice(remaining.length ? 'Archive comparison updated.' : 'Choose an available model–lead cell for this valid time.', '', false);
+		notice('', '', false);
 		render();
 	}
 
@@ -566,7 +562,7 @@
 		state.selectedSystem = null;
 		configureTimeline(false);
 		populateArchive(false);
-		notice('Forecast comparison cleared. Choose up to five model–lead cells.', '', false);
+		notice('', '', false);
 		render();
 	}
 
