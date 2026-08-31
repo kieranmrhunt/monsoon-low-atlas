@@ -582,6 +582,25 @@ class LocalGribRecord:
     payload: bytes
 
 
+def _validate_local_grib_cycle(path: Path, cycle: datetime) -> None:
+    """Reject BADC files whose first GRIB message belongs to another cycle."""
+
+    with path.open("rb") as stream:
+        handle = codes_grib_new_from_file(stream)
+    if handle is None:
+        raise DownloadError(f"No GRIB messages in {path}")
+    try:
+        data_date = int(codes_get(handle, "dataDate"))
+        data_time = int(codes_get(handle, "dataTime"))
+    finally:
+        codes_release(handle)
+    if data_date != int(cycle.strftime("%Y%m%d")) or data_time != int(cycle.strftime("%H%M")):
+        raise DownloadError(
+            f"BADC header {data_date:08d}{data_time:04d} disagrees with requested "
+            f"{cycle:%Y%m%d%H%M} in {path}"
+        )
+
+
 def _read_local_grib(path: Path, cycle: datetime, maximum_step: int) -> list[LocalGribRecord]:
     """Read and validate the useful messages in one BADC multi-message file."""
 
@@ -664,10 +683,12 @@ class BadcUkmoAdapter(BaseAdapter):
         try:
             for field_name in self.FIELD_NAMES.values():
                 for area in self.AREAS:
-                    self._field_path(cycle, field_name, area, horizon)
+                    path = self._field_path(cycle, field_name, area, horizon)
+                    _validate_local_grib_cycle(path, cycle)
             for field_name in ("accumulated_dynamic_rain", "accumulated_convective_rain"):
                 for area in self.AREAS:
-                    self._field_path(cycle, field_name, area, horizon)
+                    path = self._field_path(cycle, field_name, area, horizon)
+                    _validate_local_grib_cycle(path, cycle)
             # A handful of otherwise present files omit one accumulation
             # interval.  Audit one representative tile/component here so such
             # cycles are described as BADC source gaps rather than tracker

@@ -31,6 +31,8 @@ from forecast_pipeline.forecast_core import (
 )
 from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
+    BadcUkmoAdapter,
+    DownloadError,
     EcmwfHresHybridAdapter,
     MogrepsAdapter,
     NcepAdapter,
@@ -44,6 +46,7 @@ from forecast_pipeline.sources import (
     WeatherBenchHresAdapter,
     _interpolate_isolated_native_gaps,
     _fetch_record,
+    _validate_local_grib_cycle,
     adapter_for,
     available_forecast_steps,
     parse_ecmwf_index,
@@ -78,6 +81,34 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+    def test_badc_cycle_audit_rejects_mislabelled_grib_header(self) -> None:
+        cycle = datetime(2026, 7, 7, 12, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mislabelled.grib"
+            path.write_bytes(b"GRIB")
+            handle = object()
+            with (
+                patch("forecast_pipeline.sources.codes_grib_new_from_file", return_value=handle),
+                patch("forecast_pipeline.sources.codes_get", side_effect=[20260708, 0]),
+                patch("forecast_pipeline.sources.codes_release") as release,
+                self.assertRaisesRegex(DownloadError, "disagrees with requested 202607071200"),
+            ):
+                _validate_local_grib_cycle(path, cycle)
+            release.assert_called_once_with(handle)
+
+    def test_badc_cycle_complete_checks_every_selected_file_header(self) -> None:
+        adapter = BadcUkmoAdapter(root="/unused")
+        cycle = datetime(2026, 7, 7, 12, tzinfo=UTC)
+        with (
+            patch.object(adapter, "_field_path", return_value=Path("/unused/file.grib")),
+            patch(
+                "forecast_pipeline.sources._validate_local_grib_cycle",
+                side_effect=DownloadError("wrong cycle"),
+            ) as validate,
+        ):
+            self.assertFalse(adapter.cycle_complete(cycle, 144))
+        validate.assert_called_once_with(Path("/unused/file.grib"), cycle)
+
     def test_recent_cleanup_never_removes_long_term_archive_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

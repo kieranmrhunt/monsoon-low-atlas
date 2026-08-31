@@ -57,15 +57,6 @@ def main() -> None:
         }))
         cycle += timedelta(hours=12)
 
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        completeness = executor.map(
-            lambda value: adapter.cycle_complete(value[0], horizon),
-            items,
-        )
-        audited = [(item, complete) for (_, item), complete in zip(items, completeness)]
-    candidates = [item for item, complete in audited if complete]
-    missing_source_cycles = [item["cycle"] for item, complete in audited if not complete]
-
     available: dict[str, int] = {}
     if args.manifest and args.manifest.exists():
         manifest = read_manifest(args.manifest)
@@ -73,6 +64,22 @@ def main() -> None:
             f"{item.get('model')}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
             for item in manifest.get("archive", [])
         }
+
+    def source_complete(value: tuple[datetime, dict[str, object]]) -> bool:
+        cycle_value, item = value
+        key = f"{item['model']}:{item['cycle']}"
+        # Published cycles have already passed full decoding and QA.  Avoid
+        # reopening every archived GRIB simply to plan the small retry tail.
+        if available.get(key, -1) >= int(item["horizon_hours"]):
+            return True
+        return adapter.cycle_complete(cycle_value, horizon)
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        completeness = executor.map(source_complete, items)
+        audited = [(item, complete) for (_, item), complete in zip(items, completeness)]
+    candidates = [item for item, complete in audited if complete]
+    missing_source_cycles = [item["cycle"] for item, complete in audited if not complete]
+
     pending = [
         item for item in candidates
         if available.get(f"{item['model']}:{item['cycle']}", -1) < int(item["horizon_hours"])
