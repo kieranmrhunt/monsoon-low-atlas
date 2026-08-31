@@ -11,7 +11,13 @@ from datetime import datetime
 from pathlib import Path
 
 from .archive import archive_manifest_entry, certify_archive_payload
-from .forecast_core import atomic_write_json, atomic_write_json_gz, iso_z, utc_now
+from .forecast_core import (
+    atomic_write_json,
+    atomic_write_json_gz,
+    iso_z,
+    manifest_lock_path,
+    utc_now,
+)
 from .update import read_manifest, replace_archive_entry
 from .versions import model_version
 
@@ -25,7 +31,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     manifest_path = args.target / "manifest.json"
-    with (args.target / ".update.lock").open("a+") as lock_stream:
+    with manifest_lock_path(args.target).open("a+") as lock_stream:
         fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
         manifest = read_manifest(manifest_path)
         rebuilt = []

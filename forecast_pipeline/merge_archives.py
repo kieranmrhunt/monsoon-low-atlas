@@ -15,6 +15,7 @@ from .forecast_core import (
     atomic_write_json,
     atomic_write_json_gz,
     iso_z,
+    manifest_lock_path,
     manifest_entry_horizon_hours,
     utc_now,
 )
@@ -49,7 +50,7 @@ def main() -> None:
     collection_key = "tigge_archive" if args.collection == "tigge" else "archive"
     target_path = args.target / "manifest.json"
     args.target.mkdir(parents=True, exist_ok=True)
-    with (args.target / ".update.lock").open("a+") as lock_stream:
+    with manifest_lock_path(args.target).open("a+") as lock_stream:
         lock_mode = fcntl.LOCK_EX | (fcntl.LOCK_NB if args.nonblocking_lock else 0)
         try:
             fcntl.flock(lock_stream.fileno(), lock_mode)

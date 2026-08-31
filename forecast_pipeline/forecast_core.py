@@ -36,6 +36,17 @@ DOMAIN = (45.0, -15.0, 120.0, 45.0)  # west, south, east, north
 GRID_RESOLUTION = 1.0
 GRID_LONS = np.arange(DOMAIN[0], DOMAIN[2] + 0.01, GRID_RESOLUTION, dtype=np.float32)
 GRID_LATS = np.arange(DOMAIN[1], DOMAIN[3] + 0.01, GRID_RESOLUTION, dtype=np.float32)
+MANIFEST_LOCK_NAME = ".manifest-v2.lock"
+
+
+def manifest_lock_path(root: Path) -> Path:
+    """Return the shared lock used by every public-manifest writer.
+
+    The versioned inode lets operators recover from an orphaned NFS/NLM lock
+    without weakening mutual exclusion between live/archive publishers.
+    """
+
+    return root / MANIFEST_LOCK_NAME
 
 
 def utc_now() -> datetime:

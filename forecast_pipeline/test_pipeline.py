@@ -23,6 +23,7 @@ from forecast_pipeline.forecast_core import (
     atomic_write_json,
     candidate_cycles,
     compact_weather,
+    manifest_lock_path,
     manifest_entry_horizon_hours,
     trailing_24h,
     validate_cycle_payload,
@@ -74,6 +75,9 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+    def test_all_public_writers_share_the_versioned_manifest_lock(self) -> None:
+        self.assertEqual(manifest_lock_path(Path("/tmp/service")).name, ".manifest-v2.lock")
+
     def test_isolated_noaa_member_gap_is_interpolated_but_edges_and_runs_fail(self) -> None:
         first = np.asarray([[0.0, 4.0]], dtype=np.float32)
         last = np.asarray([[12.0, 16.0]], dtype=np.float32)

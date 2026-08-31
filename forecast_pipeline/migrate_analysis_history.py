@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .analysis_history import analysis_centres, analysis_entry, replace_analysis_entry
-from .forecast_core import atomic_write_json, iso_z, utc_now
+from .forecast_core import atomic_write_json, iso_z, manifest_lock_path, utc_now
 from .update import read_manifest
 
 
@@ -34,7 +34,7 @@ def read_payload(path: Path, expected_schema: str) -> dict[str, Any]:
 def main() -> None:
     args = parse_args()
     manifest_path = args.target / "manifest.json"
-    lock_path = args.target / ".update.lock"
+    lock_path = manifest_lock_path(args.target)
     archive_cycles = live_cycles = 0
     with lock_path.open("a+") as lock_stream:
         fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)

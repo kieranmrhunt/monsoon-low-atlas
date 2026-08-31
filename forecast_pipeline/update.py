@@ -16,7 +16,14 @@ from typing import Any
 
 from .analysis_history import analysis_entry, replace_analysis_entry
 from .archive import AtlasVerifier, archive_manifest_entry, archive_payload
-from .forecast_core import atomic_write_json, atomic_write_json_gz, cycle_id, iso_z, utc_now
+from .forecast_core import (
+    atomic_write_json,
+    atomic_write_json_gz,
+    cycle_id,
+    iso_z,
+    manifest_lock_path,
+    utc_now,
+)
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
 
 
@@ -150,7 +157,7 @@ def main() -> int:
         raise ValueError("the TIGGE collection is historical and requires --archive-only")
 
     args.output_root.mkdir(parents=True, exist_ok=True)
-    lock_path = args.output_root / ".update.lock"
+    lock_path = manifest_lock_path(args.output_root)
     lock_stream = lock_path.open("a+")
     try:
         fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
