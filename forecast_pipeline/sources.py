@@ -49,6 +49,25 @@ from .versions import model_version
 LOGGER = logging.getLogger("mla.forecast.sources")
 USER_AGENT = "monsoon-low-atlas-forecast/1.0 (+https://kieranmrhunt.github.io/monsoon-low-atlas/)"
 
+NOAA_GEFS_ARCHIVE_START = datetime(2017, 1, 1, 0, tzinfo=UTC)
+WEATHERBENCH_IFS_ENS_START = datetime(2018, 1, 1, 0, tzinfo=UTC)
+WEATHERBENCH_IFS_ENS_END = datetime(2022, 12, 31, 12, tzinfo=UTC)
+
+
+def tigge_archive_provider(model: str, cycle: datetime) -> str:
+    """Name the retrieval service actually used for a TIGGE model-cycle."""
+
+    value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+    value = value.astimezone(UTC)
+    if model == "tigge-ncep" and value >= NOAA_GEFS_ARCHIVE_START:
+        return "NOAA Open Data GEFS archive"
+    if (
+        model == "tigge-ecmwf"
+        and WEATHERBENCH_IFS_ENS_START <= value <= WEATHERBENCH_IFS_ENS_END
+    ):
+        return "WeatherBench 2 public IFS ENS archive"
+    return "ECMWF ECDS TIGGE archive"
+
 
 def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
     """Return every six-hourly lead supplied by the selected forecast stream."""
@@ -971,12 +990,30 @@ class TiggeAdapter(BaseAdapter):
         cycle = self.resolve_cycle(requested, int(max(steps)))
         with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
             root = Path(directory)
-            paths = []
-            for forecast_type in self.centre.forecast_types:
-                for levtype in ("pl", "sfc"):
-                    target = root / f"{forecast_type}-{levtype}.grib"
-                    self._retrieve(cycle, steps, target, forecast_type, levtype)
-                    paths.append(target)
+            requests = [
+                (forecast_type, levtype, root / f"{forecast_type}-{levtype}.grib")
+                for forecast_type in self.centre.forecast_types
+                for levtype in ("pl", "sfc")
+            ]
+            # ECDS stages pressure-level/surface and control/perturbed requests
+            # independently. Submit those independent pieces together so one
+            # cycle takes roughly one staging window instead of up to four;
+            # _retrieve's bounded queue-limit backoff remains the safety valve.
+            with ThreadPoolExecutor(max_workers=min(self.workers, len(requests))) as executor:
+                futures = [
+                    executor.submit(
+                        self._retrieve,
+                        cycle,
+                        steps,
+                        target,
+                        forecast_type,
+                        levtype,
+                    )
+                    for forecast_type, levtype, target in requests
+                ]
+                for future in as_completed(futures):
+                    future.result()
+            paths = [target for unused_type, unused_level, target in requests]
             fields = self._read_fields(paths, cycle)
 
         members = self._member_ids(fields)
@@ -1030,6 +1067,214 @@ class TiggeEcmwfAdapter(TiggeAdapter):
 
     def __init__(self, workers: int = 8):
         super().__init__("tigge-ecmwf", workers=workers)
+
+
+class TiggeWeatherBenchAdapter(BaseAdapter):
+    """ECMWF ENS from WeatherBench 2's public cloud-optimised copy.
+
+    WeatherBench stores the 2018--2022 TIGGE ensemble in eight-lead chunks, so
+    one cloud read supplies all 50 perturbed members.  Its public compact grid
+    is 1.5 degrees; fields are linearly interpolated to the tracker's common
+    1-degree grid before any derivatives or detection are calculated.
+    """
+
+    START = WEATHERBENCH_IFS_ENS_START
+    END = WEATHERBENCH_IFS_ENS_END
+    STORE = (
+        "weatherbench2/datasets/ifs_ens/"
+        "2018-2022-240x121_equiangular_with_poles_conservative.zarr"
+    )
+
+    def __init__(self, workers: int = 8):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["tigge-ecmwf"]
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+        value = value.astimezone(UTC)
+        return self.START <= value <= self.END and value.hour in {0, 12} and 0 <= horizon <= 360
+
+    @staticmethod
+    def _array(dataset: Any, variable: str, *, level: int | None = None) -> np.ndarray:
+        values = dataset[variable]
+        if level is not None:
+            values = values.sel(level=level)
+        return np.asarray(
+            values.transpose("number", "prediction_timedelta", "latitude", "longitude").values,
+            dtype=np.float32,
+        )
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        try:
+            import gcsfs
+            import xarray as xr
+        except ImportError as error:
+            raise DownloadError("gcsfs and xarray are required for WeatherBench retrieval") from error
+
+        cycle = self.resolve_cycle(requested, int(max(steps)))
+        filesystem = gcsfs.GCSFileSystem(token="anon")
+        dataset = xr.open_zarr(
+            filesystem.get_mapper(self.STORE),
+            consolidated=True,
+            decode_timedelta=True,
+        )
+        numbers = np.asarray(dataset.number.values)
+        if member_limit is not None:
+            numbers = numbers[:max(1, member_limit)]
+        selected = dataset[
+            [
+                "mean_sea_level_pressure",
+                "10m_u_component_of_wind",
+                "10m_v_component_of_wind",
+                "total_precipitation",
+                "u_component_of_wind",
+                "v_component_of_wind",
+            ]
+        ].sel(
+            time=np.datetime64(cycle.replace(tzinfo=None)),
+            number=numbers,
+            prediction_timedelta=[np.timedelta64(int(step), "h") for step in steps],
+            level=[500, 700, 850],
+            longitude=slice(float(GRID_LONS[0]) - 1.5, float(GRID_LONS[-1]) + 1.5),
+            latitude=slice(float(GRID_LATS[0]) - 1.5, float(GRID_LATS[-1]) + 1.5),
+        ).load()
+        selected = selected.interp(
+            longitude=np.asarray(GRID_LONS, dtype=np.float64),
+            latitude=np.asarray(GRID_LATS, dtype=np.float64),
+            method="linear",
+        )
+
+        mslp = self._array(selected, "mean_sea_level_pressure") / np.float32(100.0)
+        u10 = self._array(selected, "10m_u_component_of_wind")
+        v10 = self._array(selected, "10m_v_component_of_wind")
+        precipitation = np.maximum(
+            self._array(selected, "total_precipitation") * np.float32(1000.0),
+            0.0,
+        )
+        precipitation = np.maximum.accumulate(precipitation, axis=1)
+        winds = {
+            level: (
+                self._array(selected, "u_component_of_wind", level=level),
+                self._array(selected, "v_component_of_wind", level=level),
+            )
+            for level in (850, 700, 500)
+        }
+        vorticity = {
+            level: np.stack([
+                np.stack([
+                    relative_vorticity_x1e5(u_frame, v_frame)
+                    for u_frame, v_frame in zip(member_u, member_v, strict=True)
+                ])
+                for member_u, member_v in zip(winds[level][0], winds[level][1], strict=True)
+            ])
+            for level in (850, 700, 500)
+        }
+        members = [f"p{int(number):02d}" for number in numbers]
+
+        def load_member(index: int, member: str) -> dict[str, Any]:
+            tracking = track_forecast_member(
+                cycle=cycle,
+                steps=steps,
+                member=member,
+                role="perturbed",
+                mslp_hpa=mslp[index],
+                vorticity_by_level={level: values[index] for level, values in vorticity.items()},
+                wind_by_level={
+                    level: (values[0][index], values[1][index])
+                    for level, values in winds.items()
+                },
+                wind_10m=(u10[index], v10[index]),
+                precipitation_cumulative_mm=precipitation[index],
+            )
+            return {
+                "member": member,
+                "tracks": tracking.tracks,
+                "vorticity": vorticity[850][index],
+                "precipitation": precipitation[index],
+                "tracking_qa": {
+                    "member": member,
+                    "detector_candidates": tracking.detector_candidates,
+                    "linker": tracking.linker_summary,
+                    "crosscheck": tracking.qa_crosscheck,
+                },
+            }
+
+        results: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        with ThreadPoolExecutor(max_workers=min(self.workers, len(members))) as executor:
+            future_map = {
+                executor.submit(load_member, index, member): member
+                for index, member in enumerate(members)
+            }
+            for future in as_completed(future_map):
+                member = future_map[future]
+                try:
+                    results.append(future.result())
+                except Exception as error:
+                    warnings.append(f"{member} unavailable: {error}")
+        results.sort(key=lambda item: members.index(item["member"]))
+        minimum = 1 if member_limit is not None else max(3, math.ceil(len(members) * 0.7))
+        if len(results) < minimum:
+            raise DownloadError(
+                f"Only {len(results)}/{len(members)} {self.definition.label} WeatherBench members completed"
+            )
+        payload = self._payload(
+            cycle,
+            steps,
+            [track for result in results for track in result["tracks"]],
+            [result["member"] for result in results],
+            np.mean(np.stack([result["vorticity"] for result in results]), axis=0),
+            np.mean(np.stack([result["precipitation"] for result in results]), axis=0),
+            warnings,
+            [result["tracking_qa"] for result in results],
+            expected_members=50,
+        )
+        payload["source"] = {
+            "provider": "ECMWF via WeatherBench 2",
+            "service": "WeatherBench 2 public IFS ENS archive",
+            "url": "https://weatherbench2.readthedocs.io/en/latest/data-guide.html#ifs-ens",
+            "licence": "research use; source TIGGE terms apply",
+            "retrieval": (
+                "public Google Cloud Zarr, 50 perturbed members on the WeatherBench 1.5-degree grid; "
+                "linearly interpolated to the common 1-degree atlas grid before derivatives"
+            ),
+        }
+        payload["qa"] = validate_cycle_payload(payload)
+        if payload["qa"]["status"] == "failed":
+            raise ValueError(f"{self.definition.id} payload failed QA: {payload['qa']['errors']}")
+        return payload
+
+
+class TiggeEcmwfHybridAdapter(BaseAdapter):
+    """Route 2018--2022 ECMWF ENS cycles to WeatherBench, others to ECDS."""
+
+    def __init__(self, workers: int = 8):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["tigge-ecmwf"]
+        self.weatherbench = TiggeWeatherBenchAdapter(workers=workers)
+        self.ecds = TiggeAdapter("tigge-ecmwf", workers=workers)
+
+    @staticmethod
+    def _uses_weatherbench(cycle: datetime) -> bool:
+        value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+        value = value.astimezone(UTC)
+        return TiggeWeatherBenchAdapter.START <= value <= TiggeWeatherBenchAdapter.END
+
+    def resolve_cycle(self, requested: str, horizon: int) -> datetime:
+        if requested == "latest":
+            raise DownloadError("ECMWF TIGGE is a historical archive and requires an explicit cycle")
+        cycle = parse_cycle(requested)
+        adapter = self.weatherbench if self._uses_weatherbench(cycle) else self.ecds
+        return adapter.resolve_cycle(requested, horizon)
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        adapter = self.weatherbench if self._uses_weatherbench(cycle) else self.ecds
+        return adapter.cycle_complete(cycle, horizon)
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        cycle = parse_cycle(requested) if requested != "latest" else self.resolve_cycle(requested, int(max(steps)))
+        adapter = self.weatherbench if self._uses_weatherbench(cycle) else self.ecds
+        return adapter.build(requested, steps, member_limit=member_limit)
 
 
 class NcepAdapter(BaseAdapter):
@@ -1260,7 +1505,7 @@ class TiggeNcepAdapter(BaseAdapter):
     ``tigge-ncep`` identity so the archive has one continuous model series.
     """
 
-    NOAA_START = datetime(2017, 1, 1, 0, tzinfo=UTC)
+    NOAA_START = NOAA_GEFS_ARCHIVE_START
 
     def __init__(self, workers: int = 16):
         super().__init__(workers=workers)
@@ -1542,6 +1787,10 @@ class EcmwfAdapter(BaseAdapter):
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
     if model == "ukmo-global":
         return BadcUkmoAdapter(root=archive_root, workers=workers)
+    if model == "tigge-ecmwf":
+        if archive_root:
+            raise ValueError("ECMWF historical retrieval selects WeatherBench/ECDS automatically and does not accept archive_root")
+        return TiggeEcmwfHybridAdapter(workers=workers)
     if model == "tigge-ncep":
         if archive_root:
             raise ValueError("NCEP historical retrieval selects NOAA/ECDS automatically and does not accept archive_root")

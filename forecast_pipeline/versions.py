@@ -100,6 +100,42 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
     ),
     "tigge-ecmwf": (
         {
+            "from": "2021101212",
+            "label": "IFS Cycle 47r3",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/226510127/Implementation+of+IFS+Cycle+47r3",
+            "basis": "documented operational implementation interval",
+        },
+        {
+            "from": "2021051112",
+            "label": "IFS Cycle 47r2",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/197704845/Implementation+of+IFS+Cycle+47r2",
+            "basis": "documented operational implementation interval",
+        },
+        {
+            "from": "2020063012",
+            "label": "IFS Cycle 47r1",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/179736603/Implementation+of+IFS+Cycle+47r1",
+            "basis": "documented operational implementation interval",
+        },
+        {
+            "from": "2019061112",
+            "label": "IFS Cycle 46r1",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/131380806/Implementation+of+IFS+cycle+46r1",
+            "basis": "documented operational implementation interval",
+        },
+        {
+            "from": "2018060512",
+            "label": "IFS Cycle 45r1",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/97385120/Implementation+of+IFS+cycle+45r1",
+            "basis": "documented operational implementation interval",
+        },
+        {
+            "from": "2017071112",
+            "label": "IFS Cycle 43r3",
+            "source_url": "https://confluence.ecmwf.int/display/FCST/Implementation+of+IFS+cycle+43r3",
+            "basis": "documented operational implementation interval",
+        },
+        {
             "from": "2016112212",
             "label": "IFS Cycle 43r1",
             "source_url": "https://confluence.ecmwf.int/spaces/TIGGE/pages/53523308/Model+upgrades",

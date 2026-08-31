@@ -10,7 +10,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .forecast_core import atomic_write_json, iso_z, manifest_entry_horizon_hours, utc_now
-from .sources import TIGGE_CENTRES, TIGGE_MODEL_IDS, available_forecast_steps
+from .sources import (
+    TIGGE_CENTRES,
+    TIGGE_MODEL_IDS,
+    available_forecast_steps,
+    tigge_archive_provider,
+)
 from .tigge_catalogue import TiggeAvailability, load_constraints
 from .update import read_manifest
 from .versions import model_version
@@ -171,12 +176,19 @@ def main() -> None:
             > int(item["first_step_hours"])
         )
     ]
+    providers = sorted({
+        tigge_archive_provider(
+            str(item["model"]),
+            datetime.strptime(str(item["cycle"]), "%Y%m%d%H").replace(tzinfo=UTC),
+        )
+        for item in desired
+    })
     plan = {
         "schema": "mla-forecast-tigge-plan-v1",
         "manifest_key": args.manifest_key,
         "generated_utc": iso_z(utc_now()),
         "models": models,
-        "providers": ["ECMWF ECDS TIGGE archive"],
+        "providers": providers,
         "source_archive_start_utc": iso_z(min(TIGGE_CENTRES[model].archive_start for model in models)),
         "requested_start_utc": iso_z(min(cycles)) if cycles else None,
         "requested_end_utc": iso_z(max(cycles)) if cycles else None,

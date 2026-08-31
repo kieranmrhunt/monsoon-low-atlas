@@ -32,13 +32,16 @@ from forecast_pipeline.sources import (
     TIGGE_CENTRES,
     TIGGE_MODEL_IDS,
     TiggeAdapter,
+    TiggeEcmwfHybridAdapter,
     TiggeEcmwfAdapter,
     TiggeNcepAdapter,
+    TiggeWeatherBenchAdapter,
     _fetch_record,
     adapter_for,
     available_forecast_steps,
     parse_ecmwf_index,
     parse_ncep_index,
+    tigge_archive_provider,
 )
 from forecast_pipeline.tigge_catalogue import REQUIRED_FIELDS, TiggeAvailability
 from forecast_pipeline.analysis_history import (
@@ -274,6 +277,42 @@ class ForecastPipelineContractTests(unittest.TestCase):
         noaa_build.assert_not_called()
         self.assertIs(payload, source_payload)
 
+    def test_tigge_ecmwf_uses_weatherbench_only_for_2018_to_2022(self) -> None:
+        adapter = adapter_for("tigge-ecmwf", workers=3)
+        self.assertIsInstance(adapter, TiggeEcmwfHybridAdapter)
+        weatherbench_payload = {"source": "weatherbench"}
+        ecds_payload = {"source": "ecds"}
+        with (
+            patch.object(adapter.weatherbench, "build", return_value=weatherbench_payload) as weatherbench,
+            patch.object(adapter.ecds, "build", return_value=ecds_payload) as ecds,
+        ):
+            self.assertIs(adapter.build("2020070100", [0, 6]), weatherbench_payload)
+            self.assertIs(adapter.build("2017123112", [0, 6]), ecds_payload)
+            self.assertIs(adapter.build("2023010100", [0, 6]), ecds_payload)
+        weatherbench.assert_called_once_with("2020070100", [0, 6], member_limit=None)
+        self.assertEqual(ecds.call_count, 2)
+
+    def test_tigge_plan_provider_matches_hybrid_retrieval_route(self) -> None:
+        self.assertEqual(
+            tigge_archive_provider("tigge-ncep", datetime(2017, 1, 1, tzinfo=UTC)),
+            "NOAA Open Data GEFS archive",
+        )
+        self.assertEqual(
+            tigge_archive_provider("tigge-ecmwf", datetime(2020, 7, 1, tzinfo=UTC)),
+            "WeatherBench 2 public IFS ENS archive",
+        )
+        self.assertEqual(
+            tigge_archive_provider("tigge-ecmwf", datetime(2017, 12, 31, 12, tzinfo=UTC)),
+            "ECMWF ECDS TIGGE archive",
+        )
+
+    def test_weatherbench_ecmwf_archive_bounds_are_explicit(self) -> None:
+        adapter = TiggeWeatherBenchAdapter()
+        self.assertTrue(adapter.cycle_complete(datetime(2018, 1, 1, tzinfo=UTC), 360))
+        self.assertTrue(adapter.cycle_complete(datetime(2022, 12, 31, 12, tzinfo=UTC), 360))
+        self.assertFalse(adapter.cycle_complete(datetime(2017, 12, 31, 12, tzinfo=UTC), 360))
+        self.assertFalse(adapter.cycle_complete(datetime(2023, 1, 1, tzinfo=UTC), 360))
+
     def test_trailing_precipitation_uses_24_hour_difference(self) -> None:
         cumulative = np.asarray([0, 3, 8, 13, 20, 31], dtype=np.float32)[:, None, None]
         result = trailing_24h(cumulative, [0, 6, 12, 18, 24, 30])[:, 0, 0]
@@ -479,6 +518,14 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(
             model_version("tigge-ecmwf", datetime(2015, 5, 12, 12, tzinfo=UTC))["label"],
             "IFS Cycle 41r1",
+        )
+        self.assertEqual(
+            model_version("tigge-ecmwf", datetime(2018, 6, 5, 12, tzinfo=UTC))["label"],
+            "IFS Cycle 45r1",
+        )
+        self.assertEqual(
+            model_version("tigge-ecmwf", datetime(2021, 10, 12, 12, tzinfo=UTC))["label"],
+            "IFS Cycle 47r3",
         )
 
 
