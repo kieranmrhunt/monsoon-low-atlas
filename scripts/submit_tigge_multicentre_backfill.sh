@@ -100,5 +100,5 @@ for CHUNK in "$RUN_ROOT"/jobs-[0-9]*.tsv; do
 done
 
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$PREVIOUS" scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$OUTPUT" tigge)"
-echo "Submitted $CANARY_MESSAGE; multi-centre arrays ${ARRAY_IDS[*]} ($COUNT model-cycles; up to $MAX_ACTIVE active) and finalizer $FINAL_ID"
-
+PUBLISH_ID="$(sbatch --parsable scripts/watch_forecast_archive_publish.slurm "$RUN_ROOT" "$OUTPUT" tigge tigge_multicentre_backfill "$PLAN")"
+echo "Submitted $CANARY_MESSAGE; multi-centre arrays ${ARRAY_IDS[*]} ($COUNT model-cycles; up to $MAX_ACTIVE active), batching publisher $PUBLISH_ID and finalizer $FINAL_ID"

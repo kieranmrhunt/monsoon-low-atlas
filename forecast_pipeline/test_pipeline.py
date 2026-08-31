@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from forecast_pipeline import merge_archives
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
     GRID_LONS,
@@ -70,6 +71,37 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+    def test_nonblocking_archive_publish_retains_staging_when_lock_is_busy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            atomic_write_json(
+                source / "manifest.json",
+                {"schema": "mla-forecast-manifest-v1", "tigge_archive": []},
+            )
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "merge_archives",
+                        "--target",
+                        str(target),
+                        "--collection",
+                        "tigge",
+                        "--nonblocking-lock",
+                        str(source),
+                    ],
+                ),
+                patch(
+                    "forecast_pipeline.merge_archives.fcntl.flock",
+                    side_effect=BlockingIOError,
+                ),
+            ):
+                merge_archives.main()
+            self.assertFalse((target / "manifest.json").exists())
+
     def test_candidate_cycles_are_six_hourly_and_descending(self) -> None:
         now = datetime(2026, 8, 30, 13, 47, tzinfo=UTC)
         values = candidate_cycles(now, limit=3)

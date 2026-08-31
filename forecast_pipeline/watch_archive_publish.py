@@ -175,7 +175,7 @@ def main() -> int:
 
         if args.once:
             return 0
-        if status in {"complete", "incomplete"}:
+        if status == "complete":
             LOGGER.info("Backfill finalizer reports %s; progressive publisher is finished", status)
             return 0
         time.sleep(args.poll_seconds)

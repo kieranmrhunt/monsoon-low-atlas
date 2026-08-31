@@ -56,4 +56,5 @@ fi
 # backoff inside each task rather than consuming the rest of the Slurm array.
 ARRAY_ID="$(sbatch --parsable "${DEPENDENCY_ARGS[@]}" --time="$TIME_LIMIT" --array="1-$COUNT%$MAX_ACTIVE" scripts/backfill_forecast_cycle.slurm "$JOBS" "$RUN_ROOT" tigge "$OUTPUT")"
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$ARRAY_ID" scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$OUTPUT" tigge)"
-echo "Submitted ECMWF TIGGE $CANARY_MESSAGE; array $ARRAY_ID ($COUNT tasks; up to $MAX_ACTIVE active, publishing each completed cycle) and finalizer $FINAL_ID"
+PUBLISH_ID="$(sbatch --parsable scripts/watch_forecast_archive_publish.slurm "$RUN_ROOT" "$OUTPUT" tigge tigge_backfill "$PLAN")"
+echo "Submitted ECMWF TIGGE $CANARY_MESSAGE; array $ARRAY_ID ($COUNT tasks; up to $MAX_ACTIVE active), batching publisher $PUBLISH_ID and finalizer $FINAL_ID"

@@ -24,4 +24,5 @@ fi
 
 ARRAY_ID="$(sbatch --parsable --array="1-$COUNT" scripts/backfill_forecast_cycle.slurm "$JOBS" "$RUN_ROOT" archive "$OUTPUT")"
 FINAL_ID="$(sbatch --parsable --dependency="afterany:$ARRAY_ID" scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$OUTPUT")"
-echo "Submitted BADC Met Office array $ARRAY_ID ($COUNT tasks; publishing each completed cycle) and finalizer $FINAL_ID"
+PUBLISH_ID="$(sbatch --parsable scripts/watch_forecast_archive_publish.slurm "$RUN_ROOT" "$OUTPUT" archive archive_backfill_badc_ukmo "$PLAN")"
+echo "Submitted BADC Met Office array $ARRAY_ID ($COUNT tasks), batching publisher $PUBLISH_ID and finalizer $FINAL_ID"

@@ -50,5 +50,6 @@ if [[ -n "$PUBLISH_TARGET" && "$MODE" != "recent" ]]; then
   "$PYTHON" -m forecast_pipeline.merge_archives \
     --target "$PUBLISH_TARGET" \
     --collection "$MODE" \
+    --nonblocking-lock \
     "$OUTPUT"
 fi

@@ -33,15 +33,17 @@ submit_plan() {
     array_id="$(sbatch --parsable --array="1-$count" scripts/backfill_forecast_cycle.slurm "$jobs" "$run_root" "$mode")"
   else
     array_id="$(sbatch --parsable --array="1-$count" scripts/backfill_forecast_cycle.slurm "$jobs" "$run_root" "$mode" "$OUTPUT")"
-    publish_note="; publishing each completed cycle"
+    publish_note="; non-blocking progressive publication"
   fi
   local final_id
+  local publisher_id=""
   if [[ "$mode" == "recent" ]]; then
     final_id="$(sbatch --parsable --dependency="afterany:$array_id" scripts/finalize_forecast_recent_backfill.slurm "$run_root" "$plan" "$OUTPUT")"
   else
     final_id="$(sbatch --parsable --dependency="afterany:$array_id" scripts/finalize_forecast_archive_backfill.slurm "$run_root" "$plan" "$OUTPUT")"
+    publisher_id="$(sbatch --parsable scripts/watch_forecast_archive_publish.slurm "$run_root" "$OUTPUT" archive archive_backfill "$plan")"
   fi
-  echo "Submitted $mode array $array_id ($count tasks$publish_note), finalizer $final_id"
+  echo "Submitted $mode array $array_id ($count tasks$publish_note),${publisher_id:+ batching publisher $publisher_id and} finalizer $final_id"
 }
 
 submit_plan recent

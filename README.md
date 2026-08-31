@@ -113,9 +113,11 @@ retried with exponential backoff instead of failing a cycle and churning
 through the array. A known 2016
 case must first pass at the complete +360-hour horizon; the large array has an
 `afterok` dependency on that canary and later submissions skip the gate once
-its full-horizon asset is public. Each successfully tracked cycle is merged
-atomically into the public TIGGE collection as soon as it finishes; the
-finalizer then reconciles the whole plan and reports any gaps.
+its full-horizon asset is public. Each task attempts a non-blocking atomic
+publication as soon as it finishes; if another publisher owns the manifest
+lock, validated staging is retained for the batching publisher instead of
+tying up a compute allocation. The finalizer then reconciles the whole plan
+and reports any gaps.
 `LPS_TIGGE_MAX_ACTIVE`, `LPS_TIGGE_TIME_LIMIT`,
 `LPS_TIGGE_CANARY_CYCLE`, `LPS_TIGGE_QUEUE_RETRY_ATTEMPTS` and
 `LPS_TIGGE_QUEUE_RETRY_BASE_SECONDS` override the submission settings.
