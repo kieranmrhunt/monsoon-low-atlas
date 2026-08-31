@@ -33,7 +33,9 @@ from forecast_pipeline.sources import (
     TIGGE_MODEL_IDS,
     TiggeAdapter,
     TiggeEcmwfAdapter,
+    TiggeNcepAdapter,
     _fetch_record,
+    adapter_for,
     available_forecast_steps,
     parse_ecmwf_index,
     parse_ncep_index,
@@ -238,6 +240,39 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertTrue(current_layout.endswith("pgrb2a.0p50.f006"))
         self.assertEqual(len(gefs._member_ids(datetime(2019, 1, 1, tzinfo=UTC), None)), 21)
         self.assertEqual(len(gefs._member_ids(datetime(2026, 1, 1, tzinfo=UTC), None)), 31)
+
+    def test_tigge_ncep_uses_noaa_from_2017_without_splitting_model_identity(self) -> None:
+        adapter = adapter_for("tigge-ncep", workers=3)
+        self.assertIsInstance(adapter, TiggeNcepAdapter)
+        source_payload = {
+            "model": {"id": "gefs"},
+            "source": {},
+            "model_version": {"label": "GEFS v11.3"},
+            "qa": {},
+        }
+        with (
+            patch.object(adapter.noaa, "build", return_value=source_payload) as noaa_build,
+            patch.object(adapter.ecds, "build") as ecds_build,
+            patch("forecast_pipeline.sources.validate_cycle_payload", return_value={"status": "passed", "errors": []}),
+        ):
+            payload = adapter.build("2017010200", [0, 6], member_limit=1)
+        noaa_build.assert_called_once_with("2017010200", [0, 6], member_limit=1)
+        ecds_build.assert_not_called()
+        self.assertEqual(payload["model"]["id"], "tigge-ncep")
+        self.assertEqual(payload["model_version"]["label"], "GEFS v11.3")
+        self.assertEqual(payload["source"]["service"], "NOAA Open Data GEFS archive")
+
+    def test_tigge_ncep_keeps_pre_2017_cycles_on_ecds(self) -> None:
+        adapter = TiggeNcepAdapter(workers=2)
+        source_payload = {"model": {"id": "tigge-ncep"}}
+        with (
+            patch.object(adapter.ecds, "build", return_value=source_payload) as ecds_build,
+            patch.object(adapter.noaa, "build") as noaa_build,
+        ):
+            payload = adapter.build("2016123100", [0, 6], member_limit=1)
+        ecds_build.assert_called_once_with("2016123100", [0, 6], member_limit=1)
+        noaa_build.assert_not_called()
+        self.assertIs(payload, source_payload)
 
     def test_trailing_precipitation_uses_24_hour_difference(self) -> None:
         cumulative = np.asarray([0, 3, 8, 13, 20, 31], dtype=np.float32)[:, None, None]

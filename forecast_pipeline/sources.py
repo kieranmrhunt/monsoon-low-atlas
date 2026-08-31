@@ -210,7 +210,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
     ),
     "tigge-ncep": ModelDefinition(
         "tigge-ncep", "NCEP TIGGE ENS", "NOAA/NCEP", "ensemble", 31,
-        "Historical NCEP control plus perturbed ensemble from the TIGGE archive",
+        "Historical NCEP control plus perturbed ensemble from NOAA Open Data (2017 onward) and ECDS TIGGE (earlier)",
         "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#332288",
     ),
     "tigge-ncmrwf": ModelDefinition(
@@ -1251,6 +1251,69 @@ class NcepAdapter(BaseAdapter):
         )
 
 
+class TiggeNcepAdapter(BaseAdapter):
+    """NCEP archive adapter using the fastest authoritative source available.
+
+    NOAA's public GEFS object store contains the same NCEP ensemble from 2017
+    onward and supports efficient inventory byte-range reads.  Older cycles
+    continue to use the ECDS TIGGE service.  Both routes retain the public
+    ``tigge-ncep`` identity so the archive has one continuous model series.
+    """
+
+    NOAA_START = datetime(2017, 1, 1, 0, tzinfo=UTC)
+
+    def __init__(self, workers: int = 16):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["tigge-ncep"]
+        self.noaa = NcepAdapter("gefs", client=self.client, workers=workers)
+        self.ecds = TiggeAdapter("tigge-ncep", workers=workers)
+
+    @classmethod
+    def _uses_noaa(cls, cycle: datetime) -> bool:
+        value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+        return value.astimezone(UTC) >= cls.NOAA_START
+
+    def resolve_cycle(self, requested: str, horizon: int) -> datetime:
+        if requested == "latest":
+            raise DownloadError("NCEP TIGGE is a historical archive and requires an explicit cycle")
+        cycle = parse_cycle(requested)
+        adapter = self.noaa if self._uses_noaa(cycle) else self.ecds
+        return adapter.resolve_cycle(requested, horizon)
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        adapter = self.noaa if self._uses_noaa(cycle) else self.ecds
+        return adapter.cycle_complete(cycle, horizon)
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        cycle = parse_cycle(requested) if requested != "latest" else self.resolve_cycle(requested, int(max(steps)))
+        if not self._uses_noaa(cycle):
+            return self.ecds.build(requested, steps, member_limit=member_limit)
+
+        payload = self.noaa.build(requested, steps, member_limit=member_limit)
+        definition = self.definition
+        payload["model"] = {
+            "id": definition.id,
+            "label": definition.label,
+            "centre": definition.centre,
+            "kind": definition.kind,
+            "description": definition.description,
+            "colour": definition.colour,
+        }
+        payload["source"] = {
+            "provider": "NOAA/NCEP",
+            "service": "NOAA Open Data GEFS archive",
+            "url": "https://registry.opendata.aws/noaa-gefs/",
+            "licence": "NOAA public data",
+            "retrieval": "public S3 inventory byte ranges; atlas domain resampled to 1 degree",
+        }
+        # Keep the exact GEFS generation crosswalk produced by NcepAdapter.
+        # Only the archive-facing model identifier changes.
+        payload["qa"] = validate_cycle_payload(payload)
+        if payload["qa"]["status"] == "failed":
+            raise ValueError(f"{definition.id} payload failed QA: {payload['qa']['errors']}")
+        return payload
+
+
 def _ecmwf_record(
     records: Sequence[IndexRecord],
     param: str,
@@ -1479,6 +1542,10 @@ class EcmwfAdapter(BaseAdapter):
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
     if model == "ukmo-global":
         return BadcUkmoAdapter(root=archive_root, workers=workers)
+    if model == "tigge-ncep":
+        if archive_root:
+            raise ValueError("NCEP historical retrieval selects NOAA/ECDS automatically and does not accept archive_root")
+        return TiggeNcepAdapter(workers=workers)
     if model in TIGGE_CENTRES:
         if archive_root:
             raise ValueError("TIGGE retrieval uses ECDS and does not accept archive_root")

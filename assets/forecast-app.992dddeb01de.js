@@ -231,11 +231,17 @@
 
 	function archiveEntries() {
 		if (!state.manifest) return [];
-		return state.mode === 'tigge' ? (state.manifest.tigge_archive || []) : (state.manifest.archive || []);
+		const entries = [...(state.manifest.archive || []), ...(state.manifest.tigge_archive || [])];
+		const unique = new Map();
+		for (const entry of entries) {
+			const key = `${entry.model}:${entry.cycle}`;
+			if (!unique.has(key)) unique.set(key, entry);
+		}
+		return [...unique.values()];
 	}
 
 	function archiveModeLabel() {
-		return state.mode === 'tigge' ? 'TIGGE ensemble' : 'operational';
+		return 'archived';
 	}
 
 	function parseArchiveTarget(value) {
@@ -337,7 +343,7 @@
 		if (!entries.length) {
 			const metadata = state.manifest.tigge_backfill || {};
 			const status = metadata.status ? ` · ${metadata.status.replaceAll('_', ' ')}` : '';
-			node.innerHTML = `<summary>TIGGE archive coverage</summary><p>No processed cycles published yet${esc(status)}. Availability appears as each cycle passes atlas QA.</p>`;
+			node.innerHTML = `<summary>Archive coverage</summary><p>No processed cycles published yet${esc(status)}. Availability appears as each cycle passes atlas QA.</p>`;
 			return;
 		}
 		const ordered = [...entries].sort((a, b) => String(a.cycle).localeCompare(String(b.cycle)));
@@ -350,8 +356,7 @@
 			const label = values[0].model_label || id;
 			return `<span class="mla-forecast-coverage-model"><strong>${esc(label)}</strong>${esc(formatUtc(values[0].cycle_utc, false))}–${esc(formatUtc(values[values.length - 1].cycle_utc, false))}</span>`;
 		}).join('');
-		const label = state.mode === 'tigge' ? 'TIGGE archive coverage' : 'Operational archive coverage';
-		node.innerHTML = `<summary>${label}</summary><div class="mla-forecast-coverage-models">${modelHtml}</div>`;
+		node.innerHTML = `<summary>Archive coverage</summary><div class="mla-forecast-coverage-models">${modelHtml}</div>`;
 	}
 
 	function latestEntries() {
@@ -402,9 +407,7 @@
 	function noArchiveMatchMessage() {
 		const query = $('#mlaForecastArchiveSearch').value.trim();
 		const values = archiveNameEntries();
-		if (!values.length) return state.mode === 'tigge'
-			? 'No processed TIGGE cycle matches this storm or date yet; the live backfill status is shown above.'
-			: `No processed operational forecast matches “${query}”. Try an official cyclone name or another valid date.`;
+		if (!values.length) return `No processed archived forecast matches “${query}”. Try an official cyclone name or another valid date.`;
 		const target = archiveTargetTime();
 		if (!Number.isFinite(target)) return `No processed ${archiveModeLabel()} forecast matches this search.`;
 		const intervalDistance = entry => {
@@ -701,18 +704,18 @@
 	}
 
 	function setMode(mode) {
+		if (mode === 'tigge') mode = 'archive';
 		state.mode = mode;
 		$('#mlaForecastModeLatest').setAttribute('aria-pressed', String(mode === 'latest'));
 		$('#mlaForecastModeArchive').setAttribute('aria-pressed', String(mode === 'archive'));
-		$('#mlaForecastModeTigge').setAttribute('aria-pressed', String(mode === 'tigge'));
 		$('#mlaForecastLayout').dataset.mode = mode;
 		$('#mlaForecastLiveControls').hidden = mode !== 'latest';
 		$('#mlaForecastArchiveControls').hidden = mode === 'latest';
 		$('#mlaForecastArchiveSidebar').hidden = mode === 'latest';
-		$('#mlaForecastArchiveSearchLabel').textContent = mode === 'tigge' ? 'TIGGE storm or valid time' : 'Storm or valid time';
+		$('#mlaForecastArchiveSearchLabel').textContent = 'Storm or valid time';
 		$('#mlaForecastArchiveWeatherField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveWeatherSourceField').hidden = mode !== 'archive';
-		$('#mlaForecastArchiveMembersLabel').hidden = mode !== 'tigge';
+		$('#mlaForecastArchiveMembersLabel').hidden = mode !== 'archive';
 		state.showMembers = false;
 		$('#mlaForecastArchiveMembers').checked = false;
 		if (!state.initialised) { initialise(); return; }
@@ -1302,7 +1305,6 @@
 
 	$('#mlaForecastModeLatest').addEventListener('click', () => setMode('latest'));
 	$('#mlaForecastModeArchive').addEventListener('click', () => setMode('archive'));
-	$('#mlaForecastModeTigge').addEventListener('click', () => setMode('tigge'));
 	$('#mlaForecastRetry').addEventListener('click', () => initialise(true));
 	$('#mlaForecastModelChecks').addEventListener('change', event => {
 		const input = event.target.closest('input[type="checkbox"]');
@@ -1379,6 +1381,5 @@
 	window.addEventListener('resize', () => { clearTimeout(state.resizeTimer); state.resizeTimer = setTimeout(resizeAndRender, 120); });
 
 	const parameters = new URLSearchParams(location.search);
-	if (parameters.get('fmode') === 'archive') setMode('archive');
-	if (parameters.get('fmode') === 'tigge') setMode('tigge');
+	if (['archive', 'tigge'].includes(parameters.get('fmode'))) setMode('archive');
 })();
