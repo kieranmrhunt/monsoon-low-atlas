@@ -58,12 +58,21 @@
 	}
 
 	async function fetchManifest() {
-		const url = `${joinUrl(config.forecastBase, 'manifest.json')}?v=${Date.now()}`;
-		const response = await fetch(url, {cache: 'no-store'});
-		if (!response.ok) throw new Error(`Forecast manifest returned HTTP ${response.status}`);
-		const value = await response.json();
-		if (value.schema !== 'mla-forecast-manifest-v1') throw new Error('Unsupported forecast manifest');
-		return value;
+		let lastError = new Error('Forecast manifest is unavailable');
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			try {
+				const url = `${joinUrl(config.forecastBase, 'manifest.json')}?v=${Date.now()}-${attempt}`;
+				const response = await fetch(url, {cache: 'no-store'});
+				if (!response.ok) throw new Error(`Forecast manifest returned HTTP ${response.status}`);
+				const value = await response.json();
+				if (value.schema !== 'mla-forecast-manifest-v1') throw new Error('Unsupported forecast manifest');
+				return value;
+			} catch (error) {
+				lastError = error;
+				if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+			}
+		}
+		throw lastError;
 	}
 
 	function notice(message, tone, retry) {
