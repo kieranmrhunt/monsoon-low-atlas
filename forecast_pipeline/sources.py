@@ -399,6 +399,50 @@ def _finalise_precip(fields: list[np.ndarray], cumulative_flags: list[bool]) -> 
     return output
 
 
+def _interpolate_isolated_native_gaps(
+    fields: Sequence[np.ndarray | None],
+    steps: Sequence[int],
+) -> list[np.ndarray]:
+    """Fill isolated missing provider frames between six-hour neighbours.
+
+    NOAA's historical GEFS object store has a small number of member-level
+    holes where one six-hour file is absent but both adjacent files and the
+    remainder of the forecast are present. Rejecting the whole member would
+    turn a one-frame archive defect into a large ensemble-completeness loss.
+    Only a single missing native frame bounded by the immediately adjacent
+    frames is repairable here; leading, trailing, or consecutive gaps remain
+    hard failures.
+    """
+
+    values = list(fields)
+    native_steps = [int(step) for step in steps]
+    if len(values) != len(native_steps):
+        raise DownloadError("native field/step lengths differ")
+    missing = [index for index, value in enumerate(values) if value is None]
+    for index in missing:
+        if index == 0 or index + 1 >= len(values):
+            raise DownloadError(f"source gap at +{native_steps[index]} h is not bounded")
+        previous = values[index - 1]
+        following = values[index + 1]
+        if previous is None or following is None:
+            raise DownloadError(f"source gap at +{native_steps[index]} h is not isolated")
+        width = native_steps[index + 1] - native_steps[index - 1]
+        if width != 12:
+            raise DownloadError(
+                f"source gap at +{native_steps[index]} h spans {width} h rather than one native frame"
+            )
+        weight = np.float32(
+            (native_steps[index] - native_steps[index - 1]) / width
+        )
+        values[index] = (
+            np.asarray(previous, dtype=np.float32) * (1.0 - weight)
+            + np.asarray(following, dtype=np.float32) * weight
+        )
+    if any(value is None for value in values):
+        raise DownloadError("unresolved native source gap")
+    return [np.asarray(value, dtype=np.float32) for value in values]
+
+
 class BaseAdapter:
     definition: ModelDefinition
 
@@ -1542,21 +1586,37 @@ class NcepAdapter(BaseAdapter):
         return values
 
     def _load_member(self, cycle: datetime, steps: Sequence[int], member: str) -> dict[str, Any]:
-        mslp: list[np.ndarray] = []
-        winds: dict[int, dict[str, list[np.ndarray]]] = {
+        mslp: list[np.ndarray | None] = []
+        winds: dict[int, dict[str, list[np.ndarray | None]]] = {
             level: {"u": [], "v": []} for level in (850, 700, 500)
         }
-        vorticity: dict[int, list[np.ndarray]] = {level: [] for level in (850, 700, 500)}
-        u10_values: list[np.ndarray] = []
-        v10_values: list[np.ndarray] = []
-        precipitation: list[np.ndarray] = []
-        cumulative_flags: list[bool] = []
-        complete_steps: list[int] = []
+        vorticity: dict[int, list[np.ndarray | None]] = {
+            level: [] for level in (850, 700, 500)
+        }
+        u10_values: list[np.ndarray | None] = []
+        v10_values: list[np.ndarray | None] = []
+        precipitation: list[np.ndarray | None] = []
+        cumulative_flags: list[bool | None] = []
+        missing_steps: list[int] = []
         errors: list[str] = []
         for step in steps:
             data_url, index_url = self._urls(cycle, int(step), member)
             try:
                 records = parse_ncep_index(self.client.text(index_url))
+            except DownloadError as error:
+                missing_steps.append(int(step))
+                errors.append(f"+{int(step):03d} h: {error}")
+                mslp.append(None)
+                for level in (850, 700, 500):
+                    winds[level]["u"].append(None)
+                    winds[level]["v"].append(None)
+                    vorticity[level].append(None)
+                u10_values.append(None)
+                v10_values.append(None)
+                precipitation.append(None)
+                cumulative_flags.append(None)
+                continue
+            try:
                 msl = to_mslp_hpa(
                     decode_grib_message(
                         _fetch_record(self.client, data_url, _ncep_record(records, ":PRMSL:mean sea level:"))
@@ -1593,33 +1653,68 @@ class NcepAdapter(BaseAdapter):
                     cumulative = _precip_is_cumulative(precip_field.step_range, int(step))
                 precipitation.append(precip)
                 cumulative_flags.append(cumulative)
-                complete_steps.append(int(step))
             except Exception as error:
-                errors.append(f"+{int(step):03d} h: {error}")
-                break
-        if complete_steps != [int(step) for step in steps]:
-            raise DownloadError(f"{member} incomplete ({len(complete_steps)}/{len(steps)} steps): {'; '.join(errors[:2])}")
+                raise DownloadError(
+                    f"{member} has an unreadable +{int(step):03d} h frame: {error}"
+                ) from error
+
+        try:
+            mslp_filled = _interpolate_isolated_native_gaps(mslp, steps)
+            winds_filled = {
+                level: {
+                    component: _interpolate_isolated_native_gaps(values, steps)
+                    for component, values in components.items()
+                }
+                for level, components in winds.items()
+            }
+            vorticity_filled = {
+                level: _interpolate_isolated_native_gaps(values, steps)
+                for level, values in vorticity.items()
+            }
+            u10_filled = _interpolate_isolated_native_gaps(u10_values, steps)
+            v10_filled = _interpolate_isolated_native_gaps(v10_values, steps)
+            precipitation_filled = _interpolate_isolated_native_gaps(precipitation, steps)
+        except DownloadError as error:
+            raise DownloadError(
+                f"{member} incomplete ({len(steps) - len(missing_steps)}/{len(steps)} steps): "
+                f"{error}; {'; '.join(errors[:2])}"
+            ) from error
+
+        flags_filled: list[bool] = []
+        for index, flag in enumerate(cumulative_flags):
+            if flag is not None:
+                flags_filled.append(bool(flag))
+                continue
+            # A reconstructed precipitation frame represents the missing
+            # native accumulation interval when its neighbours are intervals;
+            # cumulative neighbours remain cumulative.
+            previous = cumulative_flags[index - 1]
+            following = cumulative_flags[index + 1]
+            flags_filled.append(bool(previous) if previous == following else False)
         role = "deterministic" if self.definition.kind == "deterministic" else ("control" if member == "c00" else "perturbed")
-        cumulative_precipitation = _finalise_precip(precipitation, cumulative_flags)
+        cumulative_precipitation = _finalise_precip(precipitation_filled, flags_filled)
         tracking = track_forecast_member(
             cycle=cycle,
             steps=steps,
             member=member,
             role=role,
-            mslp_hpa=np.stack(mslp),
-            vorticity_by_level={level: np.stack(values) for level, values in vorticity.items()},
+            mslp_hpa=np.stack(mslp_filled),
+            vorticity_by_level={
+                level: np.stack(values) for level, values in vorticity_filled.items()
+            },
             wind_by_level={
                 level: (np.stack(values["u"]), np.stack(values["v"]))
-                for level, values in winds.items()
+                for level, values in winds_filled.items()
             },
-            wind_10m=(np.stack(u10_values), np.stack(v10_values)),
+            wind_10m=(np.stack(u10_filled), np.stack(v10_filled)),
             precipitation_cumulative_mm=cumulative_precipitation,
         )
         return {
             "member": member,
             "tracks": tracking.tracks,
-            "vorticity": np.stack(vorticity[850]),
+            "vorticity": np.stack(vorticity_filled[850]),
             "precipitation": cumulative_precipitation,
+            "source_gap_steps": missing_steps,
             "tracking_qa": {
                 "member": member,
                 "detector_candidates": tracking.detector_candidates,
@@ -1653,10 +1748,23 @@ class NcepAdapter(BaseAdapter):
         if len(results) < minimum:
             LOGGER.error("%s member failures: %s", self.definition.label, "; ".join(warnings[:5]))
             raise DownloadError(f"Only {len(results)}/{len(members)} {self.definition.label} members completed")
+        reconstructed = {
+            str(result["member"]): [int(step) for step in result.get("source_gap_steps", [])]
+            for result in results
+            if result.get("source_gap_steps")
+        }
+        if reconstructed:
+            warnings.append(
+                "isolated NOAA source gaps reconstructed by linear temporal interpolation: "
+                + "; ".join(
+                    f"{member} at {', '.join(f'+{step} h' for step in member_steps)}"
+                    for member, member_steps in reconstructed.items()
+                )
+            )
         tracks = [track for result in results for track in result["tracks"]]
         vort_mean = np.mean(np.stack([result["vorticity"] for result in results]), axis=0)
         precip_mean = np.mean(np.stack([result["precipitation"] for result in results]), axis=0)
-        return self._payload(
+        payload = self._payload(
             cycle,
             steps,
             tracks,
@@ -1671,6 +1779,17 @@ class NcepAdapter(BaseAdapter):
                 else 31 if cycle.replace(tzinfo=None) >= self.GEFS_V12_START else 21
             ),
         )
+        if reconstructed:
+            payload["source"]["gap_reconstruction"] = {
+                "policy": "linear interpolation of isolated missing six-hour member frames bounded by source-present neighbours",
+                "members": reconstructed,
+                "reconstructed_member_frames": sum(len(values) for values in reconstructed.values()),
+            }
+            payload["method"]["source_gap_policy"] = (
+                "isolated provider-file gaps are linearly reconstructed between the two adjacent native frames; "
+                "leading, trailing and consecutive gaps fail QA"
+            )
+        return payload
 
 
 class TiggeNcepAdapter(BaseAdapter):
@@ -1721,6 +1840,7 @@ class TiggeNcepAdapter(BaseAdapter):
             "description": definition.description,
             "colour": definition.colour,
         }
+        gap_reconstruction = payload.get("source", {}).get("gap_reconstruction")
         payload["source"] = {
             "provider": "NOAA/NCEP",
             "service": "NOAA Open Data GEFS archive",
@@ -1728,6 +1848,8 @@ class TiggeNcepAdapter(BaseAdapter):
             "licence": "NOAA public data",
             "retrieval": "public S3 inventory byte ranges; atlas domain resampled to 1 degree",
         }
+        if gap_reconstruction:
+            payload["source"]["gap_reconstruction"] = gap_reconstruction
         # Keep the exact GEFS generation crosswalk produced by NcepAdapter.
         # Only the archive-facing model identifier changes.
         payload["qa"] = validate_cycle_payload(payload)

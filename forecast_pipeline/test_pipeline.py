@@ -39,6 +39,7 @@ from forecast_pipeline.sources import (
     TiggeNcepAdapter,
     TiggeWeatherBenchAdapter,
     WeatherBenchHresAdapter,
+    _interpolate_isolated_native_gaps,
     _fetch_record,
     adapter_for,
     available_forecast_steps,
@@ -73,6 +74,16 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+    def test_isolated_noaa_member_gap_is_interpolated_but_edges_and_runs_fail(self) -> None:
+        first = np.asarray([[0.0, 4.0]], dtype=np.float32)
+        last = np.asarray([[12.0, 16.0]], dtype=np.float32)
+        repaired = _interpolate_isolated_native_gaps([first, None, last], [264, 270, 276])
+        np.testing.assert_allclose(repaired[1], [[6.0, 10.0]])
+        with self.assertRaisesRegex(RuntimeError, "not bounded"):
+            _interpolate_isolated_native_gaps([None, first], [0, 6])
+        with self.assertRaisesRegex(RuntimeError, "not isolated"):
+            _interpolate_isolated_native_gaps([first, None, None, last], [0, 6, 12, 18])
+
     def test_nonblocking_archive_publish_retains_staging_when_lock_is_busy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -283,7 +294,12 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertIsInstance(adapter, TiggeNcepAdapter)
         source_payload = {
             "model": {"id": "gefs"},
-            "source": {},
+            "source": {
+                "gap_reconstruction": {
+                    "members": {"p01": [270]},
+                    "reconstructed_member_frames": 1,
+                }
+            },
             "model_version": {"label": "GEFS v11.3"},
             "qa": {},
         }
@@ -298,6 +314,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(payload["model"]["id"], "tigge-ncep")
         self.assertEqual(payload["model_version"]["label"], "GEFS v11.3")
         self.assertEqual(payload["source"]["service"], "NOAA Open Data GEFS archive")
+        self.assertEqual(payload["source"]["gap_reconstruction"]["members"], {"p01": [270]})
 
     def test_tigge_ncep_keeps_pre_2017_cycles_on_ecds(self) -> None:
         adapter = TiggeNcepAdapter(workers=2)
