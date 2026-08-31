@@ -17,10 +17,9 @@
 		'tigge-jma': '#0072b2', 'tigge-kma': '#00a087', 'tigge-mf': '#8c6d00',
 		'tigge-ncep': '#332288', 'tigge-ncmrwf': '#882255', 'tigge-ukmo': '#44aa99'
 	};
-	const RUN_TRACK_COLOURS = [
-		'#0046dc', '#dc0000', '#00963c', '#ff8c00', '#be00b4', '#00a9b7',
-		'#6f00ff', '#7a3d00', '#e3c000', '#005b4f', '#ff4fa3', '#6b6b6b',
-		'#88c700', '#8f2d56', '#0080ff'
+	const RUN_COLOUR_VARIANTS = [
+		[0, 0, 0], [3, 18, -2], [-3, -14, 2], [6, 29, -5],
+		[-6, -24, 4], [9, 10, -1], [-9, -8, 3], [12, 24, -4]
 	];
 	const state = {
 		mode: 'latest', manifest: null, payload: null, geo: null, boundary: null,
@@ -93,9 +92,25 @@
 		return MODEL_TRACK_COLOURS[id] || fallback || '#0057b8';
 	}
 
-	function runTrackColour(index) {
-		if (index < RUN_TRACK_COLOURS.length) return RUN_TRACK_COLOURS[index];
-		return `hsl(${Math.round((index * 137.508 + 17) % 360)} 88% 38%)`;
+	function modelRunColour(id, fallback, index) {
+		const base = modelTrackColour(id, fallback);
+		const match = String(base).match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+		if (!match || !index) return base;
+		const [red, green, blue] = match.slice(1).map(value => parseInt(value, 16) / 255);
+		const maximum = Math.max(red, green, blue), minimum = Math.min(red, green, blue);
+		const delta = maximum - minimum;
+		let hue = 0;
+		if (delta) {
+			if (maximum === red) hue = 60 * (((green - blue) / delta) % 6);
+			else if (maximum === green) hue = 60 * ((blue - red) / delta + 2);
+			else hue = 60 * ((red - green) / delta + 4);
+		}
+		if (hue < 0) hue += 360;
+		const lightness = 100 * (maximum + minimum) / 2;
+		const saturation = delta ? 100 * delta / (1 - Math.abs(2 * lightness / 100 - 1)) : 0;
+		const variant = RUN_COLOUR_VARIANTS[index % RUN_COLOUR_VARIANTS.length];
+		const cycle = Math.floor(index / RUN_COLOUR_VARIANTS.length);
+		return `hsl(${Math.round((hue + variant[0] + cycle * 4) % 360)} ${Math.round(clamp(saturation + variant[2], 45, 96))}% ${Math.round(clamp(lightness + variant[1] - cycle * 3, 18, 76))}%)`;
 	}
 
 	async function loadBoundary() {
@@ -429,6 +444,7 @@
 			const model = modelDefinition(modelId);
 			const modelColour = modelTrackColour(model.id, model.colour);
 			const values = grouped.get(modelId).sort((a, b) => entryLeadAt(a, target) - entryLeadAt(b, target));
+			const colourOrder = [...values].sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)));
 			const versions = [...new Set(values.map(entry => versionLabel(entry.model_version)).filter(Boolean))];
 			const version = versions.length === 1 ? versions[0] : versions.length ? `${versions.length} versions at this valid time` : 'Version unavailable';
 			const cells = values.map(entry => {
@@ -436,8 +452,7 @@
 				const key = `${entry.model}:${entry.cycle}`;
 				const active = state.archiveSelected.has(key);
 				const loading = state.archiveLoads.has(key);
-				const loadedEntry = displayEntries().find(item => item.runKey === key);
-				const cellColour = loadedEntry ? runColour(loadedEntry) : modelColour;
+				const cellColour = modelRunColour(model.id, model.colour, Math.max(0, colourOrder.findIndex(item => item.cycle === entry.cycle)));
 				const initialization = shortArchiveInitialization(entry.cycle_utc);
 				const names = (entry.verification_labels || []).join(', ');
 				const title = [entry.model_label || entry.model, versionLabel(entry.model_version), `initialized ${formatUtc(entry.cycle_utc)}`, `valid ${formatUtc(target)}`, `lead +${lead} h`, names].filter(Boolean).join(' · ');
@@ -1089,9 +1104,12 @@
 	}
 
 	function runColour(entry) {
-		const siblings = displayEntries().filter(item => item.model.id === entry.model.id).sort((a, b) => String(b.payload.cycle).localeCompare(String(a.payload.cycle)));
-		if (siblings.length <= 1) return modelTrackColour(entry.model.id, entry.model.colour || entry.payload.model.colour);
-		return runTrackColour(Math.max(0, siblings.findIndex(item => item.runKey === entry.runKey)));
+		const siblings = state.mode === 'latest'
+			? requestedLatestRuns().filter(item => item.entry && item.model.id === entry.model.id).map(item => ({runKey: payloadKey(item.model.id, item.entry), cycle: item.entry.cycle}))
+			: filteredArchive().filter(item => item.model === entry.model.id).map(item => ({runKey: payloadKey(item.model, item), cycle: item.cycle}));
+		siblings.sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)));
+		const index = Math.max(0, siblings.findIndex(item => item.runKey === entry.runKey));
+		return modelRunColour(entry.model.id, entry.model.colour || entry.payload.model.colour, index);
 	}
 
 	function drawTracks() {
