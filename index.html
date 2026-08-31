@@ -500,6 +500,21 @@
 .mla-forecast-options { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; align-items: end; margin-top: 10px; }
 .mla-forecast-archive-controls { display: grid; grid-template-columns: minmax(230px, 1.5fr) minmax(150px, .65fr) minmax(125px, .45fr) minmax(155px, .7fr) minmax(190px, .9fr); gap: 9px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card); }
 #mlaForecastArchiveMembersLabel { grid-column: 1 / -1; justify-self: start; }
+.mla-forecast-archive-calendar { grid-column: 1 / -1; display: grid; gap: 8px; margin-top: 3px; padding-top: 10px; border-top: 1px solid var(--mla-line); }
+.mla-forecast-calendar-head { display: grid; grid-template-columns: auto minmax(170px, 280px) auto minmax(0, 1fr); gap: 7px; align-items: end; }
+.mla-forecast-calendar-head .mla-field { min-width: 0; }
+.mla-forecast-calendar-head p { align-self: center; margin: 16px 0 0; color: var(--mla-muted); font-size: 11px; text-align: right; }
+.mla-forecast-calendar-weekdays,
+.mla-forecast-calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.mla-forecast-calendar-weekdays span { color: var(--mla-muted); font-size: 10px; text-align: center; }
+.mla-forecast-calendar-day { position: relative; display: grid; gap: 3px; min-height: 44px; padding: 5px 4px; border: 1px solid var(--mla-line); border-radius: 7px; background: var(--mla-card); color: var(--mla-ink); font: inherit; cursor: pointer; }
+.mla-forecast-calendar-day:hover { border-color: var(--mla-indigo); }
+.mla-forecast-calendar-day[aria-pressed="true"] { border-color: var(--mla-indigo-deep); box-shadow: inset 0 0 0 1px var(--mla-indigo-deep); background: color-mix(in srgb, var(--mla-indigo) 7%, var(--mla-card)); }
+.mla-forecast-calendar-day:disabled { border-color: transparent; background: transparent; color: var(--mla-faint); cursor: default; }
+.mla-forecast-calendar-day > strong { font-size: 12px; font-weight: 550; text-align: left; }
+.mla-forecast-calendar-hours { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+.mla-forecast-calendar-hours i { height: 5px; border-radius: 999px; background: var(--mla-indigo); opacity: var(--availability, .08); }
+.mla-forecast-calendar-empty { visibility: hidden; }
 .mla-forecast-archive-sidebar { grid-area: selector; position: sticky; top: 72px; max-height: min(78vh, 760px); overflow-y: auto; padding: 12px; scrollbar-width: thin; }
 .mla-forecast-archive-results { display: grid; gap: 9px; min-height: 34px; }
 .mla-forecast-matrix-layout { display: grid; gap: 10px; }
@@ -606,6 +621,8 @@
 	#mlaRetryWeather { grid-column: 1 / -1; margin-right: 0; }
 	.mla-forecast-controls,
 	.mla-forecast-archive-controls { grid-template-columns: 1fr 1fr; }
+	.mla-forecast-calendar-head { grid-template-columns: auto minmax(0, 1fr) auto; }
+	.mla-forecast-calendar-head p { grid-column: 1 / -1; margin: 0; text-align: left; }
 	.mla-forecast-options { grid-template-columns: 1fr 1fr; }
 	.mla-forecast-matrix-cells { grid-template-columns: repeat(auto-fill, minmax(66px, 1fr)); }
 	.mla-forecast-map-stack { min-height: 400px; height: 56vh; }
@@ -631,6 +648,7 @@
 	.mla-tab { min-height: 44px; }
 	.mla-forecast-controls,
 	.mla-forecast-archive-controls { grid-template-columns: 1fr; }
+	.mla-forecast-calendar-day { min-height: 40px; padding-inline: 2px; }
 	.mla-forecast-options { grid-template-columns: 1fr; }
 	.mla-forecast-map-stack { min-height: 310px; height: 48vh; }
 }
@@ -820,6 +838,11 @@
 				<label class="mla-field" id="mlaForecastArchiveWeatherField" for="mlaForecastArchiveWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastArchiveWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 				<label class="mla-field" id="mlaForecastArchiveWeatherSourceField" for="mlaForecastArchiveWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastArchiveWeatherModel"><option value="">Select a run below</option></select></label>
 				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show individual ensemble members</label>
+				<section class="mla-forecast-archive-calendar" id="mlaForecastArchiveCalendar" aria-label="Processed forecast availability by date and UTC hour">
+					<div class="mla-forecast-calendar-head"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarPrevious" type="button" aria-label="Previous available month">‹</button><label class="mla-field" for="mlaForecastCalendarMonth"><span class="mla-label">Available month</span><select class="mla-select" id="mlaForecastCalendarMonth"></select></label><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarNext" type="button" aria-label="Next available month">›</button><p>Bars show availability at 00, 06, 12 and 18 UTC; stronger bars mean more model–lead choices.</p></div>
+					<div class="mla-forecast-calendar-weekdays" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+					<div class="mla-forecast-calendar-days" id="mlaForecastCalendarDays"></div>
+				</section>
 			</div>
 			<div class="mla-forecast-layout" id="mlaForecastLayout" data-mode="latest">
 				<section class="mla-card mla-forecast-map-card" aria-labelledby="mlaForecastMapHeading">
@@ -978,7 +1001,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.d65121672ad2.js"></script>
-<script src="assets/forecast-app.992dddeb01de.js"></script>
+<script src="assets/forecast-app.31cc87615ef1.js"></script>
 
 </body>
 </html>

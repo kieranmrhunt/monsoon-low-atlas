@@ -98,6 +98,17 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
             "basis": "BADC product family; the exact operational suite is not encoded consistently in these GRIB files",
         },
     ),
+    "mogreps-g": (
+        {
+            "from": "2024010100",
+            "label": "MOGREPS-G operational ensemble",
+            "source_url": "https://registry.opendata.aws/met-office-global-ensemble/",
+            "basis": (
+                "Met Office AWS Open Data product family; the exact operational suite "
+                "is not encoded as a stable cycle-level version in the public objects"
+            ),
+        },
+    ),
     "tigge-ecmwf": (
         {
             "from": "2021101212",

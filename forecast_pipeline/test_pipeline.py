@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from forecast_pipeline import merge_archives
+from forecast_pipeline import merge_archives, merge_runs
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
     GRID_LONS,
@@ -32,6 +32,7 @@ from forecast_pipeline.forecast_core import (
 from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
     EcmwfHresHybridAdapter,
+    MogrepsAdapter,
     NcepAdapter,
     TIGGE_CENTRES,
     TIGGE_MODEL_IDS,
@@ -50,6 +51,7 @@ from forecast_pipeline.sources import (
     tigge_archive_provider,
 )
 from forecast_pipeline.tigge_catalogue import REQUIRED_FIELDS, TiggeAvailability
+from forecast_pipeline.cma_tigge import extract_download
 from forecast_pipeline.analysis_history import (
     analysis_centres,
     replace_analysis_entry,
@@ -76,6 +78,27 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+    def test_recent_cleanup_never_removes_long_term_archive_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cycle_dir = root / "cycles/gfs"
+            archive_dir = root / "archive/gfs"
+            cycle_dir.mkdir(parents=True)
+            archive_dir.mkdir(parents=True)
+            old_cycle = cycle_dir / "2026082800.json.gz"
+            new_cycle = cycle_dir / "2026083000.json.gz"
+            archived = archive_dir / "2026082800.json.gz"
+            for path in (old_cycle, new_cycle, archived):
+                path.write_bytes(b"payload")
+            manifest = {
+                "latest": {"gfs": {"url": "cycles/gfs/2026083000.json.gz"}},
+                "recent": {"gfs": [{"url": "cycles/gfs/2026083000.json.gz"}]},
+            }
+            merge_runs.clean_superseded_weather(root, manifest)
+            self.assertFalse(old_cycle.exists())
+            self.assertTrue(new_cycle.exists())
+            self.assertTrue(archived.exists())
+
     def test_atomic_directory_manifest_lock_is_exclusive_and_releases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -158,7 +181,50 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(available_forecast_steps("tigge-jma", cycle_00)[-1], 264)
         self.assertEqual(available_forecast_steps("tigge-eccc", cycle_00)[-1], 384)
         self.assertEqual(available_forecast_steps("ukmo-global", cycle_00)[-1], 144)
+        self.assertEqual(available_forecast_steps("mogreps-g", cycle_00)[-1], 246)
         self.assertTrue(all(step % 6 == 0 for step in available_forecast_steps("gfs", cycle_00)))
+
+    def test_mogreps_paths_preserve_native_accumulation_intervals(self) -> None:
+        cycle = datetime(2026, 8, 30, 0, tzinfo=UTC)
+        self.assertEqual(
+            MogrepsAdapter._instant_key(cycle, 6, "pressure_at_mean_sea_level"),
+            "global-ensemble/2026/08/30/T0000Z/20260830T0600Z-PT0006H00M-pressure_at_mean_sea_level.nc",
+        )
+        self.assertTrue(MogrepsAdapter._precip_key(cycle, 132).endswith("-PT01H.nc"))
+        self.assertTrue(MogrepsAdapter._precip_key(cycle, 135).endswith("-PT03H.nc"))
+        leads = MogrepsAdapter._precip_interval_leads(138)
+        self.assertEqual(leads[:3], [1, 2, 3])
+        self.assertEqual(leads[-3:], [132, 135, 138])
+        self.assertEqual(len(leads), 134)
+
+    def test_mogreps_metadata_and_adapter_are_registered(self) -> None:
+        definition = MODEL_DEFINITIONS["mogreps-g"]
+        self.assertEqual(definition.expected_members, 18)
+        self.assertEqual(definition.source_name, "Met Office AWS Open Data")
+        adapter = MogrepsAdapter(s3_client=SimpleNamespace())
+        self.assertEqual(adapter.definition.id, "mogreps-g")
+        version = model_version("mogreps-g", datetime(2026, 8, 30, 0, tzinfo=UTC))
+        self.assertEqual(version["label"], "MOGREPS-G operational ensemble")
+
+    def test_cma_cache_requires_both_components_and_exposes_grib(self) -> None:
+        cycle = datetime(2021, 9, 9, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pressure = root / "tigge-ukmo/2021090900/pressure"
+            surface = root / "tigge-ukmo/2021090900/surface"
+            pressure.mkdir(parents=True)
+            surface.mkdir(parents=True)
+            (pressure / "pressure.grib").write_bytes(b"GRIB")
+            adapter = TiggeAdapter("tigge-ukmo")
+            with patch.dict("os.environ", {"LPS_CMA_TIGGE_CACHE": str(root)}):
+                self.assertEqual(adapter._cma_cache_paths(cycle), [])
+                raw = surface / "cma-file"
+                raw.write_bytes(b"GRIBpayload")
+                extracted = extract_download(raw)
+                self.assertEqual(extracted[0].suffix, ".grib")
+                paths = adapter._cma_cache_paths(cycle)
+            self.assertEqual(len(paths), 2)
+            self.assertTrue(all(path.suffix == ".grib" for path in paths))
 
     def test_tigge_queue_limit_errors_are_retryable_but_mars_errors_are_not(self) -> None:
         self.assertTrue(

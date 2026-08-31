@@ -10,7 +10,7 @@
 	const DEFAULT_MAP = {zoom: 1.25, longitude: 82.5, latitude: 17};
 	const MODEL_TRACK_COLOURS = {
 		gfs: '#dc0000', gefs: '#00963c', ifs: '#0046dc', 'ifs-ens': '#ff8c00',
-		aifs: '#be00b4', 'aifs-ens': '#00bec8', 'ukmo-global': '#c2185b',
+		aifs: '#be00b4', 'aifs-ens': '#00bec8', 'ukmo-global': '#c2185b', 'mogreps-g': '#00a7a5',
 		'gefs-control': '#6a5acd', 'tigge-ecmwf': '#73539b',
 		'tigge-bom': '#d55e00', 'tigge-cma': '#e69f00', 'tigge-cptec': '#a65628',
 		'tigge-dwd': '#009e73', 'tigge-eccc': '#56b4e9', 'tigge-imd': '#cc79a7',
@@ -24,13 +24,13 @@
 	const state = {
 		mode: 'latest', manifest: null, payload: null, geo: null, boundary: null,
 		selectedModels: new Set(), latestPayloads: new Map(), modelLoads: new Map(),
-		selectedSystem: null, initialization: 'latest', initializationCount: 1, archiveDate: '', archiveHour: '00', archiveEntry: null,
+		selectedSystem: null, initialization: 'latest', initializationCount: 1, archiveDate: '', archiveHour: '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
 		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: false, showEra5: true,
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0,
-		renderSerial: 0, archiveSearchTimer: 0
+		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null
 	};
 
 	function esc(value) {
@@ -212,7 +212,13 @@
 
 	function buildModelControls() {
 		const latest = state.manifest.latest || {};
-		const models = (state.manifest.models || []).filter(model => latest[model.id]);
+		const definitions = new Map((state.manifest.models || []).map(model => [model.id, model]));
+		const operational = ['gfs', 'gefs', 'mogreps-g', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens'];
+		const models = operational.map(id => definitions.get(id) || (
+			id === 'mogreps-g'
+				? {id, label: 'MOGREPS-G', centre: 'Met Office', kind: 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
+				: {id, label: id.toUpperCase(), kind: 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
+		));
 		if (!state.selectedModels.size) {
 			for (const model of models) if (model.kind === 'deterministic' && latest[model.id]) state.selectedModels.add(model.id);
 			if (!state.selectedModels.size && preferredModel()) state.selectedModels.add(preferredModel());
@@ -240,6 +246,96 @@
 		return [...unique.values()];
 	}
 
+	function archiveAvailability() {
+		if (state.archiveAvailability) return state.archiveAvailability;
+		const dates = new Map();
+		for (const entry of archiveEntries()) {
+			const start = new Date(entry.valid_start_utc || entry.cycle_utc).getTime();
+			const end = new Date(entry.valid_end_utc).getTime();
+			if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+			for (let time = start; time <= end; time += 6 * 3600000) {
+				const value = new Date(time);
+				const date = value.toISOString().slice(0, 10);
+				const hour = String(value.getUTCHours()).padStart(2, '0');
+				if (!dates.has(date)) dates.set(date, new Map());
+				const hours = dates.get(date);
+				if (!hours.has(hour)) hours.set(hour, {runs: new Set(), models: new Set()});
+				const slot = hours.get(hour);
+				slot.runs.add(`${entry.model}:${entry.cycle}`);
+				slot.models.add(entry.model);
+			}
+		}
+		state.archiveAvailability = dates;
+		return dates;
+	}
+
+	function archiveMonths() {
+		return [...new Set([...archiveAvailability().keys()].map(date => date.slice(0, 7)))].sort();
+	}
+
+	function archiveMonthLabel(value) {
+		const date = new Date(`${value}-01T00:00:00Z`);
+		return Number.isFinite(date.getTime())
+			? new Intl.DateTimeFormat('en-GB', {timeZone: 'UTC', month: 'long', year: 'numeric'}).format(date)
+			: value;
+	}
+
+	function chooseArchiveHour(date) {
+		const slots = archiveAvailability().get(date);
+		if (!slots || !slots.size) return state.archiveHour;
+		if (slots.has(state.archiveHour)) return state.archiveHour;
+		return [...slots.entries()].sort((a, b) => b[1].runs.size - a[1].runs.size || a[0].localeCompare(b[0]))[0][0];
+	}
+
+	function renderArchiveCalendar() {
+		const node = $('#mlaForecastCalendarDays');
+		const select = $('#mlaForecastCalendarMonth');
+		if (!node || !select || !state.manifest) return;
+		const months = archiveMonths();
+		if (!months.length) {
+			select.innerHTML = '<option>No processed dates</option>';
+			select.disabled = true;
+			node.innerHTML = '';
+			return;
+		}
+		select.disabled = false;
+		const requestedMonth = state.archiveMonth || (state.archiveDate ? state.archiveDate.slice(0, 7) : '');
+		state.archiveMonth = months.includes(requestedMonth) ? requestedMonth : months[months.length - 1];
+		select.innerHTML = months.map(month => `<option value="${esc(month)}">${esc(archiveMonthLabel(month))}</option>`).join('');
+		select.value = state.archiveMonth;
+		const monthIndex = months.indexOf(state.archiveMonth);
+		$('#mlaForecastCalendarPrevious').disabled = monthIndex <= 0;
+		$('#mlaForecastCalendarNext').disabled = monthIndex >= months.length - 1;
+
+		const [year, month] = state.archiveMonth.split('-').map(Number);
+		const first = new Date(Date.UTC(year, month - 1, 1));
+		const leading = (first.getUTCDay() + 6) % 7;
+		const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+		const availability = archiveAvailability();
+		let maximum = 1;
+		for (let day = 1; day <= days; day += 1) {
+			const date = `${state.archiveMonth}-${String(day).padStart(2, '0')}`;
+			for (const slot of (availability.get(date) || new Map()).values()) maximum = Math.max(maximum, slot.runs.size);
+		}
+		const cells = Array.from({length: leading}, () => '<span class="mla-forecast-calendar-empty"></span>');
+		for (let day = 1; day <= days; day += 1) {
+			const date = `${state.archiveMonth}-${String(day).padStart(2, '0')}`;
+			const slots = availability.get(date) || new Map();
+			const available = slots.size > 0;
+			const details = ['00', '06', '12', '18'].map(hour => {
+				const slot = slots.get(hour);
+				return `${hour}Z ${slot ? `${slot.runs.size} run${slot.runs.size === 1 ? '' : 's'} across ${slot.models.size} model${slot.models.size === 1 ? '' : 's'}` : 'unavailable'}`;
+			}).join('; ');
+			const bars = ['00', '06', '12', '18'].map(hour => {
+				const count = slots.get(hour) ? slots.get(hour).runs.size : 0;
+				const opacity = count ? (.22 + .78 * Math.sqrt(count / maximum)).toFixed(2) : '.06';
+				return `<i style="--availability:${opacity}" aria-hidden="true"></i>`;
+			}).join('');
+			cells.push(`<button class="mla-forecast-calendar-day" type="button" data-forecast-calendar-date="${esc(date)}" aria-pressed="${state.archiveDate === date}" title="${esc(details)}" ${available ? '' : 'disabled'}><strong>${day}</strong><span class="mla-forecast-calendar-hours">${bars}</span></button>`);
+		}
+		node.innerHTML = cells.join('');
+	}
+
 	function archiveModeLabel() {
 		return 'archived';
 	}
@@ -260,6 +356,7 @@
 		const date = new Date(time);
 		if (!Number.isFinite(date.getTime())) return;
 		state.archiveDate = date.toISOString().slice(0, 10);
+		state.archiveMonth = state.archiveDate.slice(0, 7);
 		state.archiveHour = String(date.getUTCHours()).padStart(2, '0');
 		const calendar = $('#mlaForecastArchiveDate');
 		const hour = $('#mlaForecastArchiveHour');
@@ -316,6 +413,7 @@
 		if (parsed) {
 			state.archiveDate = parsed.date;
 			state.archiveHour = parsed.hour;
+			state.archiveMonth = parsed.date.slice(0, 7);
 		} else if (!state.archiveDate) {
 			const matches = archiveNameEntries();
 			const target = raw ? bestArchiveTarget(matches) : Math.max(...archiveEntries().map(entry => new Date(entry.cycle_utc).getTime()).filter(Number.isFinite));
@@ -333,6 +431,7 @@
 		calendar.max = ends[ends.length - 1] || starts[starts.length - 1] || '';
 		calendar.value = state.archiveDate;
 		$('#mlaForecastArchiveHour').value = state.archiveHour;
+		renderArchiveCalendar();
 	}
 
 	function renderAvailability() {
@@ -475,7 +574,7 @@
 	}
 
 	function defaultArchiveEntry(entries) {
-		const preferred = ['ifs', 'aifs', 'gfs', 'ifs-ens', 'aifs-ens', 'gefs', 'ukmo-global', 'gefs-control', 'tigge-ecmwf'];
+		const preferred = ['ifs', 'aifs', 'gfs', 'ifs-ens', 'aifs-ens', 'gefs', 'mogreps-g', 'ukmo-global', 'gefs-control', 'tigge-ecmwf'];
 		const target = archiveTargetTime();
 		return [...entries].sort((a, b) => {
 			const first = preferred.indexOf(a.model), second = preferred.indexOf(b.model);
@@ -1346,6 +1445,7 @@
 	$('#mlaForecastArchiveDate').addEventListener('change', event => {
 		if (parseArchiveTarget($('#mlaForecastArchiveSearch').value)) $('#mlaForecastArchiveSearch').value = '';
 		state.archiveDate = event.target.value;
+		state.archiveMonth = state.archiveDate ? state.archiveDate.slice(0, 7) : state.archiveMonth;
 		state.archiveEntry = null;
 		populateArchive(false);
 	});
@@ -1353,6 +1453,34 @@
 		if (parseArchiveTarget($('#mlaForecastArchiveSearch').value)) $('#mlaForecastArchiveSearch').value = '';
 		state.archiveHour = event.target.value;
 		state.archiveEntry = null;
+		populateArchive(false);
+	});
+	$('#mlaForecastCalendarMonth').addEventListener('change', event => {
+		state.archiveMonth = event.target.value;
+		renderArchiveCalendar();
+	});
+	$('#mlaForecastCalendarPrevious').addEventListener('click', () => {
+		const months = archiveMonths();
+		const index = months.indexOf(state.archiveMonth);
+		if (index > 0) state.archiveMonth = months[index - 1];
+		renderArchiveCalendar();
+	});
+	$('#mlaForecastCalendarNext').addEventListener('click', () => {
+		const months = archiveMonths();
+		const index = months.indexOf(state.archiveMonth);
+		if (index >= 0 && index + 1 < months.length) state.archiveMonth = months[index + 1];
+		renderArchiveCalendar();
+	});
+	$('#mlaForecastCalendarDays').addEventListener('click', event => {
+		const button = event.target.closest('[data-forecast-calendar-date]');
+		if (!button || button.disabled) return;
+		if (parseArchiveTarget($('#mlaForecastArchiveSearch').value)) $('#mlaForecastArchiveSearch').value = '';
+		state.archiveDate = button.dataset.forecastCalendarDate;
+		state.archiveMonth = state.archiveDate.slice(0, 7);
+		state.archiveHour = chooseArchiveHour(state.archiveDate);
+		state.archiveEntry = null;
+		$('#mlaForecastArchiveDate').value = state.archiveDate;
+		$('#mlaForecastArchiveHour').value = state.archiveHour;
 		populateArchive(false);
 	});
 	$('#mlaForecastArchiveSearch').addEventListener('input', () => {

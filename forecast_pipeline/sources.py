@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import io
 import logging
 import math
 import os
@@ -13,6 +14,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, timedelta, datetime
@@ -85,6 +87,8 @@ def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
         horizon = TIGGE_CENTRES[model].maximum_horizon_hours
     elif model == "ukmo-global":
         horizon = 144
+    elif model == "mogreps-g":
+        horizon = 246
     else:
         raise ValueError(f"No available-lead policy is defined for {model}")
     return list(range(0, horizon + 1, 6))
@@ -179,6 +183,12 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "https://catalogue.ceda.ac.uk/uuid/86df725b793b4b4cb0ca0646686bd783",
         "CEDA/BADC Met Office Global archive", "CC BY-NC-SA 4.0", "#007e88",
     ),
+    "mogreps-g": ModelDefinition(
+        "mogreps-g", "MOGREPS-G", "Met Office", "ensemble", 18,
+        "Met Office Global and Regional Ensemble Prediction System global ensemble",
+        "https://registry.opendata.aws/met-office-global-ensemble/",
+        "Met Office AWS Open Data", "CC BY-SA 4.0", "#00a7a5",
+    ),
     "tigge-ecmwf": ModelDefinition(
         "tigge-ecmwf", "ECMWF TIGGE ENS", "ECMWF", "ensemble", 51,
         "Historical ECMWF control plus perturbed ensemble from the TIGGE archive",
@@ -246,7 +256,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
     ),
 }
 
-DEFAULT_MODELS = ("gfs", "gefs", "ifs", "ifs-ens", "aifs", "aifs-ens")
+DEFAULT_MODELS = ("gfs", "gefs", "mogreps-g", "ifs", "ifs-ens", "aifs", "aifs-ens")
 
 
 class DownloadError(RuntimeError):
@@ -802,6 +812,496 @@ class BadcUkmoAdapter(BaseAdapter):
         return payload
 
 
+class _S3RangeFile(io.RawIOBase):
+    """Seekable read-only S3 object backed by cached anonymous byte ranges."""
+
+    def __init__(
+        self,
+        client: Any,
+        bucket: str,
+        key: str,
+        *,
+        block_size: int = 128 * 1024,
+        max_blocks: int = 384,
+    ):
+        super().__init__()
+        self.client = client
+        self.bucket = bucket
+        self.key = key
+        self.block_size = int(block_size)
+        self.max_blocks = int(max_blocks)
+        self.size = int(client.head_object(Bucket=bucket, Key=key)["ContentLength"])
+        self.position = 0
+        self.cache: OrderedDict[int, bytes] = OrderedDict()
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self.position
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_SET:
+            position = offset
+        elif whence == io.SEEK_CUR:
+            position = self.position + offset
+        elif whence == io.SEEK_END:
+            position = self.size + offset
+        else:
+            raise ValueError(f"unsupported seek mode {whence}")
+        if position < 0:
+            raise ValueError("negative seek position")
+        self.position = min(self.size, int(position))
+        return self.position
+
+    def _block(self, index: int) -> bytes:
+        cached = self.cache.pop(index, None)
+        if cached is not None:
+            self.cache[index] = cached
+            return cached
+        start = index * self.block_size
+        end = min(self.size, start + self.block_size) - 1
+        response = self.client.get_object(
+            Bucket=self.bucket,
+            Key=self.key,
+            Range=f"bytes={start}-{end}",
+        )
+        data = response["Body"].read()
+        expected = end - start + 1
+        if len(data) != expected:
+            raise DownloadError(
+                f"Truncated S3 byte range for s3://{self.bucket}/{self.key}: "
+                f"expected {expected}, got {len(data)}"
+            )
+        self.cache[index] = data
+        while len(self.cache) > self.max_blocks:
+            self.cache.popitem(last=False)
+        return data
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.read(len(buffer))
+        buffer[:len(data)] = data
+        return len(data)
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = self.size - self.position
+        remaining = min(int(size), self.size - self.position)
+        if remaining <= 0:
+            return b""
+        parts: list[bytes] = []
+        while remaining:
+            index = self.position // self.block_size
+            offset = self.position % self.block_size
+            block = self._block(index)
+            take = min(remaining, len(block) - offset)
+            if take <= 0:
+                raise DownloadError(f"Invalid S3 range cursor for {self.key}")
+            parts.append(block[offset:offset + take])
+            self.position += take
+            remaining -= take
+        return b"".join(parts)
+
+
+class MogrepsAdapter(BaseAdapter):
+    """Current MOGREPS-G ensemble from the Met Office rolling AWS archive.
+
+    The provider files are large chunked NetCDF/HDF5 objects.  The adapter
+    exposes them to h5py as seekable anonymous S3 byte ranges, so only chunks
+    intersecting the atlas domain, selected pressure levels and members cross
+    the network.
+    """
+
+    BUCKET = "met-office-global-ensemble-model-data"
+    PREFIX = "global-ensemble"
+    PRESSURE_LEVELS_PA = (85000, 70000, 50000)
+    INSTANT_FIELDS = (
+        "pressure_at_mean_sea_level",
+        "wind_speed_on_pressure_levels",
+        "wind_direction_on_pressure_levels",
+        "wind_speed_at_10m",
+        "wind_direction_at_10m",
+    )
+
+    def __init__(self, workers: int = 8, s3_client: Any | None = None):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["mogreps-g"]
+        if s3_client is None:
+            try:
+                import boto3
+                from botocore import UNSIGNED
+                from botocore.config import Config
+            except ImportError as error:
+                raise DownloadError("boto3 is required for MOGREPS-G retrieval") from error
+            s3_client = boto3.client(
+                "s3",
+                region_name="eu-west-2",
+                config=Config(
+                    signature_version=UNSIGNED,
+                    connect_timeout=30,
+                    read_timeout=120,
+                    retries={"max_attempts": 8, "mode": "adaptive"},
+                    max_pool_connections=max(20, self.workers * 8),
+                ),
+            )
+        self.s3 = s3_client
+
+    @classmethod
+    def _base_prefix(cls, cycle: datetime) -> str:
+        return f"{cls.PREFIX}/{cycle:%Y/%m/%d/T%H00Z}"
+
+    @classmethod
+    def _instant_key(cls, cycle: datetime, step: int, field: str) -> str:
+        valid = cycle + timedelta(hours=int(step))
+        return (
+            f"{cls._base_prefix(cycle)}/{valid:%Y%m%dT%H%MZ}-"
+            f"PT{int(step):04d}H00M-{field}.nc"
+        )
+
+    @classmethod
+    def _precip_key(cls, cycle: datetime, lead: int) -> str:
+        interval = 1 if int(lead) <= 132 else 3
+        valid = cycle + timedelta(hours=int(lead))
+        return (
+            f"{cls._base_prefix(cycle)}/{valid:%Y%m%dT%H%MZ}-"
+            f"PT{int(lead):04d}H00M-precipitation_accumulation-PT{interval:02d}H.nc"
+        )
+
+    @staticmethod
+    def _precip_interval_leads(maximum_step: int) -> list[int]:
+        maximum = int(maximum_step)
+        return list(range(1, min(maximum, 132) + 1)) + list(range(135, maximum + 1, 3))
+
+    def _exists(self, key: str) -> bool:
+        try:
+            self.s3.head_object(Bucket=self.BUCKET, Key=key)
+            return True
+        except Exception:
+            return False
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        if cycle.tzinfo is None:
+            cycle = cycle.replace(tzinfo=UTC)
+        else:
+            cycle = cycle.astimezone(UTC)
+        if cycle.hour not in {0, 6, 12, 18} or not 0 <= int(horizon) <= 246:
+            return False
+        keys = [self._instant_key(cycle, horizon, field) for field in self.INSTANT_FIELDS]
+        precip_leads = self._precip_interval_leads(horizon)
+        if precip_leads:
+            keys.append(self._precip_key(cycle, precip_leads[-1]))
+        with ThreadPoolExecutor(max_workers=min(self.workers, len(keys))) as executor:
+            return all(executor.map(self._exists, keys))
+
+    @staticmethod
+    def _member_ids(realizations: np.ndarray) -> list[str]:
+        output = []
+        for value in np.asarray(realizations, dtype=int).tolist():
+            output.append("c00" if value == 0 else f"p{value:02d}")
+        return output
+
+    @staticmethod
+    def _validate_time(dataset: Any, cycle: datetime, step: int, key: str) -> None:
+        expected_reference = int(cycle.timestamp())
+        expected_period = int(step) * 3600
+        expected_valid = expected_reference + expected_period
+        actual = (
+            int(dataset["forecast_reference_time"][()]),
+            int(dataset["forecast_period"][()]),
+            int(dataset["time"][()]),
+        )
+        expected = (expected_reference, expected_period, expected_valid)
+        if actual != expected:
+            raise DownloadError(f"MOGREPS-G time metadata {actual} disagrees with {expected} in {key}")
+
+    def _read_region(
+        self,
+        key: str,
+        variable: str,
+        cycle: datetime,
+        step: int,
+        member_count: int,
+        *,
+        pressure_levels: Sequence[int] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            import h5py
+        except ImportError as error:
+            raise DownloadError("h5py is required for MOGREPS-G retrieval") from error
+        try:
+            with _S3RangeFile(self.s3, self.BUCKET, key) as stream:
+                with h5py.File(stream, "r") as dataset:
+                    self._validate_time(dataset, cycle, step, key)
+                    if variable not in dataset:
+                        raise DownloadError(f"MOGREPS-G object {key} lacks {variable}")
+                    realizations = np.asarray(dataset["realization"][:member_count], dtype=np.int16)
+                    if len(realizations) < member_count:
+                        raise DownloadError(
+                            f"MOGREPS-G object {key} has {len(realizations)}/{member_count} requested members"
+                        )
+                    source_lats = np.asarray(dataset["latitude"][:], dtype=np.float32)
+                    source_lons = np.asarray(dataset["longitude"][:], dtype=np.float32)
+                    lat_indices = np.abs(source_lats[:, None] - GRID_LATS[None, :]).argmin(axis=0)
+                    lon_indices = np.abs(source_lons[:, None] - GRID_LONS[None, :]).argmin(axis=0)
+                    if (
+                        np.max(np.abs(source_lats[lat_indices] - GRID_LATS)) > 0.51
+                        or np.max(np.abs(source_lons[lon_indices] - GRID_LONS)) > 0.51
+                    ):
+                        raise DownloadError(f"MOGREPS-G grid in {key} does not cover the atlas domain")
+                    lat_start, lat_stop = int(lat_indices.min()), int(lat_indices.max()) + 1
+                    lon_start, lon_stop = int(lon_indices.min()), int(lon_indices.max()) + 1
+                    lat_local = lat_indices - lat_start
+                    lon_local = lon_indices - lon_start
+                    field = dataset[variable]
+                    if pressure_levels is None:
+                        native = np.asarray(
+                            field[:member_count, lat_start:lat_stop, lon_start:lon_stop],
+                            dtype=np.float32,
+                        )
+                    else:
+                        pressures = np.asarray(dataset["pressure"][:], dtype=np.float32)
+                        level_indices = [int(np.abs(pressures - level).argmin()) for level in pressure_levels]
+                        if any(abs(float(pressures[index]) - level) > 1 for index, level in zip(level_indices, pressure_levels, strict=True)):
+                            raise DownloadError(f"MOGREPS-G object {key} lacks a requested pressure level")
+                        native = np.asarray(
+                            field[
+                                :member_count,
+                                level_indices,
+                                lat_start:lat_stop,
+                                lon_start:lon_stop,
+                            ],
+                            dtype=np.float32,
+                        )
+                    values = native[..., lat_local, :][..., lon_local]
+                    values[np.abs(values) > 1.0e10] = np.nan
+                    return values, realizations
+        except DownloadError:
+            raise
+        except Exception as error:
+            raise DownloadError(f"Could not read MOGREPS-G s3://{self.BUCKET}/{key}: {error}") from error
+
+    @staticmethod
+    def _check_realizations(expected: np.ndarray, actual: np.ndarray, key: str) -> None:
+        if not np.array_equal(expected, actual):
+            raise DownloadError(f"MOGREPS-G realization axis differs in {key}")
+
+    def _load_dynamics_step(
+        self,
+        cycle: datetime,
+        step: int,
+        member_count: int,
+    ) -> dict[str, Any]:
+        msl_key = self._instant_key(cycle, step, "pressure_at_mean_sea_level")
+        mslp, realizations = self._read_region(
+            msl_key, "air_pressure_at_sea_level", cycle, step, member_count
+        )
+        speed_key = self._instant_key(cycle, step, "wind_speed_on_pressure_levels")
+        speed, values = self._read_region(
+            speed_key,
+            "wind_speed",
+            cycle,
+            step,
+            member_count,
+            pressure_levels=self.PRESSURE_LEVELS_PA,
+        )
+        self._check_realizations(realizations, values, speed_key)
+        direction_key = self._instant_key(cycle, step, "wind_direction_on_pressure_levels")
+        direction, values = self._read_region(
+            direction_key,
+            "wind_from_direction",
+            cycle,
+            step,
+            member_count,
+            pressure_levels=self.PRESSURE_LEVELS_PA,
+        )
+        self._check_realizations(realizations, values, direction_key)
+        radians = np.deg2rad(direction)
+        pressure_u = -speed * np.sin(radians)
+        pressure_v = -speed * np.cos(radians)
+
+        speed10_key = self._instant_key(cycle, step, "wind_speed_at_10m")
+        speed10, values = self._read_region(
+            speed10_key, "wind_speed", cycle, step, member_count
+        )
+        self._check_realizations(realizations, values, speed10_key)
+        direction10_key = self._instant_key(cycle, step, "wind_direction_at_10m")
+        direction10, values = self._read_region(
+            direction10_key, "wind_from_direction", cycle, step, member_count
+        )
+        self._check_realizations(realizations, values, direction10_key)
+        radians10 = np.deg2rad(direction10)
+        return {
+            "step": int(step),
+            "realizations": realizations,
+            "mslp": mslp / np.float32(100.0),
+            "pressure_u": pressure_u.astype(np.float32),
+            "pressure_v": pressure_v.astype(np.float32),
+            "u10": (-speed10 * np.sin(radians10)).astype(np.float32),
+            "v10": (-speed10 * np.cos(radians10)).astype(np.float32),
+        }
+
+    def _load_precipitation(
+        self,
+        cycle: datetime,
+        steps: Sequence[int],
+        member_count: int,
+        expected_realizations: np.ndarray,
+    ) -> np.ndarray:
+        target_steps = {int(step) for step in steps}
+        interval_leads = self._precip_interval_leads(int(max(steps)))
+        intervals: dict[int, np.ndarray] = {}
+
+        def load(lead: int) -> tuple[int, np.ndarray]:
+            key = self._precip_key(cycle, lead)
+            values, realizations = self._read_region(
+                key,
+                "lwe_thickness_of_precipitation_amount",
+                cycle,
+                lead,
+                member_count,
+            )
+            self._check_realizations(expected_realizations, realizations, key)
+            return lead, np.maximum(values * np.float32(1000.0), 0.0)
+
+        with ThreadPoolExecutor(max_workers=min(self.workers, max(1, len(interval_leads)))) as executor:
+            futures = {executor.submit(load, lead): lead for lead in interval_leads}
+            for completed, future in enumerate(as_completed(futures), 1):
+                lead, values = future.result()
+                intervals[lead] = values
+                if completed == 1 or completed % 24 == 0 or completed == len(interval_leads):
+                    LOGGER.info(
+                        "MOGREPS-G %s precipitation intervals %d/%d",
+                        cycle_id(cycle), completed, len(interval_leads),
+                    )
+
+        cumulative = np.zeros(
+            (member_count, GRID_LATS.size, GRID_LONS.size), dtype=np.float32
+        )
+        selected: dict[int, np.ndarray] = {}
+        if 0 in target_steps:
+            selected[0] = cumulative.copy()
+        for lead in interval_leads:
+            cumulative += intervals[lead]
+            if lead in target_steps:
+                selected[lead] = cumulative.copy()
+        missing = sorted(target_steps - set(selected))
+        if missing:
+            raise DownloadError(f"MOGREPS-G precipitation cannot construct target leads {missing}")
+        return np.stack([selected[int(step)] for step in steps])
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        native_steps = [int(step) for step in steps]
+        if not native_steps or any(step < 0 or step > 246 or step % 6 for step in native_steps):
+            raise ValueError("MOGREPS-G steps must be six-hourly leads from +0 to +246 h")
+        if native_steps != sorted(set(native_steps)):
+            raise ValueError("MOGREPS-G steps must be unique and ascending")
+        member_count = self.definition.expected_members
+        if member_limit is not None:
+            member_count = max(1, min(int(member_limit), member_count))
+        cycle = self.resolve_cycle(requested, int(max(native_steps)))
+
+        dynamics: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=min(self.workers, len(native_steps))) as executor:
+            futures = {
+                executor.submit(self._load_dynamics_step, cycle, step, member_count): step
+                for step in native_steps
+            }
+            for completed, future in enumerate(as_completed(futures), 1):
+                dynamics.append(future.result())
+                if completed == 1 or completed % 6 == 0 or completed == len(native_steps):
+                    LOGGER.info(
+                        "MOGREPS-G %s dynamical leads %d/%d",
+                        cycle_id(cycle), completed, len(native_steps),
+                    )
+        dynamics.sort(key=lambda item: int(item["step"]))
+        realizations = dynamics[0]["realizations"]
+        for item in dynamics[1:]:
+            self._check_realizations(realizations, item["realizations"], f"lead +{item['step']} h")
+        members = self._member_ids(realizations)
+        precipitation = self._load_precipitation(
+            cycle, native_steps, member_count, realizations
+        )
+
+        def track_member(member_index: int) -> dict[str, Any]:
+            winds = {
+                level: (
+                    np.stack([item["pressure_u"][member_index, level_index] for item in dynamics]),
+                    np.stack([item["pressure_v"][member_index, level_index] for item in dynamics]),
+                )
+                for level_index, level in enumerate((850, 700, 500))
+            }
+            vorticity = {
+                level: np.stack([
+                    relative_vorticity_x1e5(u, v)
+                    for u, v in zip(winds[level][0], winds[level][1], strict=True)
+                ])
+                for level in (850, 700, 500)
+            }
+            member = members[member_index]
+            tracking = track_forecast_member(
+                cycle=cycle,
+                steps=native_steps,
+                member=member,
+                role="control" if member == "c00" else "perturbed",
+                mslp_hpa=np.stack([item["mslp"][member_index] for item in dynamics]),
+                vorticity_by_level=vorticity,
+                wind_by_level=winds,
+                wind_10m=(
+                    np.stack([item["u10"][member_index] for item in dynamics]),
+                    np.stack([item["v10"][member_index] for item in dynamics]),
+                ),
+                precipitation_cumulative_mm=precipitation[:, member_index],
+            )
+            return {
+                "member": member,
+                "tracks": tracking.tracks,
+                "vorticity": vorticity[850],
+                "precipitation": precipitation[:, member_index],
+                "tracking_qa": {
+                    "member": member,
+                    "detector_candidates": tracking.detector_candidates,
+                    "linker": tracking.linker_summary,
+                    "crosscheck": tracking.qa_crosscheck,
+                },
+            }
+
+        results: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        with ThreadPoolExecutor(max_workers=min(self.workers, len(members))) as executor:
+            future_map = {
+                executor.submit(track_member, index): member
+                for index, member in enumerate(members)
+            }
+            for future in as_completed(future_map):
+                member = future_map[future]
+                try:
+                    results.append(future.result())
+                except Exception as error:
+                    warnings.append(f"{member} unavailable: {error}")
+        results.sort(key=lambda item: members.index(item["member"]))
+        minimum = 1 if member_limit is not None else max(3, math.ceil(len(members) * 0.7))
+        if len(results) < minimum:
+            raise DownloadError(f"Only {len(results)}/{len(members)} MOGREPS-G members completed")
+        payload = self._payload(
+            cycle,
+            native_steps,
+            [track for result in results for track in result["tracks"]],
+            [result["member"] for result in results],
+            np.mean(np.stack([result["vorticity"] for result in results]), axis=0),
+            np.mean(np.stack([result["precipitation"] for result in results]), axis=0),
+            warnings,
+            [result["tracking_qa"] for result in results],
+        )
+        payload["source"]["retrieval"] = (
+            "anonymous S3 HDF5 chunk byte ranges; atlas domain and 850/700/500-hPa levels only; "
+            "wind vectors reconstructed from speed/direction and exact native precipitation intervals accumulated"
+        )
+        return payload
+
+
 class TiggeAdapter(BaseAdapter):
     """Historical multi-centre ensembles retrieved from the ECDS TIGGE archive."""
 
@@ -912,6 +1412,21 @@ class TiggeAdapter(BaseAdapter):
                     delay,
                 )
                 time.sleep(delay)
+
+    def _cma_cache_paths(self, cycle: datetime) -> list[Path]:
+        root = os.environ.get("LPS_CMA_TIGGE_CACHE", "").strip()
+        if not root or self.definition.id not in {"tigge-ukmo", "tigge-imd", "tigge-ncmrwf"}:
+            return []
+        folder = Path(root) / self.definition.id / cycle_id(cycle)
+        if not folder.is_dir():
+            return []
+        suffixes = {".grib", ".grb", ".grib2", ".grb2"}
+        paths = sorted(
+            path for path in folder.rglob("*")
+            if path.is_file() and path.suffix.lower() in suffixes
+        )
+        components = {path.relative_to(folder).parts[0] for path in paths if path.relative_to(folder).parts}
+        return paths if {"pressure", "surface"}.issubset(components) else []
 
     @staticmethod
     def _read_fields(paths: Sequence[Path], cycle: datetime) -> dict[tuple[str, int, str, int], GridField]:
@@ -1034,33 +1549,37 @@ class TiggeAdapter(BaseAdapter):
 
     def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
         cycle = self.resolve_cycle(requested, int(max(steps)))
-        with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
-            root = Path(directory)
-            requests = [
-                (forecast_type, levtype, root / f"{forecast_type}-{levtype}.grib")
-                for forecast_type in self.centre.forecast_types
-                for levtype in ("pl", "sfc")
-            ]
-            # ECDS stages pressure-level/surface and control/perturbed requests
-            # independently. Submit those independent pieces together so one
-            # cycle takes roughly one staging window instead of up to four;
-            # _retrieve's bounded queue-limit backoff remains the safety valve.
-            with ThreadPoolExecutor(max_workers=min(self.workers, len(requests))) as executor:
-                futures = [
-                    executor.submit(
-                        self._retrieve,
-                        cycle,
-                        steps,
-                        target,
-                        forecast_type,
-                        levtype,
-                    )
-                    for forecast_type, levtype, target in requests
+        cached_paths = self._cma_cache_paths(cycle)
+        if cached_paths:
+            fields = self._read_fields(cached_paths, cycle)
+        else:
+            with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
+                root = Path(directory)
+                requests = [
+                    (forecast_type, levtype, root / f"{forecast_type}-{levtype}.grib")
+                    for forecast_type in self.centre.forecast_types
+                    for levtype in ("pl", "sfc")
                 ]
-                for future in as_completed(futures):
-                    future.result()
-            paths = [target for unused_type, unused_level, target in requests]
-            fields = self._read_fields(paths, cycle)
+                # ECDS stages pressure-level/surface and control/perturbed requests
+                # independently. Submit those independent pieces together so one
+                # cycle takes roughly one staging window instead of up to four;
+                # _retrieve's bounded queue-limit backoff remains the safety valve.
+                with ThreadPoolExecutor(max_workers=min(self.workers, len(requests))) as executor:
+                    futures = [
+                        executor.submit(
+                            self._retrieve,
+                            cycle,
+                            steps,
+                            target,
+                            forecast_type,
+                            levtype,
+                        )
+                        for forecast_type, levtype, target in requests
+                    ]
+                    for future in as_completed(futures):
+                        future.result()
+                paths = [target for unused_type, unused_level, target in requests]
+                fields = self._read_fields(paths, cycle)
 
         members = self._member_ids(fields)
         if member_limit is not None:
@@ -1102,9 +1621,19 @@ class TiggeAdapter(BaseAdapter):
             if self.centre.forecast_types == ("pf",)
             else "all available control/perturbed members"
         )
-        payload["source"]["retrieval"] = (
-            f"ECMWF ECDS TIGGE {self.definition.centre} subset at 1 degree; {member_scope}"
-        )
+        if cached_paths:
+            payload["source"].update({
+                "service": "CMA synchronized TIGGE portal",
+                "url": "http://tigge.cma.cn/",
+                "retrieval": (
+                    f"CMA-staged TIGGE {self.definition.centre} GRIB cache, resampled to 1 degree; "
+                    f"{member_scope}"
+                ),
+            })
+        else:
+            payload["source"]["retrieval"] = (
+                f"ECMWF ECDS TIGGE {self.definition.centre} subset at 1 degree; {member_scope}"
+            )
         return payload
 
 
@@ -2086,6 +2615,10 @@ class EcmwfAdapter(BaseAdapter):
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
     if model == "ukmo-global":
         return BadcUkmoAdapter(root=archive_root, workers=workers)
+    if model == "mogreps-g":
+        if archive_root:
+            raise ValueError("MOGREPS-G uses the rolling Met Office AWS archive and does not accept archive_root")
+        return MogrepsAdapter(workers=workers)
     if model == "tigge-ecmwf":
         if archive_root:
             raise ValueError("ECMWF historical retrieval selects WeatherBench/ECDS automatically and does not accept archive_root")

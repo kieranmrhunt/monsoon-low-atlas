@@ -15,7 +15,7 @@ RUN_ROOT="$ATLAS_ROOT/.forecast-runs/$RUN_ID"
 OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
 mkdir -p "$RUN_ROOT"
 
-MODELS=(gfs gefs ifs ifs-ens aifs aifs-ens)
+MODELS=(gfs gefs mogreps-g ifs ifs-ens aifs aifs-ens)
 JOB_IDS=()
 ECMWF_PREVIOUS=""
 for model in "${MODELS[@]}"; do
