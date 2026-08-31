@@ -2085,6 +2085,12 @@ class NcepAdapter(BaseAdapter):
     ):
         if model not in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
             raise ValueError(model)
+        if client is None and model in {"aigfs", "aigefs"}:
+            # NOMADS occasionally returns short-lived redirects while newly
+            # generated AI files move onto its public edge cache. Give those
+            # files a longer bounded retry window than the stable NOAA S3
+            # object stores used by GFS/GEFS.
+            client = HttpClient(retries=7)
         super().__init__(client, workers)
         self.definition = MODEL_DEFINITIONS[model]
         self.archive_root = archive_root

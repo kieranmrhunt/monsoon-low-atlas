@@ -406,6 +406,10 @@ class ForecastPipelineContractTests(unittest.TestCase):
             )
         )
 
+        self.assertEqual(NcepAdapter("aigfs").client.retries, 7)
+        self.assertEqual(NcepAdapter("aigefs").client.retries, 7)
+        self.assertEqual(NcepAdapter("gfs").client.retries, 4)
+
         aigefs = NcepAdapter("aigefs", client=RecordingClient())
         aigefs_url, unused = aigefs._urls(
             datetime(2026, 8, 31, tzinfo=UTC), 6, "p01", "sfc"
