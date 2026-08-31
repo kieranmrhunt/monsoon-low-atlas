@@ -7,7 +7,7 @@ OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_dat
 MODELS="${LPS_TIGGE_INDIA_MODELS:-tigge-imd,tigge-ncmrwf}"
 START="${LPS_TIGGE_INDIA_START:-2006100100}"
 END="${LPS_TIGGE_INDIA_END:-2025123112}"
-MAX_ACTIVE="${LPS_TIGGE_INDIA_MAX_ACTIVE:-24}"
+MAX_ACTIVE="${LPS_TIGGE_INDIA_MAX_ACTIVE:-5}"
 TIME_LIMIT="${LPS_TIGGE_TIME_LIMIT:-12:00:00}"
 CHUNK_SIZE="${LPS_TIGGE_ARRAY_CHUNK_SIZE:-9000}"
 QOS="${LPS_TIGGE_INDIA_QOS:-high}"
@@ -60,9 +60,12 @@ if [[ "$COUNT" == "0" ]]; then
 fi
 
 # These two centres are deliberately submitted ahead of the chronological
-# multi-centre queue. Each task still honours ECDS's per-user queue response
-# and retries with bounded exponential backoff. ManifestLock makes concurrent
-# progressive publication safe on JASMIN's shared filesystem.
+# multi-centre queue. ECDS permits 20 queued requests per user and every TIGGE
+# cycle has four independent pressure/surface and control/perturbed pieces, so
+# five simultaneous cycles fill the service queue without starving each other.
+# Each task still retries transient queue responses with bounded backoff.
+# ManifestLock makes concurrent progressive publication safe on JASMIN's shared
+# filesystem.
 split -l "$CHUNK_SIZE" -d -a 3 --additional-suffix=.tsv "$JOBS" "$RUN_ROOT/jobs-"
 ARRAY_IDS=()
 for CHUNK in "$RUN_ROOT"/jobs-[0-9]*.tsv; do
