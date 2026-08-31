@@ -196,8 +196,8 @@
 	}
 
 	function buildModelControls() {
-		const models = (state.manifest.models || []).filter(model => latest[model.id]);
 		const latest = state.manifest.latest || {};
+		const models = (state.manifest.models || []).filter(model => latest[model.id]);
 		if (!state.selectedModels.size) {
 			for (const model of models) if (model.kind === 'deterministic' && latest[model.id]) state.selectedModels.add(model.id);
 			if (!state.selectedModels.size && preferredModel()) state.selectedModels.add(preferredModel());
