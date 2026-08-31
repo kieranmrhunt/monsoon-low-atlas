@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import random
 import re
 import tempfile
 import time
@@ -650,6 +652,12 @@ class TiggeEcmwfAdapter(BaseAdapter):
     def __init__(self, workers: int = 8):
         super().__init__(workers=workers)
         self.definition = MODEL_DEFINITIONS["tigge-ecmwf"]
+        self.queue_retry_attempts = max(
+            1, int(os.environ.get("LPS_TIGGE_QUEUE_RETRY_ATTEMPTS", "40"))
+        )
+        self.queue_retry_base_seconds = max(
+            1.0, float(os.environ.get("LPS_TIGGE_QUEUE_RETRY_BASE_SECONDS", "60"))
+        )
 
     def resolve_cycle(self, requested: str, horizon: int) -> datetime:
         if requested == "latest":
@@ -676,6 +684,19 @@ class TiggeEcmwfAdapter(BaseAdapter):
             raise DownloadError(f"ECDS credentials are missing from {path}")
         return config["key"]
 
+    @staticmethod
+    def _is_queue_limit_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return any(
+            marker in message
+            for marker in (
+                "number of queued requests per user",
+                "user_queued_limit_exceeded",
+                "queued request limit",
+                "too many queued requests",
+            )
+        )
+
     def _retrieve(self, cycle: datetime, steps: Sequence[int], target: Path, forecast_type: str, levtype: str) -> None:
         try:
             import cdsapi
@@ -696,8 +717,32 @@ class TiggeEcmwfAdapter(BaseAdapter):
         }
         if levtype == "pl":
             request["levelist"] = "500/700/850"
-        client = cdsapi.Client(url=self.ECDS_URL, key=self._credentials(), quiet=True)
-        client.retrieve(self.DATASET, request, str(target))
+        for attempt in range(1, self.queue_retry_attempts + 1):
+            try:
+                client = cdsapi.Client(
+                    url=self.ECDS_URL, key=self._credentials(), quiet=True
+                )
+                client.retrieve(self.DATASET, request, str(target))
+                return
+            except Exception as error:
+                retryable = self._is_queue_limit_error(error)
+                if not retryable or attempt >= self.queue_retry_attempts:
+                    raise
+                target.unlink(missing_ok=True)
+                delay = min(
+                    600.0,
+                    self.queue_retry_base_seconds * (2 ** min(attempt - 1, 4)),
+                ) + random.uniform(0.0, self.queue_retry_base_seconds)
+                LOGGER.warning(
+                    "ECDS queue full for TIGGE %s %s/%s; retry %d/%d in %.0f s",
+                    cycle_id(cycle),
+                    forecast_type,
+                    levtype,
+                    attempt + 1,
+                    self.queue_retry_attempts,
+                    delay,
+                )
+                time.sleep(delay)
 
     @staticmethod
     def _read_fields(paths: Sequence[Path], cycle: datetime) -> dict[tuple[str, int, str, int], GridField]:

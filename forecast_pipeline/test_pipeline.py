@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -27,6 +29,7 @@ from forecast_pipeline.forecast_core import (
 from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
     NcepAdapter,
+    TiggeEcmwfAdapter,
     _fetch_record,
     available_forecast_steps,
     parse_ecmwf_index,
@@ -94,6 +97,60 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(available_forecast_steps("tigge-ecmwf", cycle_00)[-1], 360)
         self.assertEqual(available_forecast_steps("ukmo-global", cycle_00)[-1], 144)
         self.assertTrue(all(step % 6 == 0 for step in available_forecast_steps("gfs", cycle_00)))
+
+    def test_tigge_queue_limit_errors_are_retryable_but_mars_errors_are_not(self) -> None:
+        self.assertTrue(
+            TiggeEcmwfAdapter._is_queue_limit_error(
+                RuntimeError(
+                    "The number of queued requests per user for ECDS datasets is limited"
+                )
+            )
+        )
+        self.assertTrue(
+            TiggeEcmwfAdapter._is_queue_limit_error(
+                RuntimeError("ERROR 101 USER_QUEUED_LIMIT_EXCEEDED")
+            )
+        )
+        self.assertFalse(
+            TiggeEcmwfAdapter._is_queue_limit_error(
+                RuntimeError("mars - ERROR - requested fields are unavailable")
+            )
+        )
+
+    def test_tigge_retrieval_waits_and_retries_a_full_queue(self) -> None:
+        class QueueLimitedClient:
+            calls = 0
+
+            def __init__(self, **unused) -> None:
+                pass
+
+            def retrieve(self, unused_dataset, unused_request, target) -> None:
+                type(self).calls += 1
+                if type(self).calls < 3:
+                    raise RuntimeError(
+                        "The number of queued requests per user is limited"
+                    )
+                Path(target).write_bytes(b"GRIB")
+
+        adapter = TiggeEcmwfAdapter()
+        adapter.queue_retry_attempts = 3
+        adapter.queue_retry_base_seconds = 1
+        cycle = datetime(2016, 7, 1, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "tigge.grib"
+            with (
+                patch.dict(
+                    "sys.modules",
+                    {"cdsapi": SimpleNamespace(Client=QueueLimitedClient)},
+                ),
+                patch.object(adapter, "_credentials", return_value="test-key"),
+                patch("forecast_pipeline.sources.random.uniform", return_value=0),
+                patch("forecast_pipeline.sources.time.sleep") as sleep,
+            ):
+                adapter._retrieve(cycle, [0], target, "cf", "pl")
+            self.assertEqual(QueueLimitedClient.calls, 3)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+            self.assertEqual(target.read_bytes(), b"GRIB")
 
     def test_manifest_entry_horizon_is_derived_from_valid_end(self) -> None:
         entry = {"cycle_utc": "2026-08-30T00:00:00Z", "valid_end_utc": "2026-09-15T00:00:00Z"}
