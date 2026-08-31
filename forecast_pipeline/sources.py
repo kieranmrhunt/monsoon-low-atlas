@@ -79,7 +79,7 @@ def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
     value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
     if model in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
         horizon = 384
-    elif model == "graphcast-noaa":
+    elif model in {"graphcast-noaa", "graphcast-ifs-noaa"}:
         horizon = 240
     elif model in {"ifs", "ifs-ens"}:
         horizon = 360 if value.hour in {0, 12} else 144
@@ -170,9 +170,14 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "https://www.nco.ncep.noaa.gov/pmb/products/aigefs/", "NOAA NOMADS", "NOAA public data", "#c51b8a",
     ),
     "graphcast-noaa": ModelDefinition(
-        "graphcast-noaa", "GraphCast", "NOAA/CIRA", "deterministic", 1,
+        "graphcast-noaa", "GraphCast (GFS init)", "NOAA/CIRA", "deterministic", 1,
         "GraphCast Operational reforecasts initialized from NOAA GFS analyses",
         "https://registry.opendata.aws/aiwp/", "NOAA/CIRA AIWP archive", "NOAA public data", "#7a3db8",
+    ),
+    "graphcast-ifs-noaa": ModelDefinition(
+        "graphcast-ifs-noaa", "GraphCast (IFS init)", "NOAA/CIRA", "deterministic", 1,
+        "GraphCast Operational reforecasts initialized from ECMWF IFS analyses",
+        "https://registry.opendata.aws/aiwp/", "NOAA/CIRA AIWP archive", "NOAA public data", "#00a572",
     ),
     "ifs": ModelDefinition(
         "ifs", "IFS", "ECMWF", "deterministic", 1,
@@ -274,7 +279,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
 }
 
 DEFAULT_MODELS = (
-    "gfs", "gefs", "aigfs", "aigefs", "graphcast-noaa", "mogreps-g",
+    "gfs", "gefs", "aigfs", "aigefs", "graphcast-noaa", "graphcast-ifs-noaa", "mogreps-g",
     "ifs", "ifs-ens", "aifs", "aifs-ens",
 )
 
@@ -2459,16 +2464,34 @@ class NoaaGraphCastAdapter(BaseAdapter):
     ROOT = "https://noaa-oar-mlwp-data.s3.amazonaws.com"
     START = datetime(2022, 1, 1, 0, tzinfo=UTC)
     HORIZON = 240
+    PREFIXES = {
+        "graphcast-noaa": "GRAP_v100_GFS",
+        "graphcast-ifs-noaa": "GRAP_v100_IFS",
+    }
 
-    def __init__(self, client: HttpClient | None = None, workers: int = 8):
+    def __init__(
+        self,
+        model: str = "graphcast-noaa",
+        client: HttpClient | None = None,
+        workers: int = 8,
+    ):
         super().__init__(client, workers)
-        self.definition = MODEL_DEFINITIONS["graphcast-noaa"]
+        if model not in self.PREFIXES:
+            raise ValueError(f"Unknown NOAA/CIRA GraphCast stream {model!r}")
+        self.definition = MODEL_DEFINITIONS[model]
+        self.prefix = self.PREFIXES[model]
 
     @classmethod
-    def _url(cls, cycle: datetime) -> str:
+    def prefix_for(cls, model: str) -> str:
+        try:
+            return cls.PREFIXES[model]
+        except KeyError as error:
+            raise ValueError(f"Unknown NOAA/CIRA GraphCast stream {model!r}") from error
+
+    def _url(self, cycle: datetime) -> str:
         return (
-            f"{cls.ROOT}/GRAP_v100_GFS/{cycle:%Y}/{cycle:%m%d}/"
-            f"GRAP_v100_GFS_{cycle:%Y%m%d%H}_f000_f240_06.nc"
+            f"{self.ROOT}/{self.prefix}/{cycle:%Y}/{cycle:%m%d}/"
+            f"{self.prefix}_{cycle:%Y%m%d%H}_f000_f240_06.nc"
         )
 
     @staticmethod
@@ -2598,7 +2621,45 @@ class NoaaGraphCastAdapter(BaseAdapter):
                 mslp = surface("msl") / np.float32(100.0)
                 u10 = surface("u10")
                 v10 = surface("v10")
-                precipitation_intervals = np.maximum(surface("apcp") * np.float32(1000.0), 0.0)
+                raw_precipitation = surface("apcp")
+                precipitation_fill = (
+                    ~np.isfinite(raw_precipitation)
+                    | (np.abs(raw_precipitation) > np.float32(1.0e20))
+                )
+                partial_fill_frames = np.any(precipitation_fill, axis=(1, 2)) & ~np.all(
+                    precipitation_fill, axis=(1, 2)
+                )
+                if np.any(partial_fill_frames):
+                    affected = [
+                        native_steps[index]
+                        for index in np.flatnonzero(partial_fill_frames)
+                    ]
+                    raise DownloadError(
+                        "GraphCast precipitation has partial-grid fill values at "
+                        + ", ".join(f"+{step} h" for step in affected)
+                    )
+                precipitation_fill_frames = np.all(precipitation_fill, axis=(1, 2))
+                precipitation_fill_steps = [
+                    native_steps[index]
+                    for index in np.flatnonzero(precipitation_fill_frames)
+                ]
+                unexpected_fill_steps = [
+                    step for step in precipitation_fill_steps if step not in {0, 6}
+                ]
+                if unexpected_fill_steps:
+                    raise DownloadError(
+                        "GraphCast precipitation is unavailable beyond its permitted startup gap at "
+                        + ", ".join(f"+{step} h" for step in unexpected_fill_steps)
+                    )
+                precipitation_interval_valid = ~precipitation_fill
+                precipitation_intervals = np.maximum(
+                    np.where(precipitation_fill, 0.0, raw_precipitation)
+                    * np.float32(1000.0),
+                    0.0,
+                )
+                # APCP is an interval field. The initialization frame is a
+                # cumulative baseline regardless of the provider's encoding.
+                precipitation_intervals[0] = 0.0
                 precipitation = np.cumsum(precipitation_intervals, axis=0, dtype=np.float32)
                 source_version = str(dataset.attrs.get("version", "")).strip()
 
@@ -2619,7 +2680,18 @@ class NoaaGraphCastAdapter(BaseAdapter):
             wind_by_level=winds,
             wind_10m=(u10, v10),
             precipitation_cumulative_mm=precipitation,
+            precipitation_interval_valid=precipitation_interval_valid,
         )
+        missing_precipitation_intervals = [
+            step for step in precipitation_fill_steps if step > 0
+        ]
+        source_warnings = []
+        if missing_precipitation_intervals:
+            source_warnings.append(
+                "Source precipitation is unavailable for "
+                + ", ".join(f"+{step} h" for step in missing_precipitation_intervals)
+                + "; the detector omits precipitation until a complete trailing 24-hour window is available."
+            )
         payload = self._payload(
             cycle,
             native_steps,
@@ -2627,7 +2699,7 @@ class NoaaGraphCastAdapter(BaseAdapter):
             ["det"],
             vorticity[850],
             precipitation,
-            [],
+            source_warnings,
             [{
                 "member": "det",
                 "detector_candidates": tracking.detector_candidates,
@@ -2640,6 +2712,12 @@ class NoaaGraphCastAdapter(BaseAdapter):
             "public NOAA/CIRA NetCDF HDF5 chunks read by HTTP byte range; "
             "850/700/500-hPa and surface detector variables sampled from 0.25 to 1 degree"
         )
+        if missing_precipitation_intervals:
+            payload["source"]["precipitation_gap_steps"] = missing_precipitation_intervals
+            payload["method"]["source_precipitation_gap_policy"] = (
+                "provider fill values are retained as missing detector intervals, not dry hours; "
+                "weather accumulation before the first complete 24-hour window is partial"
+            )
         if source_version:
             payload["model_version"] = {
                 "label": f"GraphCast {source_version}",
@@ -2649,7 +2727,7 @@ class NoaaGraphCastAdapter(BaseAdapter):
             }
         payload["qa"] = validate_cycle_payload(payload)
         if payload["qa"]["status"] == "failed":
-            raise ValueError(f"graphcast-noaa payload failed QA: {payload['qa']['errors']}")
+            raise ValueError(f"{self.definition.id} payload failed QA: {payload['qa']['errors']}")
         return payload
 
 
@@ -2965,10 +3043,10 @@ def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = Non
         return TiggeAdapter(model, workers=workers)
     if model in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
         return NcepAdapter(model, workers=workers, archive_root=archive_root)
-    if model == "graphcast-noaa":
+    if model in {"graphcast-noaa", "graphcast-ifs-noaa"}:
         if archive_root:
             raise ValueError("NOAA/CIRA GraphCast uses its fixed public archive endpoint")
-        return NoaaGraphCastAdapter(workers=workers)
+        return NoaaGraphCastAdapter(model, workers=workers)
     if model == "ifs":
         if archive_root:
             raise ValueError("IFS historical retrieval selects WeatherBench/Open Data automatically and does not accept archive_root")

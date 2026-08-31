@@ -11,7 +11,7 @@
 	const MODEL_TRACK_COLOURS = {
 		gfs: '#dc0000', gefs: '#00963c', ifs: '#0046dc', 'ifs-ens': '#ff8c00',
 		aigfs: '#00a6a6', aigefs: '#c51b8a',
-		'graphcast-noaa': '#7a3db8',
+		'graphcast-noaa': '#7a3db8', 'graphcast-ifs-noaa': '#00a572',
 		aifs: '#be00b4', 'aifs-ens': '#00bec8', 'ukmo-global': '#c2185b', 'mogreps-g': '#00a7a5',
 		'gefs-control': '#6a5acd', 'tigge-ecmwf': '#73539b',
 		'tigge-bom': '#d55e00', 'tigge-cma': '#e69f00', 'tigge-cptec': '#a65628',
@@ -224,11 +224,11 @@
 	function buildModelControls() {
 		const latest = state.manifest.latest || {};
 		const definitions = new Map((state.manifest.models || []).map(model => [model.id, model]));
-		const operational = ['gfs', 'gefs', 'aigfs', 'aigefs', 'graphcast-noaa', 'mogreps-g', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens'];
+		const operational = ['gfs', 'gefs', 'aigfs', 'aigefs', 'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens'];
 		const models = operational.map(id => definitions.get(id) || (
 			id === 'mogreps-g'
 				? {id, label: 'MOGREPS-G', centre: 'Met Office', kind: 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
-				: {id, label: id.toUpperCase(), kind: ['gfs', 'aigfs', 'graphcast-noaa', 'ifs', 'aifs'].includes(id) ? 'deterministic' : 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
+				: {id, label: id.toUpperCase(), kind: ['gfs', 'aigfs', 'graphcast-noaa', 'graphcast-ifs-noaa', 'ifs', 'aifs'].includes(id) ? 'deterministic' : 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
 		));
 		if (!state.selectedModels.size) {
 			for (const model of models) if (model.kind === 'deterministic' && latest[model.id]) state.selectedModels.add(model.id);
@@ -585,7 +585,7 @@
 	}
 
 	function defaultArchiveEntry(entries) {
-		const preferred = ['ifs', 'aifs', 'aigfs', 'graphcast-noaa', 'gfs', 'ifs-ens', 'aifs-ens', 'aigefs', 'gefs', 'mogreps-g', 'ukmo-global', 'gefs-control', 'tigge-ecmwf'];
+		const preferred = ['ifs', 'aifs', 'aigfs', 'graphcast-ifs-noaa', 'graphcast-noaa', 'gfs', 'ifs-ens', 'aifs-ens', 'aigefs', 'gefs', 'mogreps-g', 'ukmo-global', 'gefs-control', 'tigge-ecmwf'];
 		const target = archiveTargetTime();
 		return [...entries].sort((a, b) => {
 			const first = preferred.indexOf(a.model), second = preferred.indexOf(b.model);

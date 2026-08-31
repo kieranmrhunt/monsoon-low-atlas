@@ -4,7 +4,7 @@ set -euo pipefail
 ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
-MODELS="${LPS_FORECAST_MODELS:-gfs,gefs,aigfs,aigefs,graphcast-noaa,mogreps-g,ifs,ifs-ens,aifs,aifs-ens}"
+MODELS="${LPS_FORECAST_MODELS:-gfs,gefs,aigfs,aigefs,graphcast-noaa,graphcast-ifs-noaa,mogreps-g,ifs,ifs-ens,aifs,aifs-ens}"
 BUILD_MANIFEST="$ATLAS_ROOT/assets/atlas-build-manifest.json"
 if [[ ! -f "$BUILD_MANIFEST" ]]; then
   echo "Missing atlas build manifest: $BUILD_MANIFEST" >&2

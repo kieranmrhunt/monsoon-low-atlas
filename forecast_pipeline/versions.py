@@ -84,7 +84,15 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
     "graphcast-noaa": (
         {
             "from": "2022010100",
-            "label": "GraphCast Operational (NOAA/CIRA archive)",
+            "label": "GraphCast Operational · GFS initialized",
+            "source_url": "https://registry.opendata.aws/aiwp/",
+            "basis": "NOAA/CIRA AIWP archive family; exact source-file version supersedes this label when available",
+        },
+    ),
+    "graphcast-ifs-noaa": (
+        {
+            "from": "2022010100",
+            "label": "GraphCast Operational · IFS initialized",
             "source_url": "https://registry.opendata.aws/aiwp/",
             "basis": "NOAA/CIRA AIWP archive family; exact source-file version supersedes this label when available",
         },

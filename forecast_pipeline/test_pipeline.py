@@ -62,7 +62,13 @@ from forecast_pipeline.analysis_history import (
 )
 from forecast_pipeline.archive import archive_manifest_entry, archive_payload
 from forecast_pipeline.update import replace_recent_entry
-from forecast_pipeline.v56_tracking import _hourly_axis, _longest_true_run, interpolate_hourly
+from forecast_pipeline.v56_tracking import (
+    _hourly_axis,
+    _longest_true_run,
+    accumulated_to_hourly_precipitation,
+    interpolate_hourly,
+    rolling_24h,
+)
 from forecast_pipeline.versions import model_version
 from forecast_pipeline.watch_archive_publish import target_state, update_progress
 
@@ -209,6 +215,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(available_forecast_steps("aigfs", cycle_00)[-1], 384)
         self.assertEqual(available_forecast_steps("aigefs", cycle_00)[-1], 384)
         self.assertEqual(available_forecast_steps("graphcast-noaa", cycle_00)[-1], 240)
+        self.assertEqual(available_forecast_steps("graphcast-ifs-noaa", cycle_00)[-1], 240)
         self.assertEqual(available_forecast_steps("ifs", cycle_00)[-1], 360)
         self.assertEqual(available_forecast_steps("ifs", cycle_06)[-1], 144)
         self.assertEqual(available_forecast_steps("aifs-ens", cycle_06)[-1], 360)
@@ -424,6 +431,13 @@ class ForecastPipelineContractTests(unittest.TestCase):
                 "/GRAP_v100_GFS/2026/0831/GRAP_v100_GFS_2026083112_f000_f240_06.nc"
             )
         )
+        graphcast_ifs = NoaaGraphCastAdapter("graphcast-ifs-noaa", client=RecordingClient())
+        self.assertTrue(
+            graphcast_ifs._url(datetime(2026, 8, 31, 12, tzinfo=UTC)).endswith(
+                "/GRAP_v100_IFS/2026/0831/GRAP_v100_IFS_2026083112_f000_f240_06.nc"
+            )
+        )
+        self.assertEqual(adapter_for("graphcast-ifs-noaa").definition.id, "graphcast-ifs-noaa")
         self.assertTrue(graphcast._supported_cycle(datetime(2023, 7, 1, 6, tzinfo=UTC)))
         self.assertFalse(graphcast._supported_cycle(datetime(2024, 7, 1, 6, tzinfo=UTC)))
 
@@ -565,6 +579,21 @@ class ForecastPipelineContractTests(unittest.TestCase):
         np.testing.assert_array_equal(_hourly_axis([6, 12]), np.arange(6, 13))
         source = np.asarray([6.0, 12.0], dtype=np.float32)[:, None, None]
         np.testing.assert_allclose(interpolate_hourly(source, [6, 12])[:, 0, 0], np.arange(6.0, 13.0))
+
+    def test_missing_native_precipitation_interval_is_not_invented_as_dry(self) -> None:
+        steps = [0, 6, 12, 18, 24, 30]
+        cumulative = np.asarray([0, 0, 6, 12, 18, 24], dtype=np.float32)[:, None, None]
+        interval_valid = np.asarray([True, False, True, True, True, True])[:, None, None]
+        increments = accumulated_to_hourly_precipitation(
+            cumulative, steps, interval_valid=interval_valid
+        )
+        totals, counts = rolling_24h(increments)
+        self.assertTrue(np.all(np.isnan(increments[1:7])))
+        np.testing.assert_allclose(increments[7:, 0, 0], 1.0)
+        self.assertTrue(np.isnan(totals[24, 0, 0]))
+        self.assertEqual(int(counts[24, 0, 0]), 18)
+        self.assertEqual(float(totals[30, 0, 0]), 24.0)
+        self.assertEqual(int(counts[30, 0, 0]), 24)
 
     def test_atomic_manifest_is_publicly_readable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

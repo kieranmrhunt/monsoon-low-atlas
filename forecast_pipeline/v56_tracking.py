@@ -107,17 +107,42 @@ def interpolate_hourly(values: np.ndarray, steps: Sequence[int]) -> np.ndarray:
     return output
 
 
-def accumulated_to_hourly_precipitation(cumulative: np.ndarray, steps: Sequence[int]) -> np.ndarray:
+def accumulated_to_hourly_precipitation(
+    cumulative: np.ndarray,
+    steps: Sequence[int],
+    interval_valid: np.ndarray | None = None,
+) -> np.ndarray:
     """Convert accumulated model precipitation to hourly increments.
 
     The initial frame is missing rather than an invented dry hour.  Thus the
-    detector's 24-hour precipitation component becomes valid at +24 h.
+    detector's 24-hour precipitation component becomes valid at +24 h.  When
+    a provider omits a native accumulation interval, ``interval_valid`` marks
+    the frame ending that interval false and each corresponding hourly
+    increment remains missing rather than being interpreted as zero rain.
     """
 
     interpolated = interpolate_hourly(np.maximum(cumulative, 0.0), steps)
     increments = np.empty_like(interpolated, dtype=np.float32)
     increments[0] = np.nan
     increments[1:] = np.maximum(interpolated[1:] - interpolated[:-1], 0.0)
+    if interval_valid is not None:
+        source_valid = np.asarray(interval_valid, dtype=bool)
+        cumulative_shape = np.asarray(cumulative).shape
+        if source_valid.shape != cumulative_shape:
+            try:
+                source_valid = np.broadcast_to(source_valid, cumulative_shape)
+            except ValueError as error:
+                raise ValueError(
+                    "precipitation interval-valid mask cannot be broadcast to the cumulative field"
+                ) from error
+        native = np.asarray(steps, dtype=int)
+        offset = int(native[0])
+        for index in range(1, len(native)):
+            start = int(native[index - 1]) - offset + 1
+            stop = int(native[index]) - offset + 1
+            increments[start:stop] = np.where(
+                source_valid[index], increments[start:stop], np.nan
+            )
     return increments
 
 
@@ -368,6 +393,7 @@ def track_forecast_member(
     wind_by_level: Mapping[int, tuple[np.ndarray, np.ndarray]],
     wind_10m: tuple[np.ndarray, np.ndarray],
     precipitation_cumulative_mm: np.ndarray,
+    precipitation_interval_valid: np.ndarray | None = None,
 ) -> ForecastTrackingResult:
     """Return tracks produced by the catalogue detector/linker, plus QA."""
 
@@ -392,7 +418,11 @@ def track_forecast_member(
     }
     u10 = interpolate_hourly(wind_10m[0], steps)
     v10 = interpolate_hourly(wind_10m[1], steps)
-    precip_1h = accumulated_to_hourly_precipitation(precipitation_cumulative_mm, steps)
+    precip_1h = accumulated_to_hourly_precipitation(
+        precipitation_cumulative_mm,
+        steps,
+        interval_valid=precipitation_interval_valid,
+    )
     precip_24h, precip_counts = rolling_24h(precip_1h)
     arrays: dict[str, np.ndarray] = {
         "vo850": vo[850],

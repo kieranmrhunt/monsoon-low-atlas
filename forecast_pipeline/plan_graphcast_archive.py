@@ -25,6 +25,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=Path, required=True)
+    parser.add_argument(
+        "--model",
+        choices=tuple(NoaaGraphCastAdapter.PREFIXES),
+        default="graphcast-noaa",
+        help="NOAA/CIRA GraphCast initialization stream to plan",
+    )
     parser.add_argument("--spacing-hours", type=int, default=48)
     inventory = parser.add_mutually_exclusive_group()
     inventory.add_argument("--inventory", type=Path, help="pinned NOAA S3 inventory JSON")
@@ -42,15 +48,16 @@ def floor_twelve_hour_cycle(value: datetime) -> datetime:
     return value - timedelta(hours=value.hour % 12)
 
 
-def fetch_inventory() -> list[dict[str, object]]:
+def fetch_inventory(model: str) -> list[dict[str, object]]:
     """List GraphCast objects from NOAA's anonymous S3 endpoint."""
 
     rows: list[dict[str, object]] = []
     token = ""
+    prefix = NoaaGraphCastAdapter.prefix_for(model)
     while True:
         query = {
             "list-type": "2",
-            "prefix": "GRAP_v100_GFS/",
+            "prefix": f"{prefix}/",
             "max-keys": "1000",
         }
         if token:
@@ -84,18 +91,20 @@ def fetch_inventory() -> list[dict[str, object]]:
     return sorted(rows, key=lambda item: str(item["cycle"]))
 
 
-def inventory_rows(args: argparse.Namespace) -> list[dict[str, object]] | None:
+def inventory_rows(args: argparse.Namespace, model: str) -> list[dict[str, object]] | None:
     if args.inventory:
         payload = json.loads(args.inventory.read_text(encoding="utf-8"))
         return list(payload.get("objects", payload)) if isinstance(payload, dict) else list(payload)
     if not args.fetch_inventory:
         return None
-    rows = fetch_inventory()
+    rows = fetch_inventory(model)
     if args.save_inventory:
+        prefix = NoaaGraphCastAdapter.prefix_for(model)
         atomic_write_json(args.save_inventory, {
             "schema": "mla-noaa-graphcast-inventory-v1",
             "generated_utc": iso_z(utc_now()),
-            "source": f"{NoaaGraphCastAdapter.ROOT}/GRAP_v100_GFS/",
+            "model": model,
+            "source": f"{NoaaGraphCastAdapter.ROOT}/{prefix}/",
             "objects": rows,
         })
     return rows
@@ -126,8 +135,8 @@ def main() -> None:
             cycles.add(cycle)
             cycle += timedelta(hours=args.spacing_hours)
 
-    model = "graphcast-noaa"
-    inventory = inventory_rows(args)
+    model = args.model
+    inventory = inventory_rows(args, model)
     available_cycles = None if inventory is None else {
         str(item["cycle"]) for item in inventory
     }
@@ -159,7 +168,11 @@ def main() -> None:
     ]
     plan = {
         "schema": "mla-forecast-graphcast-archive-plan-v1",
-        "manifest_key": "graphcast_noaa_archive",
+        "manifest_key": (
+            "graphcast_ifs_noaa_archive"
+            if model == "graphcast-ifs-noaa"
+            else "graphcast_noaa_archive"
+        ),
         "generated_utc": iso_z(utc_now()),
         "models": [model],
         "providers": ["NOAA/CIRA AIWP archive"],
@@ -177,7 +190,8 @@ def main() -> None:
             f"{args.spacing_hours} h through its published lifetime; duplicate cycles collapsed"
         ),
         "cycle_payload_policy": (
-            "all 41 six-hourly valid times from +0 to +240 h, GFS-initialized GraphCast "
+            "all 41 six-hourly valid times from +0 to +240 h, "
+            f"{'IFS' if model == 'graphcast-ifs-noaa' else 'GFS'}-initialized GraphCast "
             "Operational output, and every track published by the frozen atlas detector/linker"
         ),
         "eligible_catalogue_tracks": eligible_tracks,
@@ -197,7 +211,7 @@ def main() -> None:
     )
     args.jobs.chmod(0o644)
     print(
-        f"Planned {len(desired)} available GraphCast cycles; {len(pending)} remain to build "
+        f"Planned {len(desired)} available {model} cycles; {len(pending)} remain to build "
         f"({len(desired_unfiltered) - len(desired)} selected cycles absent from the provider inventory)"
     )
 

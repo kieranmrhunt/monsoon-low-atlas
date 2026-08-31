@@ -5,7 +5,7 @@ ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_ROOT="$ATLAS_ROOT/.forecast-runs/ai-operational-$RUN_ID"
-MODELS=(aigfs aigefs graphcast-noaa)
+MODELS=(aigfs aigefs graphcast-noaa graphcast-ifs-noaa)
 
 mkdir -p "$RUN_ROOT" "$ATLAS_ROOT/hpc-logs"
 cd "$ATLAS_ROOT"
