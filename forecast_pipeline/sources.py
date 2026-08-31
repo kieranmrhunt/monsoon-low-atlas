@@ -2206,7 +2206,30 @@ class NcepAdapter(BaseAdapter):
         cumulative_flags: list[bool | None] = []
         missing_steps: list[int] = []
         errors: list[str] = []
-        for step in steps:
+
+        def append_missing_frame(frame_index: int, step: int, detail: str) -> None:
+            """Roll back a partly read frame and retain it for bounded repair."""
+
+            missing_steps.append(step)
+            errors.append(f"+{step:03d} h: {detail}")
+            sequences: list[list[Any]] = [
+                mslp,
+                u10_values,
+                v10_values,
+                precipitation,
+                cumulative_flags,
+            ]
+            sequences.extend(
+                winds[level][component]
+                for level in (850, 700, 500)
+                for component in ("u", "v")
+            )
+            sequences.extend(vorticity[level] for level in (850, 700, 500))
+            for values in sequences:
+                del values[frame_index:]
+                values.append(None)
+
+        for frame_index, step in enumerate(steps):
             try:
                 if self.definition.id in {"aigfs", "aigefs"}:
                     sources = {
@@ -2228,17 +2251,7 @@ class NcepAdapter(BaseAdapter):
                         )
                     }
             except DownloadError as error:
-                missing_steps.append(int(step))
-                errors.append(f"+{int(step):03d} h: {error}")
-                mslp.append(None)
-                for level in (850, 700, 500):
-                    winds[level]["u"].append(None)
-                    winds[level]["v"].append(None)
-                    vorticity[level].append(None)
-                u10_values.append(None)
-                v10_values.append(None)
-                precipitation.append(None)
-                cumulative_flags.append(None)
+                append_missing_frame(frame_index, int(step), str(error))
                 continue
             try:
                 def fetch(token: str, *preferred_groups: str) -> GridField:
@@ -2292,9 +2305,7 @@ class NcepAdapter(BaseAdapter):
                 precipitation.append(precip)
                 cumulative_flags.append(cumulative)
             except Exception as error:
-                raise DownloadError(
-                    f"{member} has an unreadable +{int(step):03d} h frame: {error}"
-                ) from error
+                append_missing_frame(frame_index, int(step), f"unreadable frame: {error}")
 
         try:
             mslp_filled = _interpolate_isolated_native_gaps(mslp, steps)
