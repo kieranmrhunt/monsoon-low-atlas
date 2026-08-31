@@ -62,6 +62,33 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
             "source_url": "https://www.weather.gov/media/notification/pdf2/scn20-75gefs_v12_changes.pdf",
         },
     ),
+    "aigfs": (
+        {
+            "from": "2026072700",
+            "label": "AIGFS v1.1",
+            "source_url": "https://www.epic.noaa.gov/ai/eagle-overview/",
+        },
+        {
+            "from": "2025121712",
+            "label": "AIGFS v1.0",
+            "source_url": "https://www.weather.gov/media/notification/pdf_2025/scn25-89_AIGFS_AIGEFS_and_HGEFS.pdf",
+        },
+    ),
+    "aigefs": (
+        {
+            "from": "2025121712",
+            "label": "AIGEFS v1.0",
+            "source_url": "https://www.weather.gov/media/notification/pdf_2025/scn25-89_AIGFS_AIGEFS_and_HGEFS.pdf",
+        },
+    ),
+    "graphcast-noaa": (
+        {
+            "from": "2022010100",
+            "label": "GraphCast Operational (NOAA/CIRA archive)",
+            "source_url": "https://registry.opendata.aws/aiwp/",
+            "basis": "NOAA/CIRA AIWP archive family; exact source-file version supersedes this label when available",
+        },
+    ),
     "ifs": (
         {
             "from": "2026051206",

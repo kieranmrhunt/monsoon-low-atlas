@@ -77,8 +77,10 @@ def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
     """Return every six-hourly lead supplied by the selected forecast stream."""
 
     value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
-    if model in {"gfs", "gefs", "gefs-control"}:
+    if model in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
         horizon = 384
+    elif model == "graphcast-noaa":
+        horizon = 240
     elif model in {"ifs", "ifs-ens"}:
         horizon = 360 if value.hour in {0, 12} else 144
     elif model in {"aifs", "aifs-ens"}:
@@ -156,6 +158,21 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "gefs-control", "GEFS control", "NOAA/NCEP", "deterministic", 1,
         "NOAA Global Ensemble Forecast System unperturbed control member, retained for pre-GFS-cloud historical coverage",
         "https://registry.opendata.aws/noaa-gefs/", "NOAA Open Data cloud mirror", "NOAA public data", "#b46722",
+    ),
+    "aigfs": ModelDefinition(
+        "aigfs", "AIGFS", "NOAA/NCEP", "deterministic", 1,
+        "NOAA Artificial Intelligence Global Forecast System deterministic forecast",
+        "https://www.nco.ncep.noaa.gov/pmb/products/aigfs/", "NOAA NOMADS", "NOAA public data", "#00a6a6",
+    ),
+    "aigefs": ModelDefinition(
+        "aigefs", "AIGEFS", "NOAA/NCEP", "ensemble", 31,
+        "NOAA Artificial Intelligence Global Ensemble Forecast System, 31 independently trained members",
+        "https://www.nco.ncep.noaa.gov/pmb/products/aigefs/", "NOAA NOMADS", "NOAA public data", "#c51b8a",
+    ),
+    "graphcast-noaa": ModelDefinition(
+        "graphcast-noaa", "GraphCast", "NOAA/CIRA", "deterministic", 1,
+        "GraphCast Operational reforecasts initialized from NOAA GFS analyses",
+        "https://registry.opendata.aws/aiwp/", "NOAA/CIRA AIWP archive", "NOAA public data", "#7a3db8",
     ),
     "ifs": ModelDefinition(
         "ifs", "IFS", "ECMWF", "deterministic", 1,
@@ -256,7 +273,10 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
     ),
 }
 
-DEFAULT_MODELS = ("gfs", "gefs", "mogreps-g", "ifs", "ifs-ens", "aifs", "aifs-ens")
+DEFAULT_MODELS = (
+    "gfs", "gefs", "aigfs", "aigefs", "graphcast-noaa", "mogreps-g",
+    "ifs", "ifs-ens", "aifs", "aifs-ens",
+)
 
 
 class DownloadError(RuntimeError):
@@ -2051,6 +2071,7 @@ class TiggeEcmwfHybridAdapter(BaseAdapter):
 class NcepAdapter(BaseAdapter):
     LIVE_GFS_ROOT = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
     LIVE_GEFS_ROOT = "https://noaa-gefs-pds.s3.amazonaws.com"
+    LIVE_AI_ROOT = "https://nomads.ncep.noaa.gov/pub/data/nccf/com"
     GFS_V16_START = datetime(2021, 3, 22, 12)
     GEFS_V12_START = datetime(2020, 9, 23, 12)
     GEFS_FOLDER_START = datetime(2018, 7, 27, 0)
@@ -2062,15 +2083,41 @@ class NcepAdapter(BaseAdapter):
         workers: int = 16,
         archive_root: str | None = None,
     ):
-        if model not in {"gfs", "gefs", "gefs-control"}:
+        if model not in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
             raise ValueError(model)
         super().__init__(client, workers)
         self.definition = MODEL_DEFINITIONS[model]
         self.archive_root = archive_root
 
-    def _urls(self, cycle: datetime, step: int, member: str = "det") -> tuple[str, str]:
+    def _urls(
+        self,
+        cycle: datetime,
+        step: int,
+        member: str = "det",
+        field_group: str | None = None,
+    ) -> tuple[str, str]:
         date = cycle.strftime("%Y%m%d")
         hour = cycle.strftime("%H")
+        if self.definition.id in {"aigfs", "aigefs"}:
+            if self.archive_root:
+                raise ValueError("NOAA AI forecast archive roots are not configurable")
+            if field_group not in {"pres", "sfc"}:
+                raise ValueError("AIGFS/AIGEFS URLs require field_group='pres' or 'sfc'")
+            model = self.definition.id
+            if model == "aigfs":
+                folder = f"{model}.{date}/{hour}/model/atmos/grib2"
+            else:
+                if not re.fullmatch(r"p\d{2}", member):
+                    raise ValueError(f"Invalid AIGEFS member {member!r}")
+                folder = (
+                    f"{model}.{date}/{hour}/mem{int(member[1:]):03d}/"
+                    "model/atmos/grib2"
+                )
+            base = (
+                f"{self.LIVE_AI_ROOT}/{model}/prod/{folder}/"
+                f"{model}.t{hour}z.{field_group}.f{step:03d}.grib2"
+            )
+            return base, f"{base}.idx"
         if self.archive_root:
             if self.definition.id != "gfs":
                 raise ValueError("The NOAA archive adapter currently supports GFS only")
@@ -2103,10 +2150,17 @@ class NcepAdapter(BaseAdapter):
         return base, f"{base}.idx"
 
     def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
-        member = "det" if self.definition.id == "gfs" else "c00"
-        unused, index_url = self._urls(cycle, horizon, member)
+        if self.definition.id in {"aigfs", "aigefs"}:
+            member = "det" if self.definition.id == "aigfs" else "p01"
+            index_urls = [
+                self._urls(cycle, horizon, member, field_group)[1]
+                for field_group in ("pres", "sfc")
+            ]
+        else:
+            member = "det" if self.definition.id == "gfs" else "c00"
+            index_urls = [self._urls(cycle, horizon, member)[1]]
         try:
-            text = self.client.text(index_url)
+            text = "\n".join(self.client.text(index_url) for index_url in index_urls)
             return all(
                 token in text
                 for token in (
@@ -2125,10 +2179,13 @@ class NcepAdapter(BaseAdapter):
             return False
 
     def _member_ids(self, cycle: datetime, member_limit: int | None) -> list[str]:
-        if self.definition.id == "gfs":
+        if self.definition.id in {"gfs", "aigfs"}:
             return ["det"]
         if self.definition.id == "gefs-control":
             return ["c00"]
+        if self.definition.id == "aigefs":
+            values = [f"p{number:02d}" for number in range(1, 32)]
+            return values[: max(1, member_limit)] if member_limit is not None else values
         perturbed_members = 30 if cycle.replace(tzinfo=None) >= self.GEFS_V12_START else 20
         values = ["c00"] + [f"p{number:02d}" for number in range(1, perturbed_members + 1)]
         if member_limit is not None:
@@ -2150,9 +2207,26 @@ class NcepAdapter(BaseAdapter):
         missing_steps: list[int] = []
         errors: list[str] = []
         for step in steps:
-            data_url, index_url = self._urls(cycle, int(step), member)
             try:
-                records = parse_ncep_index(self.client.text(index_url))
+                if self.definition.id in {"aigfs", "aigefs"}:
+                    sources = {
+                        field_group: (
+                            data_url,
+                            parse_ncep_index(self.client.text(index_url)),
+                        )
+                        for field_group in ("pres", "sfc")
+                        for data_url, index_url in [
+                            self._urls(cycle, int(step), member, field_group)
+                        ]
+                    }
+                else:
+                    data_url, index_url = self._urls(cycle, int(step), member)
+                    sources = {
+                        "combined": (
+                            data_url,
+                            parse_ncep_index(self.client.text(index_url)),
+                        )
+                    }
             except DownloadError as error:
                 missing_steps.append(int(step))
                 errors.append(f"+{int(step):03d} h: {error}")
@@ -2167,38 +2241,52 @@ class NcepAdapter(BaseAdapter):
                 cumulative_flags.append(None)
                 continue
             try:
+                def fetch(token: str, *preferred_groups: str) -> GridField:
+                    order = list(preferred_groups) + [
+                        group for group in sources if group not in preferred_groups
+                    ]
+                    for group in order:
+                        source_url, source_records = sources[group]
+                        matches = [
+                            record for record in source_records
+                            if token in record.description
+                        ]
+                        if matches:
+                            return decode_grib_message(
+                                _fetch_record(self.client, source_url, matches[0])
+                            )
+                    raise DownloadError(f"NCEP inventory lacks {token}")
+
                 msl = to_mslp_hpa(
-                    decode_grib_message(
-                        _fetch_record(self.client, data_url, _ncep_record(records, ":PRMSL:mean sea level:"))
-                    )
+                    fetch(":PRMSL:mean sea level:", "sfc", "combined")
                 )
                 mslp.append(msl)
                 for level in (850, 700, 500):
-                    u = decode_grib_message(
-                        _fetch_record(self.client, data_url, _ncep_record(records, f":UGRD:{level} mb:"))
-                    ).values
-                    v = decode_grib_message(
-                        _fetch_record(self.client, data_url, _ncep_record(records, f":VGRD:{level} mb:"))
-                    ).values
+                    u = fetch(f":UGRD:{level} mb:", "pres", "combined").values
+                    v = fetch(f":VGRD:{level} mb:", "pres", "combined").values
                     winds[level]["u"].append(u)
                     winds[level]["v"].append(v)
                     vorticity[level].append(relative_vorticity_x1e5(u, v))
-                u10_values.append(
-                    decode_grib_message(
-                        _fetch_record(self.client, data_url, _ncep_record(records, ":UGRD:10 m above ground:"))
-                    ).values
+                u10_values.append(fetch(":UGRD:10 m above ground:", "sfc", "combined").values)
+                v10_values.append(fetch(":VGRD:10 m above ground:", "sfc", "combined").values)
+                precip_source = next(
+                    (
+                        (source_url, record)
+                        for group in ("sfc", "combined")
+                        if group in sources
+                        for source_url, source_records in [sources[group]]
+                        for record in [_ncep_precip_record(source_records, int(step))]
+                        if record is not None
+                    ),
+                    None,
                 )
-                v10_values.append(
-                    decode_grib_message(
-                        _fetch_record(self.client, data_url, _ncep_record(records, ":VGRD:10 m above ground:"))
-                    ).values
-                )
-                precip_record = _ncep_precip_record(records, int(step))
-                if precip_record is None:
+                if precip_source is None:
                     precip = np.zeros((GRID_LATS.size, GRID_LONS.size), dtype=np.float32)
                     cumulative = True
                 else:
-                    precip_field = decode_grib_message(_fetch_record(self.client, data_url, precip_record))
+                    precip_field = decode_grib_message(
+                        _fetch_record(self.client, precip_source[0], precip_source[1])
+                    )
                     precip = to_precip_mm(precip_field)
                     cumulative = _precip_is_cumulative(precip_field.step_range, int(step))
                 precipitation.append(precip)
@@ -2325,7 +2413,7 @@ class NcepAdapter(BaseAdapter):
             [result["tracking_qa"] for result in results],
             expected_members=(
                 1
-                if self.definition.id in {"gfs", "gefs-control"}
+                if self.definition.id in {"gfs", "gefs-control", "aigfs"}
                 else 31 if cycle.replace(tzinfo=None) >= self.GEFS_V12_START else 21
             ),
         )
@@ -2339,6 +2427,212 @@ class NcepAdapter(BaseAdapter):
                 "isolated provider-file gaps are linearly reconstructed between the two adjacent native frames; "
                 "leading, trailing and consecutive gaps fail QA"
             )
+        return payload
+
+
+class NoaaGraphCastAdapter(BaseAdapter):
+    """GraphCast Operational output from NOAA/CIRA's public AIWP archive.
+
+    The source NetCDF files are multi-gigabyte global cubes, but their HDF5
+    variables are independently chunked by lead and level.  Opening them via a
+    seekable HTTP file lets h5netcdf request only the detector variables and
+    keeps the common 1-degree atlas domain in memory.
+    """
+
+    ROOT = "https://noaa-oar-mlwp-data.s3.amazonaws.com"
+    START = datetime(2022, 1, 1, 0, tzinfo=UTC)
+    HORIZON = 240
+
+    def __init__(self, client: HttpClient | None = None, workers: int = 8):
+        super().__init__(client, workers)
+        self.definition = MODEL_DEFINITIONS["graphcast-noaa"]
+
+    @classmethod
+    def _url(cls, cycle: datetime) -> str:
+        return (
+            f"{cls.ROOT}/GRAP_v100_GFS/{cycle:%Y}/{cycle:%m%d}/"
+            f"GRAP_v100_GFS_{cycle:%Y%m%d%H}_f000_f240_06.nc"
+        )
+
+    @staticmethod
+    def _supported_cycle(cycle: datetime) -> bool:
+        value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+        value = value.astimezone(UTC)
+        return value >= NoaaGraphCastAdapter.START and (
+            value.hour in {0, 12}
+            or (value.year == 2023 and value.hour in {6, 18})
+        )
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        return (
+            0 <= horizon <= self.HORIZON
+            and self._supported_cycle(cycle)
+            and self.client.exists(self._url(cycle))
+        )
+
+    def build(
+        self,
+        requested: str,
+        steps: Sequence[int],
+        member_limit: int | None = None,
+    ) -> dict[str, Any]:
+        if member_limit not in {None, 1}:
+            raise ValueError("GraphCast is deterministic and has one member")
+        native_steps = [int(step) for step in steps]
+        if not native_steps or native_steps[0] != 0:
+            raise DownloadError("GraphCast processing requires the initialization frame")
+        if native_steps != list(range(0, native_steps[-1] + 1, 6)):
+            raise DownloadError("GraphCast processing requires a complete six-hourly lead axis")
+        cycle = self.resolve_cycle(requested, native_steps[-1])
+        try:
+            import fsspec
+            import xarray as xr
+        except ImportError as error:
+            raise DownloadError("fsspec, xarray and h5netcdf are required for GraphCast") from error
+
+        url = self._url(cycle)
+        with fsspec.open(
+            url,
+            "rb",
+            block_size=8 * 1024 * 1024,
+            cache_type="readahead",
+        ) as stream:
+            with xr.open_dataset(
+                stream,
+                engine="h5netcdf",
+                chunks=None,
+                decode_times=False,
+            ) as dataset:
+                required = {"u", "v", "u10", "v10", "msl", "apcp"}
+                missing = sorted(required - set(dataset.data_vars))
+                if missing:
+                    raise DownloadError(f"GraphCast file lacks {', '.join(missing)}")
+                source_times = np.asarray(dataset["time"].values, dtype=np.int64)
+                expected_times = np.asarray(
+                    [int((cycle + timedelta(hours=step)).timestamp()) for step in native_steps],
+                    dtype=np.int64,
+                )
+                lookup = {int(value): index for index, value in enumerate(source_times)}
+                if any(int(value) not in lookup for value in expected_times):
+                    raise DownloadError("GraphCast file does not contain the requested valid-time axis")
+                time_indices = [lookup[int(value)] for value in expected_times]
+                if time_indices != list(range(time_indices[0], time_indices[-1] + 1)):
+                    raise DownloadError("GraphCast valid-time indexes are not contiguous")
+
+                latitudes = np.asarray(dataset["latitude"].values, dtype=np.float64)
+                longitudes = np.mod(
+                    np.asarray(dataset["longitude"].values, dtype=np.float64), 360.0
+                )
+
+                def coordinate_index(values: np.ndarray, target: float) -> int:
+                    index = int(np.argmin(np.abs(values - target)))
+                    if abs(float(values[index]) - target) > 1e-4:
+                        raise DownloadError(f"GraphCast grid lacks {target:g} degrees")
+                    return index
+
+                north = coordinate_index(latitudes, float(GRID_LATS[-1]))
+                south = coordinate_index(latitudes, float(GRID_LATS[0]))
+                west = coordinate_index(longitudes, float(GRID_LONS[0]))
+                east = coordinate_index(longitudes, float(GRID_LONS[-1]))
+                if north >= south or west >= east:
+                    raise DownloadError("Unexpected GraphCast coordinate ordering")
+                latitude_slice = slice(north, south + 1, 4)
+                longitude_slice = slice(west, east + 1, 4)
+                time_slice = slice(time_indices[0], time_indices[-1] + 1)
+
+                sampled_latitudes = latitudes[latitude_slice][::-1]
+                sampled_longitudes = longitudes[longitude_slice]
+                if not np.allclose(sampled_latitudes, GRID_LATS) or not np.allclose(
+                    sampled_longitudes, GRID_LONS
+                ):
+                    raise DownloadError("GraphCast 1-degree sample does not match the atlas grid")
+
+                def surface(name: str) -> np.ndarray:
+                    values = np.asarray(
+                        dataset[name].isel(
+                            time=time_slice,
+                            latitude=latitude_slice,
+                            longitude=longitude_slice,
+                        ).values,
+                        dtype=np.float32,
+                    )
+                    return values[:, ::-1, :]
+
+                def pressure_wind(name: str, level: int) -> np.ndarray:
+                    level_values = np.asarray(dataset["level"].values, dtype=np.int64)
+                    matches = np.flatnonzero(level_values == level)
+                    if len(matches) != 1:
+                        raise DownloadError(f"GraphCast file lacks a unique {level}-hPa level")
+                    values = np.asarray(
+                        dataset[name].isel(
+                            time=time_slice,
+                            level=int(matches[0]),
+                            latitude=latitude_slice,
+                            longitude=longitude_slice,
+                        ).values,
+                        dtype=np.float32,
+                    )
+                    return values[:, ::-1, :]
+
+                winds = {
+                    level: (pressure_wind("u", level), pressure_wind("v", level))
+                    for level in (850, 700, 500)
+                }
+                mslp = surface("msl") / np.float32(100.0)
+                u10 = surface("u10")
+                v10 = surface("v10")
+                precipitation_intervals = np.maximum(surface("apcp") * np.float32(1000.0), 0.0)
+                precipitation = np.cumsum(precipitation_intervals, axis=0, dtype=np.float32)
+                source_version = str(dataset.attrs.get("version", "")).strip()
+
+        vorticity = {
+            level: np.stack([
+                relative_vorticity_x1e5(u, v)
+                for u, v in zip(level_winds[0], level_winds[1], strict=True)
+            ])
+            for level, level_winds in winds.items()
+        }
+        tracking = track_forecast_member(
+            cycle=cycle,
+            steps=native_steps,
+            member="det",
+            role="deterministic",
+            mslp_hpa=mslp,
+            vorticity_by_level=vorticity,
+            wind_by_level=winds,
+            wind_10m=(u10, v10),
+            precipitation_cumulative_mm=precipitation,
+        )
+        payload = self._payload(
+            cycle,
+            native_steps,
+            tracking.tracks,
+            ["det"],
+            vorticity[850],
+            precipitation,
+            [],
+            [{
+                "member": "det",
+                "detector_candidates": tracking.detector_candidates,
+                "linker": tracking.linker_summary,
+                "crosscheck": tracking.qa_crosscheck,
+            }],
+            expected_members=1,
+        )
+        payload["source"]["retrieval"] = (
+            "public NOAA/CIRA NetCDF HDF5 chunks read by HTTP byte range; "
+            "850/700/500-hPa and surface detector variables sampled from 0.25 to 1 degree"
+        )
+        if source_version:
+            payload["model_version"] = {
+                "label": f"GraphCast {source_version}",
+                "valid_from_utc": None,
+                "source_url": self.definition.source_url,
+                "basis": "version global attribute in the NOAA/CIRA source NetCDF",
+            }
+        payload["qa"] = validate_cycle_payload(payload)
+        if payload["qa"]["status"] == "failed":
+            raise ValueError(f"graphcast-noaa payload failed QA: {payload['qa']['errors']}")
         return payload
 
 
@@ -2652,8 +2946,12 @@ def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = Non
         if archive_root:
             raise ValueError("TIGGE retrieval uses ECDS and does not accept archive_root")
         return TiggeAdapter(model, workers=workers)
-    if model in {"gfs", "gefs", "gefs-control"}:
+    if model in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
         return NcepAdapter(model, workers=workers, archive_root=archive_root)
+    if model == "graphcast-noaa":
+        if archive_root:
+            raise ValueError("NOAA/CIRA GraphCast uses its fixed public archive endpoint")
+        return NoaaGraphCastAdapter(workers=workers)
     if model == "ifs":
         if archive_root:
             raise ValueError("IFS historical retrieval selects WeatherBench/Open Data automatically and does not accept archive_root")

@@ -36,6 +36,7 @@ from forecast_pipeline.sources import (
     EcmwfHresHybridAdapter,
     MogrepsAdapter,
     NcepAdapter,
+    NoaaGraphCastAdapter,
     TIGGE_CENTRES,
     TIGGE_MODEL_IDS,
     TiggeAdapter,
@@ -205,6 +206,9 @@ class ForecastPipelineContractTests(unittest.TestCase):
         cycle_06 = datetime(2026, 8, 30, 6, tzinfo=UTC)
         self.assertEqual(available_forecast_steps("gfs", cycle_00)[-1], 384)
         self.assertEqual(available_forecast_steps("gefs", cycle_00)[-1], 384)
+        self.assertEqual(available_forecast_steps("aigfs", cycle_00)[-1], 384)
+        self.assertEqual(available_forecast_steps("aigefs", cycle_00)[-1], 384)
+        self.assertEqual(available_forecast_steps("graphcast-noaa", cycle_00)[-1], 240)
         self.assertEqual(available_forecast_steps("ifs", cycle_00)[-1], 360)
         self.assertEqual(available_forecast_steps("ifs", cycle_06)[-1], 144)
         self.assertEqual(available_forecast_steps("aifs-ens", cycle_06)[-1], 360)
@@ -391,6 +395,33 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertTrue(current_layout.endswith("pgrb2a.0p50.f006"))
         self.assertEqual(len(gefs._member_ids(datetime(2019, 1, 1, tzinfo=UTC), None)), 21)
         self.assertEqual(len(gefs._member_ids(datetime(2026, 1, 1, tzinfo=UTC), None)), 31)
+
+        aigfs = NcepAdapter("aigfs", client=RecordingClient())
+        aigfs_url, unused = aigfs._urls(
+            datetime(2026, 8, 31, 6, tzinfo=UTC), 384, "det", "pres"
+        )
+        self.assertTrue(
+            aigfs_url.endswith(
+                "/aigfs.20260831/06/model/atmos/grib2/aigfs.t06z.pres.f384.grib2"
+            )
+        )
+
+        aigefs = NcepAdapter("aigefs", client=RecordingClient())
+        aigefs_url, unused = aigefs._urls(
+            datetime(2026, 8, 31, tzinfo=UTC), 6, "p01", "sfc"
+        )
+        self.assertIn("/mem001/model/atmos/grib2/", aigefs_url)
+        self.assertTrue(aigefs_url.endswith("aigefs.t00z.sfc.f006.grib2"))
+        self.assertEqual(len(aigefs._member_ids(datetime(2026, 8, 31, tzinfo=UTC), None)), 31)
+
+        graphcast = NoaaGraphCastAdapter(client=RecordingClient())
+        self.assertTrue(
+            graphcast._url(datetime(2026, 8, 31, 12, tzinfo=UTC)).endswith(
+                "/GRAP_v100_GFS/2026/0831/GRAP_v100_GFS_2026083112_f000_f240_06.nc"
+            )
+        )
+        self.assertTrue(graphcast._supported_cycle(datetime(2023, 7, 1, 6, tzinfo=UTC)))
+        self.assertFalse(graphcast._supported_cycle(datetime(2024, 7, 1, 6, tzinfo=UTC)))
 
     def test_tigge_ncep_uses_noaa_from_2017_without_splitting_model_identity(self) -> None:
         adapter = adapter_for("tigge-ncep", workers=3)

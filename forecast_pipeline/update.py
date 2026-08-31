@@ -281,6 +281,7 @@ def main() -> int:
         "source_notes": {
             "icon": "Adapter reserved. Public ICON-EPS currently lacks the pressure-level member winds required for like-for-like v5.6 tracking, so it is not advertised as equivalent guidance.",
             "ensemble_weather": "Weather layers show the arithmetic member mean; map tracks retain individual members.",
+            "noaa_aiwp_archive": "GraphCast is enabled because the NOAA/CIRA cube includes every frozen detector input. Public Pangu, FourCastNet and Aurora cubes are not yet tracked because they omit precipitation.",
         },
         "run": {
             "requested_models": requested_models,

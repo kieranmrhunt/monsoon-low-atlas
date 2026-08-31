@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", default="2006100100")
     parser.add_argument("--end", default="2016031812")
     parser.add_argument("--spacing-hours", type=int, default=48)
+    parser.add_argument(
+        "--job-order",
+        choices=("chronological", "newest-first"),
+        default="chronological",
+        help="order pending work without changing the archive selection",
+    )
     return parser.parse_args()
 
 
@@ -176,6 +182,11 @@ def main() -> None:
             > int(item["first_step_hours"])
         )
     ]
+    if args.job_order == "newest-first":
+        # Stable sorts keep centres adjacent at shared initializations while
+        # bringing the most relevant recent cycles online first.
+        pending.sort(key=lambda item: str(item["model"]))
+        pending.sort(key=lambda item: str(item["cycle"]), reverse=True)
     providers = sorted({
         tigge_archive_provider(
             str(item["model"]),
@@ -203,6 +214,7 @@ def main() -> None:
             if availability is not None
             else "centre-level nominal maximum horizons"
         ),
+        "job_order": args.job_order,
         "availability_source": constraint_metadata,
         "candidate_model_cycles": len(cycles) * len(models),
         "unavailable_model_cycles": unavailable,
