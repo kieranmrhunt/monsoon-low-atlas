@@ -50,6 +50,8 @@ LOGGER = logging.getLogger("mla.forecast.sources")
 USER_AGENT = "monsoon-low-atlas-forecast/1.0 (+https://kieranmrhunt.github.io/monsoon-low-atlas/)"
 
 NOAA_GEFS_ARCHIVE_START = datetime(2017, 1, 1, 0, tzinfo=UTC)
+WEATHERBENCH_HRES_START = datetime(2016, 1, 1, 0, tzinfo=UTC)
+WEATHERBENCH_HRES_END = datetime(2022, 12, 31, 12, tzinfo=UTC)
 WEATHERBENCH_IFS_ENS_START = datetime(2018, 1, 1, 0, tzinfo=UTC)
 WEATHERBENCH_IFS_ENS_END = datetime(2022, 12, 31, 12, tzinfo=UTC)
 
@@ -1069,6 +1071,181 @@ class TiggeEcmwfAdapter(TiggeAdapter):
         super().__init__("tigge-ecmwf", workers=workers)
 
 
+class WeatherBenchHresAdapter(BaseAdapter):
+    """Historical deterministic IFS forecasts from WeatherBench 2."""
+
+    START = WEATHERBENCH_HRES_START
+    END = WEATHERBENCH_HRES_END
+    STORE = (
+        "weatherbench2/datasets/hres/"
+        "2016-2022-0012-240x121_equiangular_with_poles_conservative.zarr"
+    )
+    HORIZON = 240
+
+    def __init__(self, workers: int = 8):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["ifs"]
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+        value = value.astimezone(UTC)
+        return self.START <= value <= self.END and value.hour in {0, 12} and 0 <= horizon <= self.HORIZON
+
+    @staticmethod
+    def _array(dataset: Any, variable: str, *, level: int | None = None) -> np.ndarray:
+        values = dataset[variable]
+        if level is not None:
+            values = values.sel(level=level)
+        return np.asarray(
+            values.transpose("prediction_timedelta", "latitude", "longitude").values,
+            dtype=np.float32,
+        )
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        try:
+            import gcsfs
+            import xarray as xr
+        except ImportError as error:
+            raise DownloadError("gcsfs and xarray are required for WeatherBench retrieval") from error
+        if member_limit not in {None, 1}:
+            raise DownloadError("deterministic WeatherBench HRES has one member")
+
+        cycle = self.resolve_cycle(requested, int(max(steps)))
+        filesystem = gcsfs.GCSFileSystem(token="anon")
+        dataset = xr.open_zarr(
+            filesystem.get_mapper(self.STORE),
+            consolidated=True,
+            decode_timedelta=True,
+        )
+        selected = dataset[
+            [
+                "mean_sea_level_pressure",
+                "10m_u_component_of_wind",
+                "10m_v_component_of_wind",
+                "total_precipitation_6hr",
+                "u_component_of_wind",
+                "v_component_of_wind",
+            ]
+        ].sel(
+            time=np.datetime64(cycle.replace(tzinfo=None)),
+            prediction_timedelta=[np.timedelta64(int(step), "h") for step in steps],
+            level=[500, 700, 850],
+            longitude=slice(float(GRID_LONS[0]) - 1.5, float(GRID_LONS[-1]) + 1.5),
+            latitude=slice(float(GRID_LATS[0]) - 1.5, float(GRID_LATS[-1]) + 1.5),
+        ).load()
+        selected = selected.interp(
+            longitude=np.asarray(GRID_LONS, dtype=np.float64),
+            latitude=np.asarray(GRID_LATS, dtype=np.float64),
+            method="linear",
+        )
+
+        mslp = self._array(selected, "mean_sea_level_pressure") / np.float32(100.0)
+        u10 = self._array(selected, "10m_u_component_of_wind")
+        v10 = self._array(selected, "10m_v_component_of_wind")
+        precipitation_6h = np.nan_to_num(
+            self._array(selected, "total_precipitation_6hr") * np.float32(1000.0),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        cumulative_precipitation = np.cumsum(
+            np.maximum(precipitation_6h, 0.0), axis=0, dtype=np.float32
+        )
+        winds = {
+            level: (
+                self._array(selected, "u_component_of_wind", level=level),
+                self._array(selected, "v_component_of_wind", level=level),
+            )
+            for level in (850, 700, 500)
+        }
+        vorticity = {
+            level: np.stack([
+                relative_vorticity_x1e5(u_frame, v_frame)
+                for u_frame, v_frame in zip(values[0], values[1], strict=True)
+            ])
+            for level, values in winds.items()
+        }
+        tracking = track_forecast_member(
+            cycle=cycle,
+            steps=steps,
+            member="det",
+            role="deterministic",
+            mslp_hpa=mslp,
+            vorticity_by_level=vorticity,
+            wind_by_level=winds,
+            wind_10m=(u10, v10),
+            precipitation_cumulative_mm=cumulative_precipitation,
+        )
+        payload = self._payload(
+            cycle,
+            steps,
+            tracking.tracks,
+            ["det"],
+            vorticity[850],
+            cumulative_precipitation,
+            [],
+            [{
+                "member": "det",
+                "detector_candidates": tracking.detector_candidates,
+                "linker": tracking.linker_summary,
+                "crosscheck": tracking.qa_crosscheck,
+            }],
+            expected_members=1,
+        )
+        payload["provider_maximum_available_lead"] = (
+            [int(step) for step in steps] == list(range(0, self.HORIZON + 1, 6))
+        )
+        payload["source"] = {
+            "provider": "ECMWF via WeatherBench 2",
+            "service": "WeatherBench 2 public IFS HRES archive",
+            "url": "https://weatherbench2.readthedocs.io/en/latest/data-guide.html#ifs-hres",
+            "licence": "research use; see the source dataset licence",
+            "retrieval": (
+                "public Google Cloud Zarr on the WeatherBench 1.5-degree grid; "
+                "linearly interpolated to the common 1-degree atlas grid before derivatives"
+            ),
+        }
+        payload["model_version"] = model_version("tigge-ecmwf", cycle)
+        payload["qa"] = validate_cycle_payload(payload)
+        if payload["qa"]["status"] == "failed":
+            raise ValueError(f"{self.definition.id} payload failed QA: {payload['qa']['errors']}")
+        return payload
+
+
+class EcmwfHresHybridAdapter(BaseAdapter):
+    """Route 2016--2022 explicit IFS cycles to WeatherBench and Latest to Open Data."""
+
+    def __init__(self, workers: int = 8):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["ifs"]
+        self.weatherbench = WeatherBenchHresAdapter(workers=workers)
+        self.live = EcmwfAdapter("ifs", workers=workers)
+
+    @staticmethod
+    def _uses_weatherbench(cycle: datetime) -> bool:
+        value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
+        value = value.astimezone(UTC)
+        return WeatherBenchHresAdapter.START <= value <= WeatherBenchHresAdapter.END
+
+    def resolve_cycle(self, requested: str, horizon: int) -> datetime:
+        if requested == "latest":
+            return self.live.resolve_cycle(requested, horizon)
+        cycle = parse_cycle(requested)
+        adapter = self.weatherbench if self._uses_weatherbench(cycle) else self.live
+        return adapter.resolve_cycle(requested, horizon)
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        adapter = self.weatherbench if self._uses_weatherbench(cycle) else self.live
+        return adapter.cycle_complete(cycle, horizon)
+
+    def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
+        if requested == "latest":
+            return self.live.build(requested, steps, member_limit=member_limit)
+        cycle = parse_cycle(requested)
+        adapter = self.weatherbench if self._uses_weatherbench(cycle) else self.live
+        return adapter.build(requested, steps, member_limit=member_limit)
+
+
 class TiggeWeatherBenchAdapter(BaseAdapter):
     """ECMWF ENS from WeatherBench 2's public cloud-optimised copy.
 
@@ -1801,7 +1978,11 @@ def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = Non
         return TiggeAdapter(model, workers=workers)
     if model in {"gfs", "gefs", "gefs-control"}:
         return NcepAdapter(model, workers=workers, archive_root=archive_root)
-    if model in {"ifs", "ifs-ens", "aifs", "aifs-ens"}:
+    if model == "ifs":
+        if archive_root:
+            raise ValueError("IFS historical retrieval selects WeatherBench/Open Data automatically and does not accept archive_root")
+        return EcmwfHresHybridAdapter(workers=workers)
+    if model in {"ifs-ens", "aifs", "aifs-ens"}:
         if archive_root:
             raise ValueError("ECMWF Open Data is a rolling real-time feed; archive_root is unsupported")
         return EcmwfAdapter(model, workers=workers)

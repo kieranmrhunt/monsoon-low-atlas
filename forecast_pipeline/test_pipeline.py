@@ -29,6 +29,7 @@ from forecast_pipeline.forecast_core import (
 )
 from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
+    EcmwfHresHybridAdapter,
     NcepAdapter,
     TIGGE_CENTRES,
     TIGGE_MODEL_IDS,
@@ -37,6 +38,7 @@ from forecast_pipeline.sources import (
     TiggeEcmwfAdapter,
     TiggeNcepAdapter,
     TiggeWeatherBenchAdapter,
+    WeatherBenchHresAdapter,
     _fetch_record,
     adapter_for,
     available_forecast_steps,
@@ -323,6 +325,28 @@ class ForecastPipelineContractTests(unittest.TestCase):
             self.assertIs(adapter.build("2023010100", [0, 6]), ecds_payload)
         weatherbench.assert_called_once_with("2020070100", [0, 6], member_limit=None)
         self.assertEqual(ecds.call_count, 2)
+
+    def test_ifs_uses_weatherbench_hres_only_for_2016_to_2022_history(self) -> None:
+        adapter = adapter_for("ifs", workers=3)
+        self.assertIsInstance(adapter, EcmwfHresHybridAdapter)
+        weatherbench_payload = {"source": "weatherbench"}
+        live_payload = {"source": "open-data"}
+        with (
+            patch.object(adapter.weatherbench, "build", return_value=weatherbench_payload) as weatherbench,
+            patch.object(adapter.live, "build", return_value=live_payload) as live,
+        ):
+            self.assertIs(adapter.build("2020070100", [0, 6]), weatherbench_payload)
+            self.assertIs(adapter.build("2026083000", [0, 6]), live_payload)
+            self.assertIs(adapter.build("latest", [0, 6]), live_payload)
+        weatherbench.assert_called_once_with("2020070100", [0, 6], member_limit=None)
+        self.assertEqual(live.call_count, 2)
+
+    def test_weatherbench_hres_archive_bounds_are_explicit(self) -> None:
+        adapter = WeatherBenchHresAdapter()
+        self.assertTrue(adapter.cycle_complete(datetime(2016, 1, 1, tzinfo=UTC), 240))
+        self.assertTrue(adapter.cycle_complete(datetime(2022, 12, 31, 12, tzinfo=UTC), 240))
+        self.assertFalse(adapter.cycle_complete(datetime(2023, 1, 1, tzinfo=UTC), 240))
+        self.assertFalse(adapter.cycle_complete(datetime(2020, 1, 1, tzinfo=UTC), 246))
 
     def test_tigge_plan_provider_matches_hybrid_retrieval_route(self) -> None:
         self.assertEqual(
