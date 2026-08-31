@@ -11,7 +11,11 @@
 	const MODEL_TRACK_COLOURS = {
 		gfs: '#dc0000', gefs: '#00963c', ifs: '#0046dc', 'ifs-ens': '#ff8c00',
 		aifs: '#be00b4', 'aifs-ens': '#00bec8', 'ukmo-global': '#c2185b',
-		'gefs-control': '#6a5acd', 'tigge-ecmwf': '#0072b2'
+		'gefs-control': '#6a5acd', 'tigge-ecmwf': '#73539b',
+		'tigge-bom': '#d55e00', 'tigge-cma': '#e69f00', 'tigge-cptec': '#a65628',
+		'tigge-dwd': '#009e73', 'tigge-eccc': '#56b4e9', 'tigge-imd': '#cc79a7',
+		'tigge-jma': '#0072b2', 'tigge-kma': '#00a087', 'tigge-mf': '#8c6d00',
+		'tigge-ncep': '#332288', 'tigge-ncmrwf': '#882255', 'tigge-ukmo': '#44aa99'
 	};
 	const RUN_TRACK_COLOURS = [
 		'#0046dc', '#dc0000', '#00963c', '#ff8c00', '#be00b4', '#00a9b7',
@@ -192,7 +196,7 @@
 	}
 
 	function buildModelControls() {
-		const models = state.manifest.models || [];
+		const models = (state.manifest.models || []).filter(model => latest[model.id]);
 		const latest = state.manifest.latest || {};
 		if (!state.selectedModels.size) {
 			for (const model of models) if (model.kind === 'deterministic' && latest[model.id]) state.selectedModels.add(model.id);
@@ -248,10 +252,11 @@
 	}
 
 	function entryLeadAt(entry, target) {
-		const start = new Date(entry.cycle_utc).getTime();
+		const cycle = new Date(entry.cycle_utc).getTime();
+		const start = new Date(entry.valid_start_utc || entry.cycle_utc).getTime();
 		const end = new Date(entry.valid_end_utc).getTime();
-		if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(target) || target < start || target > end) return null;
-		const lead = (target - start) / 3600000;
+		if (!Number.isFinite(cycle) || !Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(target) || target < start || target > end) return null;
+		const lead = (target - cycle) / 3600000;
 		const rounded = Math.round(lead / 6) * 6;
 		return Math.abs(lead - rounded) < .01 ? rounded : null;
 	}
@@ -270,7 +275,7 @@
 	function bestArchiveTarget(entries) {
 		const candidates = new Map();
 		for (const entry of entries) {
-			const start = new Date(entry.cycle_utc).getTime();
+			const start = new Date(entry.valid_start_utc || entry.cycle_utc).getTime();
 			const end = new Date(entry.valid_end_utc).getTime();
 			if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
 			for (let time = start; time <= end; time += 6 * 3600000) {
@@ -300,7 +305,7 @@
 	function populateArchiveTimeControls() {
 		if (!state.manifest) return;
 		const entries = archiveEntries();
-		const starts = entries.map(entry => String(entry.cycle_utc || '').slice(0, 10)).filter(Boolean).sort();
+		const starts = entries.map(entry => String(entry.valid_start_utc || entry.cycle_utc || '').slice(0, 10)).filter(Boolean).sort();
 		const ends = entries.map(entry => String(entry.valid_end_utc || '').slice(0, 10)).filter(Boolean).sort();
 		const calendar = $('#mlaForecastArchiveDate');
 		calendar.min = starts[0] || '';
@@ -388,7 +393,7 @@
 		const target = archiveTargetTime();
 		if (!Number.isFinite(target)) return `No processed ${archiveModeLabel()} forecast matches this search.`;
 		const intervalDistance = entry => {
-			const start = new Date(entry.cycle_utc).getTime(), end = new Date(entry.valid_end_utc).getTime();
+			const start = new Date(entry.valid_start_utc || entry.cycle_utc).getTime(), end = new Date(entry.valid_end_utc).getTime();
 			return target < start ? start - target : target > end ? target - end : 0;
 		};
 		const nearest = [...values].sort((a, b) => intervalDistance(a) - intervalDistance(b)).slice(0, 2);

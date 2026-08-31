@@ -37,6 +37,12 @@ def parse_args() -> argparse.Namespace:
         default="available",
         help="provider maximum available lead, or an explicit multiple of six",
     )
+    parser.add_argument(
+        "--first-step",
+        type=int,
+        default=0,
+        help="first published lead in hours for an availability-constrained archive cycle",
+    )
     parser.add_argument("--members", type=int, help="development-only member cap")
     parser.add_argument("--workers", type=int, default=20)
     archive_group = parser.add_mutually_exclusive_group()
@@ -129,6 +135,12 @@ def main() -> int:
         explicit_horizon = int(horizon_mode)
         if explicit_horizon < 24 or explicit_horizon % 6:
             raise ValueError("horizon must be 'available' or a multiple of six of at least 24 hours")
+    if args.first_step < 0 or args.first_step % 6:
+        raise ValueError("first-step must be a non-negative multiple of six hours")
+    if explicit_horizon is None and args.first_step:
+        raise ValueError("first-step requires an explicit horizon")
+    if explicit_horizon is not None and args.first_step >= explicit_horizon:
+        raise ValueError("first-step must be earlier than the explicit horizon")
     requested_models = model_ids(args.models)
     if (args.ncei_archive or args.noaa_aws_archive) and requested_models != ["gfs"]:
         raise ValueError("the public NOAA archive routes currently support only --models gfs")
@@ -168,7 +180,7 @@ def main() -> int:
                 resolved_cycle, steps = adapter.resolve_available_cycle(args.cycle)
                 build_cycle = cycle_id(resolved_cycle)
             else:
-                steps = list(range(0, explicit_horizon + 1, 6))
+                steps = list(range(args.first_step, explicit_horizon + 1, 6))
                 build_cycle = args.cycle
             LOGGER.info(
                 "Building %s cycle=%s resolved=%s horizon=+%d h",
@@ -258,7 +270,9 @@ def main() -> int:
             "coverage_start": verifier.coverage_start,
             "coverage_end": verifier.coverage_end,
         },
-        "models": [asdict(MODEL_DEFINITIONS[model]) for model in DEFAULT_MODELS],
+        # Keep archive-only models in the shared definition registry; the web
+        # client shows only entries that exist in the active mode.
+        "models": [asdict(definition) for definition in MODEL_DEFINITIONS.values()],
         "source_notes": {
             "icon": "Adapter reserved. Public ICON-EPS currently lacks the pressure-level member winds required for like-for-like v5.6 tracking, so it is not advertised as equivalent guidance.",
             "ensemble_weather": "Weather layers show the arithmetic member mean; map tracks retain individual members.",

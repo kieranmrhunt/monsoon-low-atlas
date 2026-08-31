@@ -226,6 +226,36 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
 # generation and its documented implementation dates.
 VERSION_INTERVALS["gefs-control"] = VERSION_INTERVALS["gefs"]
 
+# TIGGE's participating centres expose long model-upgrade tables, but several
+# do not provide a stable machine-readable cycle-to-suite crosswalk. Keep the
+# archive/model family explicit instead of inventing a patch version. ECMWF is
+# the exception above because its IFS implementation boundaries are documented
+# precisely enough for a cycle-level crosswalk.
+_TIGGE_CENTRE_FAMILIES = {
+    "tigge-bom": ("2007010100", "BoM TIGGE operational ensemble"),
+    "tigge-cma": ("2007010100", "CMA TIGGE operational ensemble"),
+    "tigge-cptec": ("2008010100", "CPTEC TIGGE operational ensemble"),
+    "tigge-dwd": ("2020120100", "DWD TIGGE operational ensemble"),
+    "tigge-eccc": ("2007010100", "ECCC TIGGE operational ensemble"),
+    "tigge-imd": ("2020070100", "IMD TIGGE operational ensemble"),
+    "tigge-jma": ("2006100100", "JMA TIGGE operational ensemble"),
+    "tigge-kma": ("2007010100", "KMA TIGGE operational ensemble"),
+    "tigge-mf": ("2007010100", "Météo-France TIGGE operational ensemble"),
+    "tigge-ncep": ("2007010100", "NCEP TIGGE operational ensemble"),
+    "tigge-ncmrwf": ("2017080100", "NCMRWF TIGGE operational ensemble"),
+    "tigge-ukmo": ("2006100100", "UKMO TIGGE operational ensemble"),
+}
+for _model, (_start, _label) in _TIGGE_CENTRE_FAMILIES.items():
+    VERSION_INTERVALS[_model] = ({
+        "from": _start,
+        "label": _label,
+        "source_url": "https://confluence.ecmwf.int/spaces/TIGGE/pages/40109876/Models",
+        "basis": (
+            "TIGGE centre/model family; the exact operational configuration "
+            "varies within the archive and is not assigned without a documented cycle crosswalk"
+        ),
+    },)
+
 
 def model_version(model: str, cycle: datetime) -> dict[str, Any]:
     """Return a transparent cycle-to-version crosswalk record."""

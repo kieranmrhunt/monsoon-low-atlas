@@ -58,8 +58,10 @@ def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
         horizon = 384
     elif model in {"ifs", "ifs-ens"}:
         horizon = 360 if value.hour in {0, 12} else 144
-    elif model in {"aifs", "aifs-ens", "tigge-ecmwf"}:
+    elif model in {"aifs", "aifs-ens"}:
         horizon = 360
+    elif model in TIGGE_CENTRES:
+        horizon = TIGGE_CENTRES[model].maximum_horizon_hours
     elif model == "ukmo-global":
         horizon = 144
     else:
@@ -79,6 +81,39 @@ class ModelDefinition:
     source_name: str
     licence: str
     colour: str
+
+
+@dataclass(frozen=True)
+class TiggeCentre:
+    """Centre-specific request details for the common ECDS TIGGE adapter."""
+
+    model_id: str
+    archive_origin: str
+    catalogue_origin: str
+    archive_start: datetime
+    maximum_horizon_hours: int
+    forecast_types: tuple[str, ...] = ("cf", "pf")
+
+
+TIGGE_CENTRES: dict[str, TiggeCentre] = {
+    "tigge-bom": TiggeCentre("tigge-bom", "ammc", "bom", datetime(2007, 1, 1, tzinfo=UTC), 246),
+    "tigge-cma": TiggeCentre("tigge-cma", "babj", "cma", datetime(2007, 1, 1, tzinfo=UTC), 360),
+    "tigge-cptec": TiggeCentre("tigge-cptec", "sbsj", "cptec", datetime(2008, 1, 1, tzinfo=UTC), 360),
+    # DWD has no control-forecast concept in TIGGE; its perturbed ensemble is
+    # sufficient for the model-neutral detector and linker.
+    "tigge-dwd": TiggeCentre("tigge-dwd", "edzw", "dwd", datetime(2020, 12, 1, tzinfo=UTC), 180, ("pf",)),
+    "tigge-eccc": TiggeCentre("tigge-eccc", "cwao", "eccc", datetime(2007, 1, 1, tzinfo=UTC), 384),
+    "tigge-ecmwf": TiggeCentre("tigge-ecmwf", "ecmf", "ecmwf", datetime(2006, 10, 1, tzinfo=UTC), 360),
+    "tigge-imd": TiggeCentre("tigge-imd", "vabb", "imd", datetime(2020, 7, 1, tzinfo=UTC), 240),
+    "tigge-jma": TiggeCentre("tigge-jma", "rjtd", "jma", datetime(2006, 10, 1, tzinfo=UTC), 264),
+    "tigge-kma": TiggeCentre("tigge-kma", "rksl", "kma", datetime(2007, 1, 1, tzinfo=UTC), 288),
+    "tigge-mf": TiggeCentre("tigge-mf", "lfpw", "mf", datetime(2007, 1, 1, tzinfo=UTC), 108),
+    "tigge-ncep": TiggeCentre("tigge-ncep", "kwbc", "ncep", datetime(2007, 1, 1, tzinfo=UTC), 384),
+    "tigge-ncmrwf": TiggeCentre("tigge-ncmrwf", "dems", "ncmrwf", datetime(2017, 8, 1, tzinfo=UTC), 240),
+    "tigge-ukmo": TiggeCentre("tigge-ukmo", "egrr", "ukmo", datetime(2006, 10, 1, tzinfo=UTC), 360),
+}
+
+TIGGE_MODEL_IDS = tuple(TIGGE_CENTRES)
 
 
 MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
@@ -127,6 +162,66 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "tigge-ecmwf", "ECMWF TIGGE ENS", "ECMWF", "ensemble", 51,
         "Historical ECMWF control plus perturbed ensemble from the TIGGE archive",
         "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#73539b",
+    ),
+    "tigge-bom": ModelDefinition(
+        "tigge-bom", "BoM TIGGE ENS", "Australian Bureau of Meteorology", "ensemble", 17,
+        "Historical BoM control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#d55e00",
+    ),
+    "tigge-cma": ModelDefinition(
+        "tigge-cma", "CMA TIGGE ENS", "China Meteorological Administration", "ensemble", 30,
+        "Historical CMA control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#e69f00",
+    ),
+    "tigge-cptec": ModelDefinition(
+        "tigge-cptec", "CPTEC TIGGE ENS", "CPTEC", "ensemble", 15,
+        "Historical CPTEC control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#a65628",
+    ),
+    "tigge-dwd": ModelDefinition(
+        "tigge-dwd", "DWD TIGGE ENS", "Deutscher Wetterdienst", "ensemble", 40,
+        "Historical DWD perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#009e73",
+    ),
+    "tigge-eccc": ModelDefinition(
+        "tigge-eccc", "ECCC TIGGE ENS", "Environment and Climate Change Canada", "ensemble", 21,
+        "Historical ECCC control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#56b4e9",
+    ),
+    "tigge-imd": ModelDefinition(
+        "tigge-imd", "IMD TIGGE ENS", "India Meteorological Department", "ensemble", 21,
+        "Historical IMD control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#cc79a7",
+    ),
+    "tigge-jma": ModelDefinition(
+        "tigge-jma", "JMA TIGGE ENS", "Japan Meteorological Agency", "ensemble", 51,
+        "Historical JMA control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#0072b2",
+    ),
+    "tigge-kma": ModelDefinition(
+        "tigge-kma", "KMA TIGGE ENS", "Korea Meteorological Administration", "ensemble", 26,
+        "Historical KMA control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#00a087",
+    ),
+    "tigge-mf": ModelDefinition(
+        "tigge-mf", "Météo-France TIGGE ENS", "Météo-France", "ensemble", 35,
+        "Historical Météo-France control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#8c6d00",
+    ),
+    "tigge-ncep": ModelDefinition(
+        "tigge-ncep", "NCEP TIGGE ENS", "NOAA/NCEP", "ensemble", 31,
+        "Historical NCEP control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#332288",
+    ),
+    "tigge-ncmrwf": ModelDefinition(
+        "tigge-ncmrwf", "NCMRWF TIGGE ENS", "National Centre for Medium Range Weather Forecasting", "ensemble", 12,
+        "Historical NCMRWF control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY-NC 4.0", "#882255",
+    ),
+    "tigge-ukmo": ModelDefinition(
+        "tigge-ukmo", "UKMO TIGGE ENS", "Met Office", "ensemble", 18,
+        "Historical Met Office control plus perturbed ensemble from the TIGGE archive",
+        "https://ecds.ecmwf.int/datasets/tigge-forecasts", "ECMWF ECDS TIGGE archive", "CC BY 4.0", "#44aa99",
     ),
 }
 
@@ -642,16 +737,18 @@ class BadcUkmoAdapter(BaseAdapter):
         return payload
 
 
-class TiggeEcmwfAdapter(BaseAdapter):
-    """Historical ECMWF ensembles retrieved from the ECDS TIGGE archive."""
+class TiggeAdapter(BaseAdapter):
+    """Historical multi-centre ensembles retrieved from the ECDS TIGGE archive."""
 
     ECDS_URL = "https://ecds.ecmwf.int/api"
     DATASET = "tigge-forecasts"
-    ARCHIVE_START = datetime(2006, 10, 1, 0, tzinfo=UTC)
 
-    def __init__(self, workers: int = 8):
+    def __init__(self, model: str, workers: int = 8):
         super().__init__(workers=workers)
-        self.definition = MODEL_DEFINITIONS["tigge-ecmwf"]
+        if model not in TIGGE_CENTRES:
+            raise ValueError(f"Unknown TIGGE centre {model!r}")
+        self.centre = TIGGE_CENTRES[model]
+        self.definition = MODEL_DEFINITIONS[model]
         self.queue_retry_attempts = max(
             1, int(os.environ.get("LPS_TIGGE_QUEUE_RETRY_ATTEMPTS", "40"))
         )
@@ -664,13 +761,19 @@ class TiggeEcmwfAdapter(BaseAdapter):
             raise DownloadError("TIGGE is a delayed historical archive and requires an explicit cycle")
         value = parse_cycle(requested)
         if not self.cycle_complete(value, horizon):
-            raise DownloadError(f"ECMWF TIGGE cycle {requested} is outside the supported archive/cadence")
+            raise DownloadError(
+                f"{self.definition.label} cycle {requested} is outside the supported archive/cadence"
+            )
         return value
 
     def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
         if cycle.tzinfo is None:
             cycle = cycle.replace(tzinfo=UTC)
-        return cycle >= self.ARCHIVE_START and cycle.hour in {0, 12} and 0 <= horizon <= 360
+        return (
+            cycle >= self.centre.archive_start
+            and cycle.hour in {0, 12}
+            and 0 <= horizon <= self.centre.maximum_horizon_hours
+        )
 
     @staticmethod
     def _credentials() -> str:
@@ -709,7 +812,7 @@ class TiggeEcmwfAdapter(BaseAdapter):
             "grid": "1/1",
             "area": "45/45/-15/120",
             "levtype": levtype,
-            "origin": "ecmf",
+            "origin": self.centre.archive_origin,
             "param": "131/132" if levtype == "pl" else "151/165/166/228",
             "step": "/".join(str(int(step)) for step in steps),
             "time": cycle.strftime("%H:00:00"),
@@ -734,7 +837,8 @@ class TiggeEcmwfAdapter(BaseAdapter):
                     self.queue_retry_base_seconds * (2 ** min(attempt - 1, 4)),
                 ) + random.uniform(0.0, self.queue_retry_base_seconds)
                 LOGGER.warning(
-                    "ECDS queue full for TIGGE %s %s/%s; retry %d/%d in %.0f s",
+                    "ECDS queue full for %s %s %s/%s; retry %d/%d in %.0f s",
+                    self.definition.label,
                     cycle_id(cycle),
                     forecast_type,
                     levtype,
@@ -759,8 +863,13 @@ class TiggeEcmwfAdapter(BaseAdapter):
                         if data_date != int(cycle.strftime("%Y%m%d")) or data_time != int(cycle.strftime("%H%M")):
                             raise DownloadError(f"TIGGE header date disagrees with {cycle:%Y%m%d%H} in {path}")
                         forecast_type = str(codes_get(handle, "type"))
-                        number = int(codes_get(handle, "perturbationNumber"))
-                        member = "c00" if forecast_type == "cf" else f"p{number:02d}"
+                        if forecast_type == "cf":
+                            member = "c00"
+                        elif forecast_type == "fc":
+                            member = "h00"
+                        else:
+                            number = int(codes_get(handle, "perturbationNumber"))
+                            member = f"p{number:02d}"
                         step = int(codes_get(handle, "endStep"))
                         short_name = str(codes_get(handle, "shortName"))
                         try:
@@ -779,7 +888,13 @@ class TiggeEcmwfAdapter(BaseAdapter):
     @staticmethod
     def _member_ids(fields: dict[tuple[str, int, str, int], GridField]) -> list[str]:
         values = {key[0] for key in fields}
-        return sorted(values, key=lambda value: (value != "c00", int(value[1:])))
+        return sorted(
+            values,
+            key=lambda value: (
+                0 if value == "c00" else 1 if value == "h00" else 2,
+                int(value[1:]),
+            ),
+        )
 
     def _load_member(
         self,
@@ -812,11 +927,22 @@ class TiggeEcmwfAdapter(BaseAdapter):
             ])
             for level in (850, 700, 500)
         }
-        precipitation = np.maximum.accumulate(np.stack([
-            to_precip_mm(fields[(member, int(step), "tp", 0)])
-            for step in steps
-        ]), axis=0)
-        role = "control" if member == "c00" else "perturbed"
+        # TIGGE contributors do not all encode total precipitation at t+0 and
+        # occasional historical steps are absent. Precipitation is not a
+        # detector/classification input, so initialise it at zero and carry the
+        # last cumulative value across a missing frame rather than discarding an
+        # otherwise complete dynamical member.
+        precipitation_frames: list[np.ndarray] = []
+        for step in steps:
+            key = (member, int(step), "tp", 0)
+            if key in fields:
+                precipitation_frames.append(to_precip_mm(fields[key]))
+            elif precipitation_frames:
+                precipitation_frames.append(precipitation_frames[-1].copy())
+            else:
+                precipitation_frames.append(np.zeros_like(mslp[0], dtype=np.float32))
+        precipitation = np.maximum.accumulate(np.stack(precipitation_frames), axis=0)
+        role = "control" if member in {"c00", "h00"} else "perturbed"
         tracking = track_forecast_member(
             cycle=cycle,
             steps=steps,
@@ -846,7 +972,7 @@ class TiggeEcmwfAdapter(BaseAdapter):
         with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
             root = Path(directory)
             paths = []
-            for forecast_type in ("cf", "pf"):
+            for forecast_type in self.centre.forecast_types:
                 for levtype in ("pl", "sfc"):
                     target = root / f"{forecast_type}-{levtype}.grib"
                     self._retrieve(cycle, steps, target, forecast_type, levtype)
@@ -856,8 +982,8 @@ class TiggeEcmwfAdapter(BaseAdapter):
         members = self._member_ids(fields)
         if member_limit is not None:
             members = members[:max(1, member_limit)]
-        if "c00" not in members:
-            raise DownloadError("ECMWF TIGGE control member is missing")
+        if "cf" in self.centre.forecast_types and "c00" not in members:
+            raise DownloadError(f"{self.definition.label} control member is missing")
         results: list[dict[str, Any]] = []
         warnings: list[str] = []
         with ThreadPoolExecutor(max_workers=min(self.workers, len(members))) as executor:
@@ -874,7 +1000,9 @@ class TiggeEcmwfAdapter(BaseAdapter):
         results.sort(key=lambda item: members.index(item["member"]))
         minimum = 1 if member_limit is not None else max(3, math.ceil(len(members) * 0.7))
         if len(results) < minimum:
-            raise DownloadError(f"Only {len(results)}/{len(members)} ECMWF TIGGE members completed")
+            raise DownloadError(
+                f"Only {len(results)}/{len(members)} {self.definition.label} members completed"
+            )
         payload = self._payload(
             cycle,
             steps,
@@ -886,8 +1014,22 @@ class TiggeEcmwfAdapter(BaseAdapter):
             [result["tracking_qa"] for result in results],
             expected_members=len(members),
         )
-        payload["source"]["retrieval"] = "ECMWF ECDS TIGGE subset at 1 degree; all available control/perturbed members"
+        member_scope = (
+            "all available perturbed members"
+            if self.centre.forecast_types == ("pf",)
+            else "all available control/perturbed members"
+        )
+        payload["source"]["retrieval"] = (
+            f"ECMWF ECDS TIGGE {self.definition.centre} subset at 1 degree; {member_scope}"
+        )
         return payload
+
+
+class TiggeEcmwfAdapter(TiggeAdapter):
+    """Backward-compatible name for the original ECMWF-only TIGGE adapter."""
+
+    def __init__(self, workers: int = 8):
+        super().__init__("tigge-ecmwf", workers=workers)
 
 
 class NcepAdapter(BaseAdapter):
@@ -1337,10 +1479,10 @@ class EcmwfAdapter(BaseAdapter):
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
     if model == "ukmo-global":
         return BadcUkmoAdapter(root=archive_root, workers=workers)
-    if model == "tigge-ecmwf":
+    if model in TIGGE_CENTRES:
         if archive_root:
             raise ValueError("TIGGE retrieval uses ECDS and does not accept archive_root")
-        return TiggeEcmwfAdapter(workers=workers)
+        return TiggeAdapter(model, workers=workers)
     if model in {"gfs", "gefs", "gefs-control"}:
         return NcepAdapter(model, workers=workers, archive_root=archive_root)
     if model in {"ifs", "ifs-ens", "aifs", "aifs-ens"}:

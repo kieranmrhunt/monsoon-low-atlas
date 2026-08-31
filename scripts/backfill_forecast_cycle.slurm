@@ -18,8 +18,10 @@ MODE="${3:?recent or archive mode is required}"
 PUBLISH_TARGET="${4:-}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 ROW="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$JOBS")"
-IFS=$'\t' read -r INDEX MODEL CYCLE <<< "$ROW"
+IFS=$'\t' read -r INDEX MODEL CYCLE HORIZON FIRST_STEP <<< "$ROW"
 [[ -n "${INDEX:-}" && -n "${MODEL:-}" && -n "${CYCLE:-}" ]]
+HORIZON="${HORIZON:-available}"
+FIRST_STEP="${FIRST_STEP:-0}"
 BUILD_MANIFEST="$ATLAS_ROOT/assets/atlas-build-manifest.json"
 CORE_NAME="$("$PYTHON" -c "import json; print(json.load(open('$BUILD_MANIFEST'))['core'])")"
 OUTPUT="$RUN_ROOT/${MODEL}-${CYCLE}"
@@ -39,7 +41,8 @@ cd "$ATLAS_ROOT"
   --atlas-core "$ATLAS_ROOT/assets/$CORE_NAME" \
   --cycle "$CYCLE" \
   --models "$MODEL" \
-  --horizon available \
+  --horizon "$HORIZON" \
+  --first-step "$FIRST_STEP" \
   --workers "${LPS_FORECAST_WORKERS:-8}" \
   "${ARGS[@]}"
 

@@ -65,7 +65,7 @@ The Forecasts tab is a lazy static client backed by compact files on the public 
 
 Latest files include positive 850-hPa relative vorticity and trailing-24-hour precipitation on a common 1-degree grid. Relative vorticity is derived from winds only after every provider is resampled to that grid; this avoids mixing IFS native spectral vorticity with wind-derived AIFS/GFS fields. Ensemble weather is the arithmetic member mean, while individual member tracks remain available. Full weather-capable payloads are retained for every six-hourly initialization in a rolling 48-hour window. There is no artificial comparison cap: the client can compare every selected model at one initialization or all available neighbouring initializations for one model, with weather still tied to one explicitly labelled run.
 
-The operational archive supports a calendar and typed date/cyclone search. A valid-time matrix exposes every processed model–lead combination and allows any number of cells to be compared; named storms automatically open at the valid time with the best overlap. ERA5 v5.6 verification is a separate default-on matrix tile. Operational archive files retain ensemble-mean vorticity and trailing-24-hour precipitation, omit internal tracking QA, and attach the ERA5 track where the catalogue overlaps by at least six hours and passes the documented distance limits. The same track controls and verification overlay are available in the separate, track-only TIGGE collection. Each cycle certifies that it retains its complete provider lead axis—+384 h for GFS/GEFS, +360 h for AIFS and 00/12 UTC IFS, +144 h for 06/18 UTC IFS and the archived Met Office Global data, and +360 h for ECMWF TIGGE—together with every track published by the detector/linker and zero-disturbance cycles. Cycle-specific operational model-generation labels come from documented NOAA and ECMWF implementation dates rather than being inferred from filenames.
+The operational archive supports a calendar and typed date/cyclone search. A valid-time matrix exposes every processed model–lead combination and allows any number of cells to be compared; named storms automatically open at the valid time with the best overlap. ERA5 v5.6 verification is a separate default-on matrix tile. Operational archive files retain ensemble-mean vorticity and trailing-24-hour precipitation, omit internal tracking QA, and attach the ERA5 track where the catalogue overlaps by at least six hours and passes the documented distance limits. The same track controls and verification overlay are available in the separate, track-only TIGGE collection. Each cycle certifies that it retains its complete common provider lead axis—including centre- and cycle-specific TIGGE horizons discovered from the ECDS machine-readable catalogue—together with every track published by the detector/linker and zero-disturbance cycles. A centre such as BoM that omits the required surface fields at t+0 is represented honestly from its first complete lead rather than receiving an invented analysis. Cycle-specific operational model-generation labels come from documented implementation dates where an exact crosswalk exists; otherwise the centre's TIGGE operational family is stated without inventing a patch version.
 
 Displayed forecast paths prepend a compact analysis history when a system is already present at initialization. The service retains 14 days of six-hourly t+0 centres for active guidance and embeds t+0 centres in each processed archive entry. Matching is model- and operational-version-specific: an older forecast signature must reproduce the newer analysed centre, pass distance and motion checks, and be unambiguous relative to contemporaneous systems. The joined history is solid with small centre markers; guidance after the selected valid time is a thinner solid line. Forecast-only genesis therefore remains unstitched, and historical spacing reflects the archive cycles actually processed rather than implying unavailable six-hourly analyses.
 
@@ -97,8 +97,9 @@ To seed or repair the rolling initialization window and historical archive in pa
 bash scripts/submit_forecast_backfills.sh
 ```
 
-The historical ECMWF ensemble collection remains separate from the operational
-archive. Submit or resume its event-spanning TIGGE cycles with:
+The historical TIGGE ensemble collection remains separate from the operational
+archive. The original ECMWF event-spanning backfill can be submitted or resumed
+with:
 
 ```bash
 bash scripts/submit_tigge_archive_backfill.sh
@@ -115,6 +116,21 @@ finalizer then reconciles the whole plan and reports any gaps.
 `LPS_TIGGE_MAX_ACTIVE`, `LPS_TIGGE_TIME_LIMIT`,
 `LPS_TIGGE_CANARY_CYCLE`, `LPS_TIGGE_QUEUE_RETRY_ATTEMPTS` and
 `LPS_TIGGE_QUEUE_RETRY_BASE_SECONDS` override the submission settings.
+
+The multi-centre extension covers BoM, CMA, CPTEC, DWD, ECCC, IMD, JMA, KMA,
+Météo-France, NCEP, NCMRWF and UKMO in addition to ECMWF. It pins the current
+ECDS constraint catalogue, omits centre/cycle combinations lacking a complete
+tracker field axis, tests one full-horizon cycle per centre, and chunks the
+availability-aware plan below JASMIN's Slurm array limit:
+
+```bash
+bash scripts/submit_tigge_multicentre_backfill.sh
+```
+
+Every completed cycle is published immediately. DWD, ECCC, ECMWF, KMA, NCEP
+and UKMO TIGGE data are CC BY 4.0; BoM, CMA, CPTEC, IMD, JMA, Météo-France and
+NCMRWF are CC BY-NC 4.0. The public manifest retains the provider and licence
+for every model rather than presenting TIGGE as one homogeneous system.
 
 ## Storm-centred composite archive
 

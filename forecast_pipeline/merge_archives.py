@@ -8,6 +8,7 @@ import fcntl
 import gzip
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from .forecast_core import (
@@ -102,17 +103,27 @@ def main() -> None:
         if args.plan:
             plan = json.loads(args.plan.read_text(encoding="utf-8"))
             planned = {
-                f"{item['model']}:{item['cycle']}": int(item.get("horizon_hours", 0))
+                f"{item['model']}:{item['cycle']}": (
+                    int(item.get("horizon_hours", 0)),
+                    int(item.get("first_step_hours", 0)),
+                )
                 for item in plan["cycles"]
             }
-            available = {
-                f"{item.get('model')}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
-                for item in manifest.get(collection_key, [])
-            }
+            available = {}
+            for item in manifest.get(collection_key, []):
+                cycle_time = datetime.fromisoformat(str(item["cycle_utc"]).replace("Z", "+00:00"))
+                valid_start = datetime.fromisoformat(
+                    str(item.get("valid_start_utc", item["cycle_utc"])).replace("Z", "+00:00")
+                )
+                available[f"{item.get('model')}:{item.get('cycle')}"] = (
+                    manifest_entry_horizon_hours(item),
+                    int(round((valid_start - cycle_time).total_seconds() / 3600)),
+                )
             complete_keys = {
                 key
-                for key, horizon in planned.items()
-                if available.get(key, -1) >= horizon
+                for key, (horizon, first_step) in planned.items()
+                if available.get(key, (-1, 999))[0] >= horizon
+                and available.get(key, (-1, 999))[1] <= first_step
             }
             missing = sorted(set(planned) - complete_keys)
             complete = not missing

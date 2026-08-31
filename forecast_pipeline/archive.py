@@ -239,6 +239,7 @@ def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[s
         "model_label": payload["model"]["label"],
         "cycle": payload["cycle"],
         "cycle_utc": payload["cycle_utc"],
+        "valid_start_utc": payload["valid_times"][0],
         "valid_end_utc": payload["valid_times"][-1],
         "url": relative_url,
         "forecast_tracks": len(payload.get("tracks", [])),

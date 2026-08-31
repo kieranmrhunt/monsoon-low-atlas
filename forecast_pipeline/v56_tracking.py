@@ -22,7 +22,7 @@ import math
 import sys
 import warnings
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -79,11 +79,11 @@ def _hourly_axis(steps: Sequence[int]) -> np.ndarray:
     values = np.asarray(steps, dtype=int)
     if values.ndim != 1 or not len(values):
         raise ValueError("forecast steps must be a non-empty one-dimensional sequence")
-    if values[0] != 0 or np.any(np.diff(values) <= 0):
-        raise ValueError("forecast steps must start at zero and increase strictly")
+    if values[0] < 0 or np.any(np.diff(values) <= 0):
+        raise ValueError("forecast steps must be non-negative and increase strictly")
     if np.any(np.diff(values) > 6):
         raise ValueError("v5.6 forecast tracking refuses native gaps longer than six hours")
-    return np.arange(0, int(values[-1]) + 1, dtype=int)
+    return np.arange(int(values[0]), int(values[-1]) + 1, dtype=int)
 
 
 def interpolate_hourly(values: np.ndarray, steps: Sequence[int]) -> np.ndarray:
@@ -95,14 +95,15 @@ def interpolate_hourly(values: np.ndarray, steps: Sequence[int]) -> np.ndarray:
         raise ValueError(f"field has {source.shape[0]} frames for {len(native)} steps")
     target = _hourly_axis(native)
     output = np.empty((len(target),) + source.shape[1:], dtype=np.float32)
+    offset = int(native[0])
     for index in range(len(native) - 1):
         start = int(native[index])
         stop = int(native[index + 1])
         width = stop - start
         for hour in range(start, stop):
             weight = np.float32((hour - start) / width)
-            output[hour] = source[index] * (1.0 - weight) + source[index + 1] * weight
-    output[int(native[-1])] = source[-1]
+            output[hour - offset] = source[index] * (1.0 - weight) + source[index + 1] * weight
+    output[int(native[-1]) - offset] = source[-1]
     return output
 
 
@@ -375,7 +376,9 @@ def track_forecast_member(
         raise ValueError("v5.6 forecast tracking requires 850, 700 and 500 hPa winds/vorticity")
     hourly_steps = _hourly_axis(steps)
     times = pd.date_range(
-        pd.Timestamp(cycle.astimezone(UTC).replace(tzinfo=None)),
+        pd.Timestamp(
+            (cycle + timedelta(hours=int(hourly_steps[0]))).astimezone(UTC).replace(tzinfo=None)
+        ),
         periods=len(hourly_steps),
         freq="h",
     )

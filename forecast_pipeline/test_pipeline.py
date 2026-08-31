@@ -29,19 +29,23 @@ from forecast_pipeline.forecast_core import (
 from forecast_pipeline.sources import (
     MODEL_DEFINITIONS,
     NcepAdapter,
+    TIGGE_CENTRES,
+    TIGGE_MODEL_IDS,
+    TiggeAdapter,
     TiggeEcmwfAdapter,
     _fetch_record,
     available_forecast_steps,
     parse_ecmwf_index,
     parse_ncep_index,
 )
+from forecast_pipeline.tigge_catalogue import REQUIRED_FIELDS, TiggeAvailability
 from forecast_pipeline.analysis_history import (
     analysis_centres,
     replace_analysis_entry,
 )
 from forecast_pipeline.archive import archive_manifest_entry, archive_payload
 from forecast_pipeline.update import replace_recent_entry
-from forecast_pipeline.v56_tracking import _longest_true_run
+from forecast_pipeline.v56_tracking import _hourly_axis, _longest_true_run, interpolate_hourly
 from forecast_pipeline.versions import model_version
 from forecast_pipeline.watch_archive_publish import target_state, update_progress
 
@@ -95,6 +99,8 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(available_forecast_steps("ifs", cycle_06)[-1], 144)
         self.assertEqual(available_forecast_steps("aifs-ens", cycle_06)[-1], 360)
         self.assertEqual(available_forecast_steps("tigge-ecmwf", cycle_00)[-1], 360)
+        self.assertEqual(available_forecast_steps("tigge-jma", cycle_00)[-1], 264)
+        self.assertEqual(available_forecast_steps("tigge-eccc", cycle_00)[-1], 384)
         self.assertEqual(available_forecast_steps("ukmo-global", cycle_00)[-1], 144)
         self.assertTrue(all(step % 6 == 0 for step in available_forecast_steps("gfs", cycle_00)))
 
@@ -151,6 +157,66 @@ class ForecastPipelineContractTests(unittest.TestCase):
             self.assertEqual(QueueLimitedClient.calls, 3)
             self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
             self.assertEqual(target.read_bytes(), b"GRIB")
+
+    def test_tigge_adapter_uses_each_centres_archive_origin(self) -> None:
+        requests = []
+
+        class RecordingCdsClient:
+            def __init__(self, **unused) -> None:
+                pass
+
+            def retrieve(self, unused_dataset, request, target) -> None:
+                requests.append(request)
+                Path(target).write_bytes(b"GRIB")
+
+        adapter = TiggeAdapter("tigge-jma")
+        cycle = datetime(2016, 7, 1, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.dict("sys.modules", {"cdsapi": SimpleNamespace(Client=RecordingCdsClient)}),
+                patch.object(adapter, "_credentials", return_value="test-key"),
+            ):
+                adapter._retrieve(cycle, [0, 6], Path(directory) / "jma.grib", "pf", "pl")
+        self.assertEqual(requests[0]["origin"], "rjtd")
+        self.assertEqual(requests[0]["step"], "0/6")
+
+    def test_tigge_catalogue_uses_complete_common_field_axis(self) -> None:
+        def rows(origin: str, forecast_type: str, horizon: int) -> list[dict[str, object]]:
+            output = []
+            for variable, level_type, level_value in REQUIRED_FIELDS:
+                field_horizon = horizon - 6 if variable == "10_m_v_component_of_wind" else horizon
+                row: dict[str, object] = {
+                    "origin": [origin], "forecast_type": [forecast_type],
+                    "year": ["2016"], "month": ["07"], "day": ["01"], "time": ["00:00"],
+                    "variable": [variable], "level_type": [level_type],
+                    "leadtime_hour": [str(value) for value in range(0, field_horizon + 1, 6)],
+                }
+                if level_value is not None:
+                    row["level_value"] = [level_value]
+                output.append(row)
+            return output
+
+        constraints = rows("jma", "control_forecast", 264) + rows("jma", "perturbed_forecast", 264)
+        availability = TiggeAvailability(constraints)
+        steps = availability.available_steps("tigge-jma", datetime(2016, 7, 1, tzinfo=UTC))
+        self.assertEqual(steps, list(range(0, 259, 6)))
+        self.assertEqual(availability.available_steps("tigge-cma", datetime(2016, 7, 1, tzinfo=UTC)), [])
+
+        bom = rows("bom", "control_forecast", 240) + rows("bom", "perturbed_forecast", 240)
+        for row in bom:
+            if row["level_type"] == ["single_level"]:
+                row["leadtime_hour"] = row["leadtime_hour"][1:]
+        self.assertEqual(
+            TiggeAvailability(bom).available_steps("tigge-bom", datetime(2016, 7, 1, tzinfo=UTC)),
+            list(range(6, 235, 6)),
+        )
+
+    def test_all_tigge_centres_have_public_model_metadata(self) -> None:
+        self.assertEqual(set(TIGGE_MODEL_IDS), set(TIGGE_CENTRES))
+        for model in TIGGE_MODEL_IDS:
+            definition = MODEL_DEFINITIONS[model]
+            self.assertIn("TIGGE", definition.label)
+            self.assertIn(definition.licence, {"CC BY 4.0", "CC BY-NC 4.0"})
 
     def test_manifest_entry_horizon_is_derived_from_valid_end(self) -> None:
         entry = {"cycle_utc": "2026-08-30T00:00:00Z", "valid_end_utc": "2026-09-15T00:00:00Z"}
@@ -209,6 +275,11 @@ class ForecastPipelineContractTests(unittest.TestCase):
         mask = np.asarray([True, True, False, True, True, True, True])
         steps = np.asarray([0, 1, 2, 3, 4, 6, 7])
         self.assertEqual(_longest_true_run(mask, steps), 2)
+
+    def test_forecast_interpolation_can_begin_after_initialization(self) -> None:
+        np.testing.assert_array_equal(_hourly_axis([6, 12]), np.arange(6, 13))
+        source = np.asarray([6.0, 12.0], dtype=np.float32)[:, None, None]
+        np.testing.assert_allclose(interpolate_hourly(source, [6, 12])[:, 0, 0], np.arange(6.0, 13.0))
 
     def test_atomic_manifest_is_publicly_readable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
