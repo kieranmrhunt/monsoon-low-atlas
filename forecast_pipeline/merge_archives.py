@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import gzip
 import json
 import shutil
@@ -15,7 +14,7 @@ from .forecast_core import (
     atomic_write_json,
     atomic_write_json_gz,
     iso_z,
-    manifest_lock_path,
+    ManifestLock,
     manifest_entry_horizon_hours,
     utc_now,
 )
@@ -50,15 +49,15 @@ def main() -> None:
     collection_key = "tigge_archive" if args.collection == "tigge" else "archive"
     target_path = args.target / "manifest.json"
     args.target.mkdir(parents=True, exist_ok=True)
-    with manifest_lock_path(args.target).open("a+") as lock_stream:
-        lock_mode = fcntl.LOCK_EX | (fcntl.LOCK_NB if args.nonblocking_lock else 0)
-        try:
-            fcntl.flock(lock_stream.fileno(), lock_mode)
-        except BlockingIOError:
-            print(
-                f"Another archive publisher is active; retained {len(sources)} validated staging source(s)"
-            )
-            return
+    try:
+        lock = ManifestLock(args.target, blocking=not args.nonblocking_lock)
+        lock.acquire()
+    except BlockingIOError:
+        print(
+            f"Another archive publisher is active; retained {len(sources)} validated staging source(s)"
+        )
+        return
+    with lock:
         if target_path.exists():
             manifest = read_manifest(target_path)
         else:

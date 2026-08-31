@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import logging
 import subprocess
@@ -16,7 +15,7 @@ from typing import Any
 from .forecast_core import (
     atomic_write_json,
     iso_z,
-    manifest_lock_path,
+    ManifestLock,
     manifest_entry_horizon_hours,
     utc_now,
 )
@@ -91,8 +90,7 @@ def update_progress(
 
     target.mkdir(parents=True, exist_ok=True)
     manifest_path = target / "manifest.json"
-    with manifest_lock_path(target).open("a+") as lock_stream:
-        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+    with ManifestLock(target):
         manifest = read_manifest(manifest_path)
         expected_identity = (str(plan.get("generated_utc", "")), len(plan.get("cycles", [])))
         existing = manifest.get(manifest_key, {})

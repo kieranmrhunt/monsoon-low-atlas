@@ -20,6 +20,7 @@ from forecast_pipeline import merge_archives
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
     GRID_LONS,
+    ManifestLock,
     atomic_write_json,
     candidate_cycles,
     compact_weather,
@@ -75,8 +76,14 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
-    def test_all_public_writers_share_the_versioned_manifest_lock(self) -> None:
-        self.assertEqual(manifest_lock_path(Path("/tmp/service")).name, ".manifest-v2.lock")
+    def test_atomic_directory_manifest_lock_is_exclusive_and_releases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with ManifestLock(root):
+                self.assertTrue(manifest_lock_path(root).is_dir())
+                with self.assertRaises(BlockingIOError):
+                    ManifestLock(root, blocking=False).acquire()
+            self.assertFalse(manifest_lock_path(root).exists())
 
     def test_isolated_noaa_member_gap_is_interpolated_but_edges_and_runs_fail(self) -> None:
         first = np.asarray([[0.0, 4.0]], dtype=np.float32)
@@ -98,8 +105,8 @@ class ForecastPipelineContractTests(unittest.TestCase):
                 source / "manifest.json",
                 {"schema": "mla-forecast-manifest-v1", "tigge_archive": []},
             )
-            with (
-                patch(
+            with ManifestLock(target):
+                with patch(
                     "sys.argv",
                     [
                         "merge_archives",
@@ -110,13 +117,8 @@ class ForecastPipelineContractTests(unittest.TestCase):
                         "--nonblocking-lock",
                         str(source),
                     ],
-                ),
-                patch(
-                    "forecast_pipeline.merge_archives.fcntl.flock",
-                    side_effect=BlockingIOError,
-                ),
-            ):
-                merge_archives.main()
+                ):
+                    merge_archives.main()
             self.assertFalse((target / "manifest.json").exists())
 
     def test_candidate_cycles_are_six_hourly_and_descending(self) -> None:

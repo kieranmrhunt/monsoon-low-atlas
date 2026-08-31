@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import gzip
 import json
 import shutil
@@ -17,7 +16,7 @@ from .forecast_core import (
     atomic_write_json,
     atomic_write_json_gz,
     iso_z,
-    manifest_lock_path,
+    ManifestLock,
     manifest_entry_horizon_hours,
     utc_now,
 )
@@ -72,10 +71,8 @@ def main() -> None:
         raise RuntimeError(f"No completed model manifests below {args.run_root}")
 
     args.target.mkdir(parents=True, exist_ok=True)
-    lock_path = manifest_lock_path(args.target)
     complete = True
-    with lock_path.open("a+") as lock_stream:
-        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+    with ManifestLock(args.target):
         target_manifest_path = args.target / "manifest.json"
         manifest = read_manifest(target_manifest_path)
         successful: list[str] = []

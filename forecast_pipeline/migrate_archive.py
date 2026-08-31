@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import gzip
 import json
 from datetime import datetime
@@ -15,7 +14,7 @@ from .forecast_core import (
     atomic_write_json,
     atomic_write_json_gz,
     iso_z,
-    manifest_lock_path,
+    ManifestLock,
     utc_now,
 )
 from .update import read_manifest, replace_archive_entry
@@ -31,8 +30,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     manifest_path = args.target / "manifest.json"
-    with manifest_lock_path(args.target).open("a+") as lock_stream:
-        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+    with ManifestLock(args.target):
         manifest = read_manifest(manifest_path)
         rebuilt = []
         for entry in manifest.get("archive", []):

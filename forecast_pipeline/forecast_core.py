@@ -15,6 +15,8 @@ import json
 import math
 import os
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,17 +38,101 @@ DOMAIN = (45.0, -15.0, 120.0, 45.0)  # west, south, east, north
 GRID_RESOLUTION = 1.0
 GRID_LONS = np.arange(DOMAIN[0], DOMAIN[2] + 0.01, GRID_RESOLUTION, dtype=np.float32)
 GRID_LATS = np.arange(DOMAIN[1], DOMAIN[3] + 0.01, GRID_RESOLUTION, dtype=np.float32)
-MANIFEST_LOCK_NAME = ".manifest-v2.lock"
+MANIFEST_LOCK_NAME = ".manifest-v3-lock"
+MANIFEST_LOCK_STALE_SECONDS = 600.0
 
 
 def manifest_lock_path(root: Path) -> Path:
-    """Return the shared lock used by every public-manifest writer.
-
-    The versioned inode lets operators recover from an orphaned NFS/NLM lock
-    without weakening mutual exclusion between live/archive publishers.
-    """
+    """Return the shared atomic-directory lock used by every manifest writer."""
 
     return root / MANIFEST_LOCK_NAME
+
+
+class ManifestLock:
+    """Cross-host manifest lock based on atomic NFS directory creation.
+
+    JASMIN GWS file locks can remain in ``nlmclnt_wait`` after a process exits.
+    Atomic directory creation avoids that kernel/NLM state. A heartbeat keeps
+    active locks fresh, while an abandoned directory is recoverable after ten
+    minutes.
+    """
+
+    def __init__(self, root: Path, *, blocking: bool = True, poll_seconds: float = 0.25):
+        self.path = manifest_lock_path(root)
+        self.blocking = blocking
+        self.poll_seconds = poll_seconds
+        self.acquired = False
+        self._stop = threading.Event()
+        self._heartbeat: threading.Thread | None = None
+
+    def _remove_if_stale(self) -> bool:
+        try:
+            age = time.time() - self.path.stat().st_mtime
+        except FileNotFoundError:
+            return True
+        if age <= MANIFEST_LOCK_STALE_SECONDS:
+            return False
+        stale = self.path.with_name(
+            f"{self.path.name}.stale-{os.getpid()}-{time.time_ns()}"
+        )
+        try:
+            self.path.rename(stale)
+            stale.rmdir()
+            return True
+        except (FileNotFoundError, FileExistsError, OSError):
+            return False
+
+    def _touch_until_released(self) -> None:
+        while not self._stop.wait(30.0):
+            try:
+                os.utime(self.path, None)
+            except FileNotFoundError:
+                return
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            try:
+                self.path.mkdir(mode=0o755)
+            except FileExistsError as error:
+                if self._remove_if_stale():
+                    continue
+                if not self.blocking:
+                    raise BlockingIOError(f"manifest lock is busy: {self.path}") from error
+                time.sleep(self.poll_seconds)
+                continue
+            break
+        self.acquired = True
+        self._stop.clear()
+        self._heartbeat = threading.Thread(
+            target=self._touch_until_released,
+            name="manifest-lock-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat.start()
+
+    def release(self) -> None:
+        if not self.acquired:
+            return
+        self._stop.set()
+        if self._heartbeat is not None:
+            self._heartbeat.join(timeout=2.0)
+        try:
+            self.path.rmdir()
+        except FileNotFoundError:
+            pass
+        self.acquired = False
+
+    def __enter__(self) -> "ManifestLock":
+        if not self.acquired:
+            self.acquire()
+        return self
+
+    def __exit__(self, unused_type: Any, unused_value: Any, unused_traceback: Any) -> None:
+        self.release()
+
+    def __del__(self) -> None:
+        self.release()
 
 
 def utc_now() -> datetime:

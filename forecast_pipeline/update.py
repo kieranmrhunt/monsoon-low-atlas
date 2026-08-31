@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import logging
 import os
@@ -21,7 +20,7 @@ from .forecast_core import (
     atomic_write_json_gz,
     cycle_id,
     iso_z,
-    manifest_lock_path,
+    ManifestLock,
     utc_now,
 )
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
@@ -157,12 +156,11 @@ def main() -> int:
         raise ValueError("the TIGGE collection is historical and requires --archive-only")
 
     args.output_root.mkdir(parents=True, exist_ok=True)
-    lock_path = manifest_lock_path(args.output_root)
-    lock_stream = lock_path.open("a+")
+    lock = ManifestLock(args.output_root, blocking=False)
     try:
-        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock.acquire()
     except BlockingIOError:
-        LOGGER.warning("Another forecast updater holds %s; exiting without overlap", lock_path)
+        LOGGER.warning("Another forecast updater holds %s; exiting without overlap", lock.path)
         return 0
 
     manifest_path = args.output_root / "manifest.json"
@@ -313,6 +311,7 @@ def main() -> int:
                 if candidate not in keep:
                     candidate.unlink()
     LOGGER.info("Manifest written to %s (%d/%d models succeeded)", manifest_path, successes, len(requested_models))
+    lock.release()
     return 0 if successes else 1
 
 
