@@ -2080,6 +2080,7 @@ class NcepAdapter(BaseAdapter):
     GFS_V16_START = datetime(2021, 3, 22, 12)
     GEFS_V12_START = datetime(2020, 9, 23, 12)
     GEFS_FOLDER_START = datetime(2018, 7, 27, 0)
+    AIGFS_V11_START = datetime(2026, 7, 27, 0)
 
     def __init__(
         self,
@@ -2091,11 +2092,10 @@ class NcepAdapter(BaseAdapter):
         if model not in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
             raise ValueError(model)
         if client is None and model in {"aigfs", "aigefs"}:
-            # NOMADS occasionally returns short-lived redirects while newly
-            # generated AI files move onto its public edge cache. Give those
-            # files a longer bounded retry window than the stable NOAA S3
-            # object stores used by GFS/GEFS.
-            client = HttpClient(retries=7)
+            # NOAA's AI products are served by NOMADS rather than its stable
+            # public S3 stores. Give short-lived edge-cache errors a longer
+            # bounded recovery window.
+            client = HttpClient(retries=12)
         super().__init__(client, workers)
         self.definition = MODEL_DEFINITIONS[model]
         self.archive_root = archive_root
@@ -2115,6 +2115,11 @@ class NcepAdapter(BaseAdapter):
             if field_group not in {"pres", "sfc"}:
                 raise ValueError("AIGFS/AIGEFS URLs require field_group='pres' or 'sfc'")
             model = self.definition.id
+            version = (
+                "v1.1"
+                if model == "aigfs" and cycle.replace(tzinfo=None) >= self.AIGFS_V11_START
+                else "v1.0"
+            )
             if model == "aigfs":
                 folder = f"{model}.{date}/{hour}/model/atmos/grib2"
             else:
@@ -2125,7 +2130,7 @@ class NcepAdapter(BaseAdapter):
                     "model/atmos/grib2"
                 )
             base = (
-                f"{self.LIVE_AI_ROOT}/{model}/prod/{folder}/"
+                f"{self.LIVE_AI_ROOT}/{model}/{version}/{folder}/"
                 f"{model}.t{hour}z.{field_group}.f{step:03d}.grib2"
             )
             return base, f"{base}.idx"
@@ -2388,7 +2393,14 @@ class NcepAdapter(BaseAdapter):
         members = self._member_ids(cycle, member_limit)
         results: list[dict[str, Any]] = []
         warnings: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(self.workers, len(members))) as executor:
+        # NOMADS' AI-product edge is markedly less tolerant of parallel
+        # byte-range traffic than NOAA's GFS/GEFS object stores. Four members
+        # still overlap network latency while avoiding the redirect/throttle
+        # storm seen with eight simultaneous AIGEFS members.
+        maximum_workers = min(self.workers, len(members))
+        if self.definition.id == "aigefs":
+            maximum_workers = min(maximum_workers, 4)
+        with ThreadPoolExecutor(max_workers=maximum_workers) as executor:
             future_map = {executor.submit(self._load_member, cycle, steps, member): member for member in members}
             for future in as_completed(future_map):
                 member = future_map[future]

@@ -407,20 +407,26 @@ class ForecastPipelineContractTests(unittest.TestCase):
         aigfs_url, unused = aigfs._urls(
             datetime(2026, 8, 31, 6, tzinfo=UTC), 384, "det", "pres"
         )
+        self.assertIn("/aigfs/v1.1/", aigfs_url)
         self.assertTrue(
             aigfs_url.endswith(
                 "/aigfs.20260831/06/model/atmos/grib2/aigfs.t06z.pres.f384.grib2"
             )
         )
+        old_aigfs_url, unused = aigfs._urls(
+            datetime(2026, 7, 26, 18, tzinfo=UTC), 384, "det", "pres"
+        )
+        self.assertIn("/aigfs/v1.0/", old_aigfs_url)
 
-        self.assertEqual(NcepAdapter("aigfs").client.retries, 7)
-        self.assertEqual(NcepAdapter("aigefs").client.retries, 7)
+        self.assertEqual(NcepAdapter("aigfs").client.retries, 12)
+        self.assertEqual(NcepAdapter("aigefs").client.retries, 12)
         self.assertEqual(NcepAdapter("gfs").client.retries, 4)
 
         aigefs = NcepAdapter("aigefs", client=RecordingClient())
         aigefs_url, unused = aigefs._urls(
             datetime(2026, 8, 31, tzinfo=UTC), 6, "p01", "sfc"
         )
+        self.assertIn("/aigefs/v1.0/", aigefs_url)
         self.assertIn("/mem001/model/atmos/grib2/", aigefs_url)
         self.assertTrue(aigefs_url.endswith("aigefs.t00z.sfc.f006.grib2"))
         self.assertEqual(len(aigefs._member_ids(datetime(2026, 8, 31, tzinfo=UTC), None)), 31)
