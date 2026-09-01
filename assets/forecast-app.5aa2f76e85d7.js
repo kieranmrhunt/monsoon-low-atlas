@@ -26,8 +26,9 @@
 	const state = {
 		mode: 'latest', manifest: null, payload: null, geo: null, boundary: null,
 		selectedModels: new Set(), latestPayloads: new Map(), modelLoads: new Map(),
-		fullPayloads: new Map(), fullLoads: new Map(), archiveEntriesCache: null,
+		fullPayloads: new Map(), fullLoads: new Map(), fullFailures: new Set(), archiveEntriesCache: null,
 		archiveColourIndexes: new Map(), archiveManifestLoaded: false, archiveManifestLoad: null,
+		systemGroupsCache: null, systemGroupsCacheKey: '',
 		selectedSystem: null, initialization: 'latest', initializationCount: 1, archiveDate: '', archiveHour: '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
 		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: false, showEra5: true,
@@ -37,6 +38,7 @@
 		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null
 	};
 	const meanTrackCaches = new WeakMap();
+	const systemTimelineCaches = new WeakMap();
 	const analysisCentreCaches = new WeakMap();
 	const analysisHistoryCaches = new WeakMap();
 
@@ -903,6 +905,7 @@
 	async function initialise(force) {
 		if (state.loading) return;
 		if (state.initialised && !force) { resizeAndRender(); return; }
+		if (force) state.fullFailures.clear();
 		state.loading = true;
 		notice('Opening forecast manifest and map geography…', '', false);
 		try {
@@ -1241,6 +1244,119 @@
 		return 6371.0088 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(Math.max(0, 1 - value)));
 	}
 
+	function systemItemKey(item) {
+		return `${item.runKey}:${item.system.id}`;
+	}
+
+	function systemTimeline(item) {
+		let cache = systemTimelineCaches.get(item.payload);
+		if (!cache) { cache = new Map(); systemTimelineCaches.set(item.payload, cache); }
+		if (cache.has(item.system.id)) return cache.get(item.system.id);
+		const cycle = new Date(item.payload.cycle_utc).getTime();
+		const points = meanTrack(item.payload, item.system).map(point => ({
+			time: cycle + Number(point[0]) * 3600000,
+			step: Number(point[0]), longitude: Number(point[1]), latitude: Number(point[2])
+		}));
+		const output = {points, byTime: new Map(points.map(point => [point.time, point]))};
+		cache.set(item.system.id, output);
+		return output;
+	}
+
+	function systemMatchScore(first, second) {
+		const firstTimeline = systemTimeline(first), secondTimeline = systemTimeline(second);
+		const shorter = firstTimeline.points.length <= secondTimeline.points.length ? firstTimeline : secondTimeline;
+		const longer = shorter === firstTimeline ? secondTimeline : firstTimeline;
+		const distances = [];
+		for (const point of shorter.points) {
+			if (point.time % (6 * 3600000) !== 0) continue;
+			const counterpart = longer.byTime.get(point.time);
+			if (counterpart) distances.push(haversineKm(point.longitude, point.latitude, counterpart.longitude, counterpart.latitude));
+		}
+		if (distances.length < 2) return Infinity;
+		distances.sort((a, b) => a - b);
+		const median = distances[Math.floor(distances.length / 2)];
+		const mean = distances.reduce((sum, value) => sum + value, 0) / distances.length;
+		const available = Math.max(2, Math.ceil(shorter.points.length / 6));
+		const coveragePenalty = 140 * (1 - Math.min(1, distances.length / available));
+		return .72 * median + .28 * mean + coveragePenalty;
+	}
+
+	function forecastSystemGroups() {
+		const current = currentValidTime();
+		const items = displayEntries().flatMap(entry => (entry.payload.systems || []).map(system => ({...entry, system})));
+		const cacheKey = items.map(item => `${systemItemKey(item)}:${item.payload.payload_variant || 'full'}`).sort().join('|');
+		let groups = state.systemGroupsCacheKey === cacheKey ? state.systemGroupsCache : null;
+		if (!groups) {
+			items.sort((a, b) => Number(b.system.member_count || 1) - Number(a.system.member_count || 1) || systemItemKey(a).localeCompare(systemItemKey(b)));
+			groups = [];
+			for (const item of items) {
+				let best = null;
+				for (const group of groups) {
+					if (group.items.some(member => member.runKey === item.runKey)) continue;
+					const scores = group.items.map(member => systemMatchScore(item, member)).filter(Number.isFinite).sort((a, b) => a - b);
+					if (!scores.length) continue;
+					const score = scores[Math.floor(scores.length / 2)];
+					if (score <= 550 && (!best || score < best.score)) best = {group, score};
+				}
+				if (best) best.group.items.push(item);
+				else groups.push({items: [item]});
+			}
+			state.systemGroupsCacheKey = cacheKey;
+			state.systemGroupsCache = groups;
+		}
+		for (const group of groups) {
+			group.items.sort((a, b) => a.model.label.localeCompare(b.model.label) || String(b.payload.cycle).localeCompare(String(a.payload.cycle)));
+			group.key = group.items.map(systemItemKey).sort().join('|');
+			group.active = group.items.filter(item => {
+				if (!Number.isFinite(current)) return false;
+				const timeline = systemTimeline(item);
+				return timeline.points.some(point => Math.abs(point.time - current) <= 1.1 * 3600000);
+			}).length;
+			group.models = new Set(group.items.map(item => item.model.id)).size;
+			group.members = group.items.reduce((sum, item) => sum + Number(item.system.member_count || 1), 0);
+		}
+		return groups.sort((a, b) => b.active - a.active || b.models - a.models || b.items.length - a.items.length || b.members - a.members || a.key.localeCompare(b.key));
+	}
+
+	function selectedForecastGroup(groups) {
+		const values = groups || forecastSystemGroups();
+		let group = state.selectedSystem
+			? values.find(candidate => candidate.items.some(item => item.runKey === state.selectedSystem.runKey && item.system.id === state.selectedSystem.systemId))
+			: null;
+		if (!group) {
+			group = values[0] || null;
+			const anchor = group && (group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0]);
+			state.selectedSystem = anchor ? {runKey: anchor.runKey, systemId: anchor.system.id} : null;
+		}
+		return group;
+	}
+
+	function groupReference(group) {
+		const current = currentValidTime();
+		const nearby = [];
+		for (const item of group.items) {
+			const points = systemTimeline(item).points;
+			let point = points[0];
+			for (const candidate of points) if (!point || Math.abs(candidate.time - current) < Math.abs(point.time - current)) point = candidate;
+			if (point && (!Number.isFinite(current) || Math.abs(point.time - current) <= 12 * 3600000)) nearby.push(point);
+		}
+		const points = nearby.length ? nearby : group.items.map(item => systemTimeline(item).points[0]).filter(Boolean);
+		return points.length ? {
+			longitude: points.reduce((sum, point) => sum + point.longitude, 0) / points.length,
+			latitude: points.reduce((sum, point) => sum + point.latitude, 0) / points.length,
+			time: Math.min(...points.map(point => point.time))
+		} : {longitude: NaN, latitude: NaN, time: NaN};
+	}
+
+	function groupLabel(group) {
+		const reference = groupReference(group);
+		const meaningful = group.items.map(item => String(item.system.label || '')).find(label => label && !/^Forecast system \d+$/i.test(label) && !/^Disturbance \d+$/i.test(label));
+		const position = Number.isFinite(reference.longitude) && Number.isFinite(reference.latitude)
+			? `${Math.abs(reference.latitude).toFixed(1)}°${reference.latitude < 0 ? 'S' : 'N'}, ${Math.abs(reference.longitude).toFixed(1)}°${reference.longitude < 0 ? 'W' : 'E'}`
+			: 'Forecast system';
+		return `${meaningful || position} · ${group.items.length} run${group.items.length === 1 ? '' : 's'}`;
+	}
+
 	function historyEntries(modelId, payload) {
 		if (!state.manifest || !payload) return [];
 		const current = new Date(payload.cycle_utc).getTime();
@@ -1367,15 +1483,17 @@
 		return modelRunColour(entry.model.id, entry.model.colour || entry.payload.model.colour, index);
 	}
 
-	function drawTracks() {
+	function drawTracks(systemGroups) {
 		const target = canvasContext('#mlaForecastTracks');
+		const selectedGroup = selectedForecastGroup(systemGroups);
+		const selectedKeys = new Set(selectedGroup ? selectedGroup.items.map(systemItemKey) : []);
 		for (const entry of displayEntries()) {
 			const {model, payload, runKey} = entry;
 			const current = stepForPayload(payload);
 			const colour = runColour(entry);
 			for (const system of payload.systems || []) {
 				const tracks = tracksForSystem(payload, system);
-				const selected = state.selectedSystem && state.selectedSystem.runKey === runKey && state.selectedSystem.systemId === system.id;
+				const selected = selectedKeys.has(`${runKey}:${system.id}`);
 				if (state.showMembers && payload.model.kind === 'ensemble') {
 					for (const track of tracks) drawPath(target.context, target.projection, track.points, colour, 1, selected ? .48 : .24, current, true);
 				}
@@ -1412,14 +1530,6 @@
 		drawAnnotations(target);
 	}
 
-	function selectedForecast() {
-		if (!state.selectedSystem) return null;
-		const entry = displayEntries().find(item => item.runKey === state.selectedSystem.runKey);
-		if (!entry) return null;
-		const system = (entry.payload.systems || []).find(item => item.id === state.selectedSystem.systemId);
-		return system ? {...entry, system} : null;
-	}
-
 	function evolutionCanvasContext() {
 		const canvas = $('#mlaForecastEvolution');
 		const rectangle = canvas.getBoundingClientRect();
@@ -1446,6 +1556,7 @@
 	}
 
 	async function forecastEvolutionSeries(item) {
+		const cycle = new Date(item.payload.cycle_utc).getTime();
 		const tracks = tracksForSystem(item.payload, item.system);
 		const byStep = new Map();
 		for (const track of tracks) for (const point of track.points || []) {
@@ -1455,6 +1566,7 @@
 		}
 		let vorticity = [...byStep.entries()].sort((a, b) => a[0] - b[0]).map(([step, points]) => ({
 			step,
+			time: cycle + step * 3600000,
 			value: points.filter(point => point[7] !== 'i').reduce((sum, point) => sum + Number(point[3] || 0), 0) / Math.max(1, points.filter(point => point[7] !== 'i').length),
 			observed: points.some(point => point[7] !== 'i')
 		})).filter(point => point.observed);
@@ -1474,10 +1586,12 @@
 			}).filter(Boolean);
 			if (vorticityRecord) vorticity = native.map(point => ({
 				step: point.step,
+				time: cycle + point.step * 3600000,
 				value: sampledWeatherValue(vorticityRecord, item.payload, point.frame, point.longitude, point.latitude)
 			})).filter(point => Number.isFinite(point.value));
 			if (precipitationRecord) precipitation = native.map(point => ({
 				step: point.step,
+				time: cycle + point.step * 3600000,
 				value: sampledWeatherValue(precipitationRecord, item.payload, point.frame, point.longitude, point.latitude)
 			})).filter(point => Number.isFinite(point.value));
 		}
@@ -1488,70 +1602,123 @@
 		return Number(value).toLocaleString('en-GB', {maximumFractionDigits: digits, minimumFractionDigits: digits});
 	}
 
-	async function drawForecastEvolution() {
+	function compactCycleLabel(value) {
+		const date = new Date(value);
+		if (!Number.isFinite(date.getTime())) return '';
+		const day = new Intl.DateTimeFormat('en-GB', {timeZone: 'UTC', day: '2-digit', month: 'short'}).format(date);
+		return `${day} ${String(date.getUTCHours()).padStart(2, '0')}Z`;
+	}
+
+	function evolutionRunLabel(item, group) {
+		const duplicateModel = group.items.filter(member => member.model.id === item.model.id).length > 1;
+		return duplicateModel ? `${item.model.label} · ${compactCycleLabel(item.payload.cycle_utc)}` : item.model.label;
+	}
+
+	function updateEvolutionControls(groups, group) {
+		const select = $('#mlaForecastEvolutionSystem');
+		select.innerHTML = groups.map(candidate => `<option value="${esc(candidate.key)}">${esc(groupLabel(candidate))}</option>`).join('');
+		select.value = group.key;
+		select.disabled = groups.length < 2;
+		$('#mlaForecastEvolutionLegend').innerHTML = group.items.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(evolutionRunLabel(item, group))}</span>`).join('');
+	}
+
+	function drawEvolutionLine(context, points, x, y, colour, dash, markers) {
+		if (!points.length) return;
+		context.save();
+		context.beginPath();
+		points.forEach((point, index) => { if (!index) context.moveTo(x(point.time), y(point.value)); else context.lineTo(x(point.time), y(point.value)); });
+		context.strokeStyle = colour; context.lineWidth = 2; context.lineJoin = 'round'; context.lineCap = 'round'; context.setLineDash(dash); context.stroke();
+		if (markers && points.length > 1) {
+			const stride = Math.max(1, Math.ceil(points.length / 14));
+			context.setLineDash([]); context.fillStyle = '#fffdf6'; context.strokeStyle = colour; context.lineWidth = 1.3;
+			for (let index = 0; index < points.length; index += stride) {
+				context.beginPath(); context.arc(x(points[index].time), y(points[index].value), 2.2, 0, Math.PI * 2); context.fill(); context.stroke();
+			}
+		}
+		context.restore();
+	}
+
+	function requestEvolutionWeather(group) {
+		for (const item of group.items) {
+			if (!weatherFields(item).has('precipitation') || item.payload.weather || state.fullLoads.has(item.runKey) || state.fullFailures.has(item.runKey)) continue;
+			ensureFullPayload(item.runKey).then(() => scheduleRender()).catch(error => {
+				state.fullFailures.add(item.runKey);
+				console.warn(`Forecast evolution weather unavailable for ${item.runKey}`, error);
+				scheduleRender();
+			});
+		}
+	}
+
+	async function drawForecastEvolution(systemGroups, renderSerial) {
 		const section = $('#mlaForecastEvolutionPanel');
-		const item = selectedForecast();
-		section.hidden = !item;
-		if (!item) return;
+		const group = selectedForecastGroup(systemGroups);
+		section.hidden = !group;
+		if (!group) return;
+		updateEvolutionControls(systemGroups, group);
 		const {canvas, context, width, height} = evolutionCanvasContext();
-		const series = await forecastEvolutionSeries(item);
-		if (!series.vorticity.length) return;
+		const series = (await Promise.all(group.items.map(async item => ({item, values: await forecastEvolutionSeries(item)}))))
+			.filter(item => item.values.vorticity.length || item.values.precipitation.length);
+		if (renderSerial !== state.renderSerial) return;
+		if (!series.length) return;
 		const dark = getComputedStyle(root).getPropertyValue('--mla-ink').trim() || '#28211a';
 		const muted = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63';
 		const line = getComputedStyle(root).getPropertyValue('--mla-line').trim() || '#d8d0c4';
 		const compact = width < 560;
-		const left = 55, right = 58, top = compact ? 55 : 38, bottom = 43;
-		const plotWidth = Math.max(1, width - left - right), plotHeight = Math.max(1, height - top - bottom);
-		const first = Math.min(...series.vorticity.map(point => point.step));
-		const last = Math.max(...series.vorticity.map(point => point.step));
-		const span = Math.max(1, last - first);
-		const x = step => left + (Number(step) - first) / span * plotWidth;
-		const vortMaximum = Math.max(1, ...series.vorticity.map(point => point.value)) * 1.08;
-		const rainMaximum = Math.max(1, ...series.precipitation.map(point => point.value)) * 1.08;
-		const yVort = value => top + plotHeight * (1 - Number(value) / vortMaximum);
-		const yRain = value => top + plotHeight * (1 - Number(value) / rainMaximum);
+		const left = compact ? 57 : 64, right = 18, top = 13, bottom = 44, gap = 39;
+		const plotWidth = Math.max(1, width - left - right);
+		const panelHeight = Math.max(58, (height - top - bottom - gap) / 2);
+		const vortTop = top, rainTop = top + panelHeight + gap;
+		const times = series.flatMap(item => [...item.values.vorticity, ...item.values.precipitation]).map(point => point.time).filter(Number.isFinite);
+		const first = Math.min(...times), last = Math.max(...times), span = Math.max(3600000, last - first);
+		const x = time => left + (Number(time) - first) / span * plotWidth;
+		const vortMaximum = Math.max(1, ...series.flatMap(item => item.values.vorticity.map(point => point.value))) * 1.08;
+		const rainMaximum = Math.max(1, ...series.flatMap(item => item.values.precipitation.map(point => point.value))) * 1.08;
+		const yVort = value => vortTop + panelHeight * (1 - Number(value) / vortMaximum);
+		const yRain = value => rainTop + panelHeight * (1 - Number(value) / rainMaximum);
 		context.font = '12px "effra", Effra, Arial, sans-serif';
 		context.strokeStyle = line; context.fillStyle = muted; context.lineWidth = 1;
 		context.textBaseline = 'middle';
-		for (let index = 0; index <= 4; index++) {
-			const fraction = index / 4, yy = top + plotHeight * (1 - fraction);
-			context.beginPath(); context.moveTo(left, yy); context.lineTo(width - right, yy); context.stroke();
-			context.textAlign = 'right'; context.fillText(chartNumber(vortMaximum * fraction, 1), left - 8, yy);
-			context.textAlign = 'left'; context.fillText(chartNumber(rainMaximum * fraction, 0), width - right + 8, yy);
-		}
-		context.textBaseline = 'top'; context.textAlign = 'center';
-		for (let index = 0; index <= 5; index++) {
-			const step = first + span * index / 5;
-			context.fillText(`+${Math.round(step)} h`, x(step), height - bottom + 10);
-		}
-		if (series.precipitation.length) {
-			const barWidth = Math.max(2, Math.min(13, plotWidth / Math.max(1, series.precipitation.length) * .72));
-			context.fillStyle = 'rgba(213, 68, 128, .48)';
-			for (const point of series.precipitation) {
-				const yy = yRain(point.value);
-				context.fillRect(x(point.step) - barWidth / 2, yy, barWidth, top + plotHeight - yy);
+		for (const [panelTop, maximum, digits] of [[vortTop, vortMaximum, 1], [rainTop, rainMaximum, 0]]) {
+			for (let index = 0; index <= 3; index++) {
+				const fraction = index / 3, yy = panelTop + panelHeight * (1 - fraction);
+				context.beginPath(); context.moveTo(left, yy); context.lineTo(width - right, yy); context.stroke();
+				context.textAlign = 'right'; context.fillText(chartNumber(maximum * fraction, digits), left - 8, yy);
 			}
 		}
-		context.beginPath();
-		series.vorticity.forEach((point, index) => { if (!index) context.moveTo(x(point.step), yVort(point.value)); else context.lineTo(x(point.step), yVort(point.value)); });
-		context.strokeStyle = '#1f6fb2'; context.lineWidth = 2.3; context.lineJoin = 'round'; context.lineCap = 'round'; context.stroke();
-		const current = stepForPayload(item.payload);
+		const ticks = compact ? 3 : 5;
+		context.textAlign = 'center';
+		for (let index = 0; index <= ticks; index++) {
+			const time = first + span * index / ticks, xx = x(time), date = new Date(time);
+			context.strokeStyle = line; context.beginPath(); context.moveTo(xx, vortTop); context.lineTo(xx, rainTop + panelHeight); context.stroke();
+			context.fillStyle = muted; context.textBaseline = 'top';
+			context.fillText(new Intl.DateTimeFormat('en-GB', {timeZone: 'UTC', day: '2-digit', month: 'short'}).format(date), xx, rainTop + panelHeight + 8);
+			context.fillText(`${String(date.getUTCHours()).padStart(2, '0')}Z`, xx, rainTop + panelHeight + 23);
+		}
+		const dashPatterns = [[], [8, 3], [2, 3], [11, 3, 2, 3], [5, 3]];
+		series.forEach((record, index) => {
+			const colour = runColour(record.item), dash = dashPatterns[index % dashPatterns.length];
+			drawEvolutionLine(context, record.values.vorticity, x, yVort, colour, dash, false);
+			drawEvolutionLine(context, record.values.precipitation, x, yRain, colour, dash, true);
+		});
+		if (!series.some(record => record.values.precipitation.length)) {
+			context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'middle';
+			context.fillText('Precipitation unavailable for these track-only runs', left + plotWidth / 2, rainTop + panelHeight / 2);
+		}
+		const current = currentValidTime();
 		if (current >= first && current <= last) {
 			context.save(); context.setLineDash([5, 4]); context.strokeStyle = dark; context.lineWidth = 1.25;
-			context.beginPath(); context.moveTo(x(current), top); context.lineTo(x(current), top + plotHeight); context.stroke(); context.restore();
+			context.beginPath(); context.moveTo(x(current), vortTop); context.lineTo(x(current), rainTop + panelHeight); context.stroke(); context.restore();
 		}
-		context.textBaseline = 'middle'; context.textAlign = 'left'; context.fillStyle = '#1f6fb2';
-		context.fillRect(left, 13, 20, 3); context.fillStyle = dark; context.fillText('Vorticity (10⁻⁵ s⁻¹)', left + 27, 15);
-		const rainLegendX = compact ? left : left + 176, rainLegendY = compact ? 31 : 15;
-		context.fillStyle = 'rgba(213, 68, 128, .62)'; context.fillRect(rainLegendX, rainLegendY - 6, 12, 11); context.fillStyle = dark; context.fillText('Trailing 24 h precipitation (mm)', rainLegendX + 18, rainLegendY);
-		canvas._forecastTimeline = {left, right: width - right, first, last, cycle: new Date(item.payload.cycle_utc).getTime()};
+		context.save(); context.translate(15, vortTop + panelHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = dark; context.fillText('850-hPa vorticity (10⁻⁵ s⁻¹)', 0, 0); context.restore();
+		context.save(); context.translate(15, rainTop + panelHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = dark; context.fillText('Trailing 24 h rain (mm)', 0, 0); context.restore();
+		canvas._forecastTimeline = {left, right: width - right, first, last};
 		const status = $('#mlaForecastEvolutionStatus');
-		const prefix = `${item.model.label} · ${item.system.label || item.system.id}`;
-		status.textContent = series.precipitation.length
-			? `${prefix} · track-centred ${item.payload.model.kind === 'ensemble' ? 'ensemble-mean' : 'deterministic'} weather.`
-			: state.fullLoads.has(item.runKey)
-				? `${prefix} · loading track-centred precipitation…`
-				: `${prefix} · precipitation is unavailable for this track-only archive.`;
+		const rainAvailable = group.items.filter(item => weatherFields(item).has('precipitation')).length;
+		const rainLoaded = series.filter(record => record.values.precipitation.length).length;
+		const rainLoading = group.items.filter(item => state.fullLoads.has(item.runKey)).length;
+		status.textContent = `${group.items.length} matched run${group.items.length === 1 ? '' : 's'}`
+			+ (rainLoading ? ` · loading precipitation for ${rainLoading}` : rainAvailable ? ` · precipitation ${rainLoaded}/${rainAvailable}` : ' · track-only archive');
+		requestEvolutionWeather(group);
 	}
 
 	async function render() {
@@ -1560,8 +1727,9 @@
 		$('#mlaForecastWeatherKey').hidden = true;
 		await drawWeather();
 		if (serial !== state.renderSerial) return;
-		drawTracks();
-		await drawForecastEvolution();
+		const systemGroups = forecastSystemGroups();
+		drawTracks(systemGroups);
+		await drawForecastEvolution(systemGroups, serial);
 		if (serial !== state.renderSerial) return;
 		updateTimeLabel();
 		const entries = displayEntries();
@@ -1619,13 +1787,6 @@
 		if (best && best.distance <= (event.pointerType === 'touch' ? 25 : 18)) {
 			state.selectedSystem = {runKey: best.runKey, systemId: best.system.id};
 			render();
-			const selected = displayEntries().find(item => item.runKey === best.runKey);
-			if (selected && weatherFields(selected).has('precipitation') && !selected.payload.weather) {
-				ensureFullPayload(best.runKey).then(() => render()).catch(error => {
-					console.warn('Forecast evolution weather unavailable', error);
-					render();
-				});
-			}
 		}
 	}
 
@@ -1637,8 +1798,7 @@
 			if (!timeline || !state.timelineTimes.length) return;
 			const rectangle = canvas.getBoundingClientRect();
 			const local = clamp(event.clientX - rectangle.left, timeline.left, timeline.right);
-			const step = timeline.first + (local - timeline.left) / Math.max(1, timeline.right - timeline.left) * (timeline.last - timeline.first);
-			const target = timeline.cycle + step * 3600000;
+			const target = timeline.first + (local - timeline.left) / Math.max(1, timeline.right - timeline.left) * (timeline.last - timeline.first);
 			let nearest = 0;
 			for (let index = 1; index < state.timelineTimes.length; index++) if (Math.abs(state.timelineTimes[index] - target) < Math.abs(state.timelineTimes[nearest] - target)) nearest = index;
 			state.leadIndex = nearest;
@@ -1772,6 +1932,12 @@
 	$('#mlaForecastArchiveWeatherModel').addEventListener('change', async event => { state.weatherModel = event.target.value; await loadWeatherForSelection(); await render(); });
 	$('#mlaForecastMembers').addEventListener('change', event => { setShowMembers(event.target.checked); render(); });
 	$('#mlaForecastArchiveMembers').addEventListener('change', event => { setShowMembers(event.target.checked); render(); });
+	$('#mlaForecastEvolutionSystem').addEventListener('change', event => {
+		const group = forecastSystemGroups().find(candidate => candidate.key === event.target.value);
+		const anchor = group && (group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0]);
+		if (anchor) state.selectedSystem = {runKey: anchor.runKey, systemId: anchor.system.id};
+		render();
+	});
 	$('#mlaForecastLead').addEventListener('input', event => { state.leadIndex = Number(event.target.value); render(); });
 	$('#mlaForecastPrevious').addEventListener('click', () => { state.leadIndex = Math.max(0, state.leadIndex - 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
 	$('#mlaForecastNext').addEventListener('click', () => { if (!state.timelineTimes.length) return; state.leadIndex = Math.min(state.timelineTimes.length - 1, state.leadIndex + 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
