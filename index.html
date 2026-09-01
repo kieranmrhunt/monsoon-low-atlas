@@ -574,9 +574,9 @@
 .mla-forecast-evolution-head { display: flex; justify-content: space-between; gap: 14px; align-items: end; margin-bottom: 9px; }
 .mla-forecast-evolution h3 { margin: 0; font-size: 17px; }
 .mla-forecast-evolution-system { width: min(340px, 46%); }
-.mla-forecast-evolution-legend { display: flex; flex-wrap: wrap; gap: 5px 14px; min-height: 20px; margin-bottom: 3px; color: var(--mla-muted); font-size: 11px; }
-.mla-forecast-evolution-legend span { display: inline-flex; gap: 6px; align-items: center; }
-.mla-forecast-evolution-legend i { display: inline-block; width: 20px; height: 0; border-top: 2px solid var(--run-colour); }
+.mla-forecast-evolution-legend { display: flex; flex-wrap: wrap; gap: 4px 13px; min-height: 18px; color: var(--mla-muted); font-size: 11px; }
+.mla-forecast-evolution-legend span { display: inline-flex; gap: 5px; align-items: center; }
+.mla-forecast-evolution-legend i { display: inline-block; width: 18px; height: 0; border-top: 3px solid var(--run-colour); border-radius: 999px; }
 .mla-forecast-evolution canvas { display: block; width: 100%; height: 340px; cursor: crosshair; touch-action: none; }
 .mla-forecast-evolution .mla-chart-readout { min-height: 1.2em; margin: 5px 0 0; color: var(--mla-muted); font-size: 11px; }
 
@@ -851,7 +851,7 @@
 				<label class="mla-field" for="mlaForecastArchiveHour"><span class="mla-label">Valid hour (UTC)</span><select class="mla-select" id="mlaForecastArchiveHour"><option value="00">00 UTC</option><option value="06">06 UTC</option><option value="12">12 UTC</option><option value="18">18 UTC</option></select></label>
 				<label class="mla-field" id="mlaForecastArchiveWeatherField" for="mlaForecastArchiveWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastArchiveWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 				<label class="mla-field" id="mlaForecastArchiveWeatherSourceField" for="mlaForecastArchiveWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastArchiveWeatherModel"><option value="">Select a run below</option></select></label>
-				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show individual ensemble members</label>
+				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show ensemble members</label>
 				<section class="mla-forecast-archive-calendar" id="mlaForecastArchiveCalendar" aria-label="Processed forecast availability by date and UTC hour">
 					<div class="mla-forecast-calendar-head"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarPrevious" type="button" aria-label="Previous available month">‹</button><label class="mla-field" for="mlaForecastCalendarMonth"><span class="mla-label">Available month</span><select class="mla-select" id="mlaForecastCalendarMonth"></select></label><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarNext" type="button" aria-label="Next available month">›</button><p>Bars show availability at 00, 06, 12 and 18 UTC; stronger bars mean more model–lead choices.</p></div>
 					<div class="mla-forecast-calendar-weekdays" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
@@ -864,11 +864,11 @@
 					<div class="mla-forecast-controls" id="mlaForecastLiveControls">
 						<fieldset class="mla-forecast-model-picker"><legend>Models</legend><div class="mla-forecast-model-checks" id="mlaForecastModelChecks"></div></fieldset>
 						<div class="mla-forecast-options">
-							<label class="mla-field" for="mlaForecastInitialization"><span class="mla-label">Forecast initialization</span><select class="mla-select" id="mlaForecastInitialization"><option value="latest">Latest available</option></select></label>
-							<label class="mla-field" for="mlaForecastRunCount"><span class="mla-label">One-model initializations</span><select class="mla-select" id="mlaForecastRunCount" title="Select exactly one model to compare neighbouring initializations"><option value="1">Current only</option></select></label>
+							<label class="mla-field" for="mlaForecastInitialization"><span class="mla-label">Initialization</span><select class="mla-select" id="mlaForecastInitialization"><option value="latest">Latest available</option></select></label>
+							<label class="mla-field" for="mlaForecastRunCount"><span class="mla-label">Compare cycles</span><select class="mla-select" id="mlaForecastRunCount" title="Select exactly one model to compare neighbouring initializations"><option value="1">Current only</option></select></label>
 							<label class="mla-field" for="mlaForecastWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 							<label class="mla-field" for="mlaForecastWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastWeatherModel"></select></label>
-							<label class="mla-map-toggle" for="mlaForecastMembers"><input id="mlaForecastMembers" type="checkbox"> Show individual ensemble members</label>
+							<label class="mla-map-toggle" for="mlaForecastMembers"><input id="mlaForecastMembers" type="checkbox"> Show ensemble members</label>
 						</div>
 					</div>
 					<div class="mla-forecast-map-stack" id="mlaForecastMapStack">
@@ -884,7 +884,7 @@
 						<output class="mla-forecast-time" id="mlaForecastTime">—</output>
 					</div>
 					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-key mla-forecast-era5-key" id="mlaForecastEra5Key" hidden><i aria-hidden="true"></i><span>ERA5 v5.6 catalogue track</span></span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span><div class="mla-forecast-run-key" id="mlaForecastRunKey" aria-label="Forecast track colours" hidden></div></div>
-					<section class="mla-forecast-evolution" id="mlaForecastEvolutionPanel" hidden><div class="mla-forecast-evolution-head"><h3>Forecast-system evolution</h3><label class="mla-field mla-forecast-evolution-system"><span class="mla-label">Storm</span><select class="mla-select" id="mlaForecastEvolutionSystem" aria-label="Forecast-system group"></select></label></div><div class="mla-forecast-evolution-legend" id="mlaForecastEvolutionLegend" aria-label="Model and initialization colours"></div><canvas id="mlaForecastEvolution" role="img" tabindex="0" aria-label="Vorticity and trailing 24-hour precipitation across matched model runs for the selected forecast system; drag to change valid time"></canvas><p class="mla-chart-readout" id="mlaForecastEvolutionStatus" role="status" aria-live="polite"></p></section>
+					<section class="mla-forecast-evolution" id="mlaForecastEvolutionPanel" hidden><div class="mla-forecast-evolution-head"><h3>Storm evolution</h3><label class="mla-field mla-forecast-evolution-system"><span class="mla-label">Storm</span><select class="mla-select" id="mlaForecastEvolutionSystem" aria-label="Forecast-system group"></select></label></div><div class="mla-forecast-evolution-legend" id="mlaForecastEvolutionLegend" aria-label="Model and initialization colours"></div><canvas id="mlaForecastEvolution" role="img" tabindex="0" aria-label="Member and mean vorticity with mean trailing 24-hour precipitation across matched model runs; drag to change valid time"></canvas><p class="mla-chart-readout" id="mlaForecastEvolutionStatus" role="status" aria-live="polite"></p></section>
 				</section>
 				<aside class="mla-card mla-forecast-archive-sidebar" id="mlaForecastArchiveSidebar" hidden><h3 class="mla-sr-only">Forecast model and lead-time selection</h3><div class="mla-forecast-archive-results" id="mlaForecastArchiveResults" aria-live="polite"></div></aside>
 			</div>
@@ -1016,7 +1016,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.d65121672ad2.js"></script>
-<script src="assets/forecast-app.5aa2f76e85d7.js"></script>
+<script src="assets/forecast-app.410d667a0e3e.js"></script>
 
 </body>
 </html>

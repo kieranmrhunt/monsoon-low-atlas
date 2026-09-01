@@ -9,20 +9,26 @@
 	const DOMAIN = {west: 45, east: 120, south: -15, north: 45};
 	const DEFAULT_MAP = {zoom: 1.25, longitude: 82.5, latitude: 17};
 	const MODEL_TRACK_COLOURS = {
-		gfs: '#dc0000', gefs: '#00963c', ifs: '#0046dc', 'ifs-ens': '#ff8c00',
-		aigfs: '#00a6a6', aigefs: '#c51b8a',
-		'graphcast-noaa': '#7a3db8', 'graphcast-ifs-noaa': '#00a572',
-		aifs: '#be00b4', 'aifs-ens': '#00bec8', 'ukmo-global': '#c2185b', 'mogreps-g': '#00a7a5',
-		'gefs-control': '#6a5acd', 'tigge-ecmwf': '#73539b',
-		'tigge-bom': '#d55e00', 'tigge-cma': '#e69f00', 'tigge-cptec': '#a65628',
-		'tigge-dwd': '#009e73', 'tigge-eccc': '#56b4e9', 'tigge-imd': '#cc79a7',
-		'tigge-jma': '#0072b2', 'tigge-kma': '#00a087', 'tigge-mf': '#8c6d00',
-		'tigge-ncep': '#332288', 'tigge-ncmrwf': '#882255', 'tigge-ukmo': '#44aa99'
+		gfs: '#e00013', gefs: '#00c200', ifs: '#317ae0', 'ifs-ens': '#e0ae16',
+		aigfs: '#00cee0', aigefs: '#e000ce',
+		'graphcast-noaa': '#4916e0', 'graphcast-ifs-noaa': '#854200',
+		aifs: '#c24483', 'aifs-ens': '#00854d', 'ukmo-global': '#e000ce', 'mogreps-g': '#4d4d4d',
+		'gefs-control': '#00854d', 'tigge-ecmwf': '#317ae0',
+		'tigge-bom': '#e0ae16', 'tigge-cma': '#00cee0', 'tigge-cptec': '#854200',
+		'tigge-dwd': '#00c200', 'tigge-eccc': '#4916e0', 'tigge-imd': '#e000ce',
+		'tigge-jma': '#c24483', 'tigge-kma': '#00854d', 'tigge-mf': '#9a9e00',
+		'tigge-ncep': '#e00013', 'tigge-ncmrwf': '#ff7f00', 'tigge-ukmo': '#4d4d4d'
 	};
-	const RUN_COLOUR_VARIANTS = [
-		[0, 0, 0], [3, 18, -2], [-3, -14, 2], [6, 29, -5],
-		[-6, -24, 4], [9, 10, -1], [-9, -8, 3], [12, 24, -4]
+	const DISTINCT_RUN_COLOURS = [
+		'#e00013', '#00c200', '#317ae0', '#e0ae16', '#00cee0', '#e000ce',
+		'#4916e0', '#854200', '#c24483', '#00854d', '#4d4d4d', '#ff7f00',
+		'#1f78b4', '#66a61e', '#d81b60', '#7570b3', '#a6761d', '#00a6d6'
 	];
+	const OPERATIONAL_MODEL_ORDER = [
+		'gfs', 'gefs', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
+		'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
+	];
+	const runColourSequences = new Map();
 	const state = {
 		mode: 'latest', manifest: null, payload: null, geo: null, boundary: null,
 		selectedModels: new Set(), latestPayloads: new Map(), modelLoads: new Map(),
@@ -39,6 +45,7 @@
 	};
 	const meanTrackCaches = new WeakMap();
 	const systemTimelineCaches = new WeakMap();
+	const evolutionSeriesCaches = new WeakMap();
 	const analysisCentreCaches = new WeakMap();
 	const analysisHistoryCaches = new WeakMap();
 
@@ -148,25 +155,37 @@
 		return MODEL_TRACK_COLOURS[id] || fallback || '#0057b8';
 	}
 
+	function colourChannels(value) {
+		const match = String(value).match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+		return match ? match.slice(1).map(channel => parseInt(channel, 16)) : [0, 87, 184];
+	}
+
+	function colourDistance(first, second) {
+		const a = colourChannels(first), b = colourChannels(second);
+		return Math.sqrt(2 * (a[0] - b[0]) ** 2 + 4 * (a[1] - b[1]) ** 2 + 3 * (a[2] - b[2]) ** 2);
+	}
+
+	function contrastingColourSequence(base) {
+		const key = String(base).toLowerCase();
+		if (runColourSequences.has(key)) return runColourSequences.get(key);
+		const sequence = [base];
+		const remaining = DISTINCT_RUN_COLOURS.filter(colour => colour.toLowerCase() !== key);
+		while (remaining.length) {
+			let bestIndex = 0, bestDistance = -1;
+			for (let index = 0; index < remaining.length; index++) {
+				const distance = Math.min(...sequence.map(selected => colourDistance(remaining[index], selected)));
+				if (distance > bestDistance) { bestDistance = distance; bestIndex = index; }
+			}
+			sequence.push(remaining.splice(bestIndex, 1)[0]);
+		}
+		runColourSequences.set(key, sequence);
+		return sequence;
+	}
+
 	function modelRunColour(id, fallback, index) {
 		const base = modelTrackColour(id, fallback);
-		const match = String(base).match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
-		if (!match || !index) return base;
-		const [red, green, blue] = match.slice(1).map(value => parseInt(value, 16) / 255);
-		const maximum = Math.max(red, green, blue), minimum = Math.min(red, green, blue);
-		const delta = maximum - minimum;
-		let hue = 0;
-		if (delta) {
-			if (maximum === red) hue = 60 * (((green - blue) / delta) % 6);
-			else if (maximum === green) hue = 60 * ((blue - red) / delta + 2);
-			else hue = 60 * ((red - green) / delta + 4);
-		}
-		if (hue < 0) hue += 360;
-		const lightness = 100 * (maximum + minimum) / 2;
-		const saturation = delta ? 100 * delta / (1 - Math.abs(2 * lightness / 100 - 1)) : 0;
-		const variant = RUN_COLOUR_VARIANTS[index % RUN_COLOUR_VARIANTS.length];
-		const cycle = Math.floor(index / RUN_COLOUR_VARIANTS.length);
-		return `hsl(${Math.round((hue + variant[0] + cycle * 4) % 360)} ${Math.round(clamp(saturation + variant[2], 45, 96))}% ${Math.round(clamp(lightness + variant[1] - cycle * 3, 18, 76))}%)`;
+		const sequence = contrastingColourSequence(base);
+		return sequence[Math.abs(Number(index) || 0) % sequence.length];
 	}
 
 	function setShowMembers(value) {
@@ -275,8 +294,7 @@
 	function buildModelControls() {
 		const latest = state.manifest.latest || {};
 		const definitions = new Map((state.manifest.models || []).map(model => [model.id, model]));
-		const operational = ['gfs', 'gefs', 'aigfs', 'aigefs', 'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens'];
-		const models = operational.map(id => definitions.get(id) || (
+		const models = OPERATIONAL_MODEL_ORDER.map(id => definitions.get(id) || (
 			id === 'mogreps-g'
 				? {id, label: 'MOGREPS-G', centre: 'Met Office', kind: 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
 				: {id, label: id.toUpperCase(), kind: ['gfs', 'aigfs', 'graphcast-noaa', 'graphcast-ifs-noaa', 'ifs', 'aifs'].includes(id) ? 'deterministic' : 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
@@ -596,7 +614,7 @@
 	}
 
 	function archiveModelOrder(ids) {
-		const definitions = (state.manifest.models || []).map(model => model.id);
+		const definitions = [...OPERATIONAL_MODEL_ORDER, ...(state.manifest.models || []).map(model => model.id).filter(id => !OPERATIONAL_MODEL_ORDER.includes(id))];
 		return [...ids].sort((a, b) => {
 			const first = definitions.indexOf(a), second = definitions.indexOf(b);
 			return (first < 0 ? 999 : first) - (second < 0 ? 999 : second) || a.localeCompare(b);
@@ -1555,47 +1573,57 @@
 		return Number(encoded) * Number(record.field.scale) + Number(record.field.offset || 0);
 	}
 
-	async function forecastEvolutionSeries(item) {
+	async function buildForecastEvolutionSeries(item) {
 		const cycle = new Date(item.payload.cycle_utc).getTime();
 		const tracks = tracksForSystem(item.payload, item.system);
 		const byStep = new Map();
-		for (const track of tracks) for (const point of track.points || []) {
-			const step = Number(point[0]);
-			if (!byStep.has(step)) byStep.set(step, []);
-			byStep.get(step).push(point);
+		const byMember = new Map();
+		for (const track of tracks) {
+			const member = String(track.member || track.id || 'member');
+			if (!byMember.has(member)) byMember.set(member, new Map());
+			for (const point of track.points || []) {
+				if (point[7] === 'i' || !Number.isFinite(Number(point[3]))) continue;
+				const step = Number(point[0]);
+				if (!byStep.has(step)) byStep.set(step, []);
+				byStep.get(step).push(Number(point[3]));
+				const memberSteps = byMember.get(member);
+				if (!memberSteps.has(step)) memberSteps.set(step, []);
+				memberSteps.get(step).push(Number(point[3]));
+			}
 		}
-		let vorticity = [...byStep.entries()].sort((a, b) => a[0] - b[0]).map(([step, points]) => ({
+		const stepSeries = values => [...values.entries()].sort((a, b) => a[0] - b[0]).map(([step, samples]) => ({
 			step,
 			time: cycle + step * 3600000,
-			value: points.filter(point => point[7] !== 'i').reduce((sum, point) => sum + Number(point[3] || 0), 0) / Math.max(1, points.filter(point => point[7] !== 'i').length),
-			observed: points.some(point => point[7] !== 'i')
-		})).filter(point => point.observed);
+			value: samples.reduce((sum, value) => sum + value, 0) / samples.length
+		}));
+		const vorticity = stepSeries(byStep);
+		const members = [...byMember.entries()].map(([member, values]) => ({member, vorticity: stepSeries(values)})).filter(record => record.vorticity.length);
 		let precipitation = [];
 		const precipitationRecord = item.payload.weather && item.payload.weather.precipitation
 			? await decodeWeather(item.payload, 'precipitation')
 			: null;
-		const vorticityRecord = item.payload.weather && item.payload.weather.vorticity
-			? await decodeWeather(item.payload, 'vorticity')
-			: null;
-		if (precipitationRecord || vorticityRecord) {
+		if (precipitationRecord) {
 			const mean = new Map(meanTrack(item.payload, item.system).map(point => [Number(point[0]), point]));
 			const native = (item.payload.steps || []).map((step, frame) => {
 				const point = mean.get(Number(step));
 				if (!point) return null;
 				return {step: Number(step), frame, longitude: point[1], latitude: point[2]};
 			}).filter(Boolean);
-			if (vorticityRecord) vorticity = native.map(point => ({
-				step: point.step,
-				time: cycle + point.step * 3600000,
-				value: sampledWeatherValue(vorticityRecord, item.payload, point.frame, point.longitude, point.latitude)
-			})).filter(point => Number.isFinite(point.value));
-			if (precipitationRecord) precipitation = native.map(point => ({
+			precipitation = native.map(point => ({
 				step: point.step,
 				time: cycle + point.step * 3600000,
 				value: sampledWeatherValue(precipitationRecord, item.payload, point.frame, point.longitude, point.latitude)
 			})).filter(point => Number.isFinite(point.value));
 		}
-		return {vorticity, precipitation};
+		return {vorticity, precipitation, members};
+	}
+
+	async function forecastEvolutionSeries(item) {
+		let cache = evolutionSeriesCaches.get(item.payload);
+		if (!cache) { cache = new Map(); evolutionSeriesCaches.set(item.payload, cache); }
+		if (!cache.has(item.system.id)) cache.set(item.system.id, buildForecastEvolutionSeries(item));
+		try { return await cache.get(item.system.id); }
+		catch (error) { cache.delete(item.system.id); throw error; }
 	}
 
 	function chartNumber(value, digits) {
@@ -1609,9 +1637,14 @@
 		return `${day} ${String(date.getUTCHours()).padStart(2, '0')}Z`;
 	}
 
-	function evolutionRunLabel(item, group) {
-		const duplicateModel = group.items.filter(member => member.model.id === item.model.id).length > 1;
-		return duplicateModel ? `${item.model.label} · ${compactCycleLabel(item.payload.cycle_utc)}` : item.model.label;
+	function evolutionRunLabel(item) {
+		return `${item.model.label} · ${compactCycleLabel(item.payload.cycle_utc)}`;
+	}
+
+	function chartRunLabel(item, group) {
+		return group.items.filter(member => member.model.id === item.model.id).length > 1
+			? evolutionRunLabel(item)
+			: item.model.label;
 	}
 
 	function updateEvolutionControls(groups, group) {
@@ -1619,15 +1652,16 @@
 		select.innerHTML = groups.map(candidate => `<option value="${esc(candidate.key)}">${esc(groupLabel(candidate))}</option>`).join('');
 		select.value = group.key;
 		select.disabled = groups.length < 2;
-		$('#mlaForecastEvolutionLegend').innerHTML = group.items.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(evolutionRunLabel(item, group))}</span>`).join('');
+		$('#mlaForecastEvolutionLegend').innerHTML = group.items.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(chartRunLabel(item, group))}</span>`).join('');
 	}
 
-	function drawEvolutionLine(context, points, x, y, colour, dash, markers) {
+	function drawEvolutionLine(context, points, x, y, colour, dash, markers, width, alpha) {
 		if (!points.length) return;
 		context.save();
+		context.globalAlpha = alpha == null ? 1 : alpha;
 		context.beginPath();
 		points.forEach((point, index) => { if (!index) context.moveTo(x(point.time), y(point.value)); else context.lineTo(x(point.time), y(point.value)); });
-		context.strokeStyle = colour; context.lineWidth = 2; context.lineJoin = 'round'; context.lineCap = 'round'; context.setLineDash(dash); context.stroke();
+		context.strokeStyle = colour; context.lineWidth = width == null ? 2 : width; context.lineJoin = 'round'; context.lineCap = 'round'; context.setLineDash(dash); context.stroke();
 		if (markers && points.length > 1) {
 			const stride = Math.max(1, Math.ceil(points.length / 14));
 			context.setLineDash([]); context.fillStyle = '#fffdf6'; context.strokeStyle = colour; context.lineWidth = 1.3;
@@ -1668,10 +1702,13 @@
 		const plotWidth = Math.max(1, width - left - right);
 		const panelHeight = Math.max(58, (height - top - bottom - gap) / 2);
 		const vortTop = top, rainTop = top + panelHeight + gap;
-		const times = series.flatMap(item => [...item.values.vorticity, ...item.values.precipitation]).map(point => point.time).filter(Number.isFinite);
+		const memberVorticity = state.showMembers
+			? series.flatMap(item => item.item.payload.model.kind === 'ensemble' ? item.values.members.flatMap(member => member.vorticity) : [])
+			: [];
+		const times = [...series.flatMap(item => [...item.values.vorticity, ...item.values.precipitation]), ...memberVorticity].map(point => point.time).filter(Number.isFinite);
 		const first = Math.min(...times), last = Math.max(...times), span = Math.max(3600000, last - first);
 		const x = time => left + (Number(time) - first) / span * plotWidth;
-		const vortMaximum = Math.max(1, ...series.flatMap(item => item.values.vorticity.map(point => point.value))) * 1.08;
+		const vortMaximum = Math.max(1, ...series.flatMap(item => item.values.vorticity.map(point => point.value)), ...memberVorticity.map(point => point.value)) * 1.08;
 		const rainMaximum = Math.max(1, ...series.flatMap(item => item.values.precipitation.map(point => point.value))) * 1.08;
 		const yVort = value => vortTop + panelHeight * (1 - Number(value) / vortMaximum);
 		const yRain = value => rainTop + panelHeight * (1 - Number(value) / rainMaximum);
@@ -1695,10 +1732,16 @@
 			context.fillText(`${String(date.getUTCHours()).padStart(2, '0')}Z`, xx, rainTop + panelHeight + 23);
 		}
 		const dashPatterns = [[], [8, 3], [2, 3], [11, 3, 2, 3], [5, 3]];
+		if (state.showMembers) series.forEach(record => {
+			if (record.item.payload.model.kind !== 'ensemble') return;
+			const colour = runColour(record.item);
+			const alpha = clamp(.62 / Math.sqrt(Math.max(1, record.values.members.length)), .075, .22);
+			for (const member of record.values.members) drawEvolutionLine(context, member.vorticity, x, yVort, colour, [], false, .85, alpha);
+		});
 		series.forEach((record, index) => {
 			const colour = runColour(record.item), dash = dashPatterns[index % dashPatterns.length];
-			drawEvolutionLine(context, record.values.vorticity, x, yVort, colour, dash, false);
-			drawEvolutionLine(context, record.values.precipitation, x, yRain, colour, dash, true);
+			drawEvolutionLine(context, record.values.vorticity, x, yVort, colour, dash, false, 2.7, 1);
+			drawEvolutionLine(context, record.values.precipitation, x, yRain, colour, dash, true, 2.2, .96);
 		});
 		if (!series.some(record => record.values.precipitation.length)) {
 			context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'middle';
@@ -1709,15 +1752,17 @@
 			context.save(); context.setLineDash([5, 4]); context.strokeStyle = dark; context.lineWidth = 1.25;
 			context.beginPath(); context.moveTo(x(current), vortTop); context.lineTo(x(current), rainTop + panelHeight); context.stroke(); context.restore();
 		}
-		context.save(); context.translate(15, vortTop + panelHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = dark; context.fillText('850-hPa vorticity (10⁻⁵ s⁻¹)', 0, 0); context.restore();
+		context.save(); context.translate(15, vortTop + panelHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = dark; context.fillText('Tracked 850-hPa vorticity (10⁻⁵ s⁻¹)', 0, 0); context.restore();
 		context.save(); context.translate(15, rainTop + panelHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = dark; context.fillText('Trailing 24 h rain (mm)', 0, 0); context.restore();
 		canvas._forecastTimeline = {left, right: width - right, first, last};
 		const status = $('#mlaForecastEvolutionStatus');
 		const rainAvailable = group.items.filter(item => weatherFields(item).has('precipitation')).length;
 		const rainLoaded = series.filter(record => record.values.precipitation.length).length;
 		const rainLoading = group.items.filter(item => state.fullLoads.has(item.runKey)).length;
-		status.textContent = `${group.items.length} matched run${group.items.length === 1 ? '' : 's'}`
-			+ (rainLoading ? ` · loading precipitation for ${rainLoading}` : rainAvailable ? ` · precipitation ${rainLoaded}/${rainAvailable}` : ' · track-only archive');
+		const ensembleMembers = state.showMembers ? series.reduce((sum, record) => sum + (record.item.payload.model.kind === 'ensemble' ? record.values.members.length : 0), 0) : 0;
+		status.textContent = `Bold: ${group.items.length} model/run mean${group.items.length === 1 ? '' : 's'}`
+			+ (ensembleMembers ? ` · thin: ${ensembleMembers} ensemble members` : '')
+			+ (rainLoading ? ` · loading mean precipitation for ${rainLoading}` : rainAvailable ? ` · mean precipitation ${rainLoaded}/${rainAvailable}` : ' · precipitation unavailable');
 		requestEvolutionWeather(group);
 	}
 
@@ -1733,10 +1778,6 @@
 		if (serial !== state.renderSerial) return;
 		updateTimeLabel();
 		const entries = displayEntries();
-		const count = entries.reduce((sum, item) => sum + (item.payload.tracks || []).length, 0);
-		const systems = entries.reduce((sum, item) => sum + (item.payload.systems || []).length, 0);
-		const models = new Set(entries.map(item => item.model.id)).size;
-		const weatherEntry = entries.find(item => item.runKey === state.weatherModel);
 		const era5TrackIds = new Set();
 		if (state.mode !== 'latest' && state.showEra5) for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
 		const era5Tracks = era5TrackIds.size;
@@ -1745,15 +1786,13 @@
 		mapStack.dataset.centerLon = state.mapCenterLon.toFixed(3);
 		mapStack.dataset.centerLat = state.mapCenterLat.toFixed(3);
 		const status = entries.length
-			? [`${entries.length} run${entries.length === 1 ? '' : 's'}`, `${models} model${models === 1 ? '' : 's'}`, `${systems} disturbance${systems === 1 ? '' : 's'}`, `${count} member track${count === 1 ? '' : 's'}`]
+			? [`${entries.length} run${entries.length === 1 ? '' : 's'} loaded`, `${systemGroups.length} storm group${systemGroups.length === 1 ? '' : 's'}`]
 			: [];
-		if (state.mode !== 'latest') status.push(era5Tracks ? `${era5Tracks} ERA5 verification track${era5Tracks === 1 ? '' : 's'}` : 'no matched ERA5 track');
-		if (state.weather !== 'none') status.push(`${weatherEntry ? weatherEntry.model.label : 'selected run'} weather`);
-		else if (state.mode === 'latest') status.push('weather off');
+		if (state.mode !== 'latest' && era5Tracks) status.push(`${era5Tracks} ERA5 match${era5Tracks === 1 ? '' : 'es'}`);
 		$('#mlaForecastMapStatus').textContent = status.length ? status.join(' · ') : 'Forecast data not loaded.';
 		const runKey = $('#mlaForecastRunKey');
 		runKey.hidden = entries.length < 2;
-		runKey.innerHTML = entries.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(`${item.model.label} · ${formatUtc(item.payload.cycle_utc)}`)}</span>`).join('');
+		runKey.innerHTML = entries.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(evolutionRunLabel(item))}</span>`).join('');
 		$('#mlaForecastEra5Key').hidden = !era5Tracks;
 	}
 
@@ -1803,7 +1842,7 @@
 			for (let index = 1; index < state.timelineTimes.length; index++) if (Math.abs(state.timelineTimes[index] - target) < Math.abs(state.timelineTimes[nearest] - target)) nearest = index;
 			state.leadIndex = nearest;
 			$('#mlaForecastLead').value = nearest;
-			render();
+			scheduleRender();
 		}
 		canvas.addEventListener('pointerdown', event => {
 			dragging = true;
@@ -1938,7 +1977,7 @@
 		if (anchor) state.selectedSystem = {runKey: anchor.runKey, systemId: anchor.system.id};
 		render();
 	});
-	$('#mlaForecastLead').addEventListener('input', event => { state.leadIndex = Number(event.target.value); render(); });
+	$('#mlaForecastLead').addEventListener('input', event => { state.leadIndex = Number(event.target.value); scheduleRender(); });
 	$('#mlaForecastPrevious').addEventListener('click', () => { state.leadIndex = Math.max(0, state.leadIndex - 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
 	$('#mlaForecastNext').addEventListener('click', () => { if (!state.timelineTimes.length) return; state.leadIndex = Math.min(state.timelineTimes.length - 1, state.leadIndex + 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
 	$('#mlaForecastArchiveDate').addEventListener('change', event => {
