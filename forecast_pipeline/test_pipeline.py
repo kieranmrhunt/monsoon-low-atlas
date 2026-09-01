@@ -20,6 +20,7 @@ from forecast_pipeline import merge_archives, merge_runs
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
     GRID_LONS,
+    GridField,
     ManifestLock,
     atomic_write_json,
     candidate_cycles,
@@ -340,9 +341,54 @@ class ForecastPipelineContractTests(unittest.TestCase):
                 patch.dict("sys.modules", {"cdsapi": SimpleNamespace(Client=RecordingCdsClient)}),
                 patch.object(adapter, "_credentials", return_value="test-key"),
             ):
-                adapter._retrieve(cycle, [0, 6], Path(directory) / "jma.grib", "pf", "pl")
+                adapter._retrieve(
+                    cycle,
+                    [0, 6],
+                    Path(directory) / "jma.grib",
+                    ("cf", "pf"),
+                    "pl",
+                )
         self.assertEqual(requests[0]["origin"], "rjtd")
         self.assertEqual(requests[0]["step"], "0/6")
+        self.assertEqual(requests[0]["type"], ["cf", "pf"])
+
+    def test_tigge_missing_precipitation_does_not_become_a_dry_score_interval(self) -> None:
+        adapter = TiggeAdapter("tigge-ncmrwf")
+        cycle = datetime(2025, 10, 27, 12, tzinfo=UTC)
+        steps = [0, 6, 12, 18, 24]
+        shape = (len(GRID_LATS), len(GRID_LONS))
+        fields = {}
+        for step in steps:
+            fields[("c00", step, "msl", 0)] = GridField(
+                np.full(shape, 100_000.0, dtype=np.float32), "msl", "Pa", str(step), "0"
+            )
+            for level in (850, 700, 500):
+                for short_name in ("u", "v"):
+                    fields[("c00", step, short_name, level)] = GridField(
+                        np.zeros(shape, dtype=np.float32), short_name, "m s-1", str(step), "0"
+                    )
+            for short_name in ("10u", "10v"):
+                fields[("c00", step, short_name, 10)] = GridField(
+                    np.zeros(shape, dtype=np.float32), short_name, "m s-1", str(step), "0"
+                )
+            if step != 6:
+                fields[("c00", step, "tp", 0)] = GridField(
+                    np.full(shape, float(step), dtype=np.float32), "tp", "mm", str(step), "0"
+                )
+
+        tracking_result = SimpleNamespace(
+            tracks=[], detector_candidates=0, linker_summary={}, qa_crosscheck={}
+        )
+        with patch(
+            "forecast_pipeline.sources.track_forecast_member",
+            return_value=tracking_result,
+        ) as tracking:
+            result = adapter._load_member(cycle, steps, "c00", fields)
+        np.testing.assert_array_equal(
+            tracking.call_args.kwargs["precipitation_interval_valid"][:, 0, 0],
+            [True, False, False, True, True],
+        )
+        self.assertEqual(result["precipitation_gap_steps"], [6])
 
     def test_tigge_catalogue_uses_complete_common_field_axis(self) -> None:
         def rows(origin: str, forecast_type: str, horizon: int) -> list[dict[str, object]]:

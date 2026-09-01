@@ -1411,11 +1411,25 @@ class TiggeAdapter(BaseAdapter):
             )
         )
 
-    def _retrieve(self, cycle: datetime, steps: Sequence[int], target: Path, forecast_type: str, levtype: str) -> None:
+    def _retrieve(
+        self,
+        cycle: datetime,
+        steps: Sequence[int],
+        target: Path,
+        forecast_types: Sequence[str] | str,
+        levtype: str,
+    ) -> None:
         try:
             import cdsapi
         except ImportError as error:
             raise DownloadError("cdsapi is required for TIGGE retrieval") from error
+        requested_types = (
+            [forecast_types]
+            if isinstance(forecast_types, str)
+            else [str(value) for value in forecast_types]
+        )
+        if not requested_types:
+            raise DownloadError("TIGGE retrieval requires at least one forecast type")
         request = {
             "class": "ti",
             "date": cycle.strftime("%Y-%m-%d"),
@@ -1427,7 +1441,7 @@ class TiggeAdapter(BaseAdapter):
             "param": "131/132" if levtype == "pl" else "151/165/166/228",
             "step": "/".join(str(int(step)) for step in steps),
             "time": cycle.strftime("%H:00:00"),
-            "type": forecast_type,
+            "type": requested_types,
         }
         if levtype == "pl":
             request["levelist"] = "500/700/850"
@@ -1451,7 +1465,7 @@ class TiggeAdapter(BaseAdapter):
                     "ECDS queue full for %s %s %s/%s; retry %d/%d in %.0f s",
                     self.definition.label,
                     cycle_id(cycle),
-                    forecast_type,
+                    "/".join(requested_types),
                     levtype,
                     attempt + 1,
                     self.queue_retry_attempts,
@@ -1554,20 +1568,41 @@ class TiggeAdapter(BaseAdapter):
             for level in (850, 700, 500)
         }
         # TIGGE contributors do not all encode total precipitation at t+0 and
-        # occasional historical steps are absent. Precipitation is not a
-        # detector/classification input, so initialise it at zero and carry the
-        # last cumulative value across a missing frame rather than discarding an
-        # otherwise complete dynamical member.
+        # occasional historical steps are absent. Precipitation is an optional
+        # detector-score component: initialise the physical t+0 cumulative
+        # baseline at zero, retain the dynamical member across later gaps, and
+        # explicitly mark any inseparable accumulation interval unavailable so
+        # the frozen detector renormalises its optional weights rather than
+        # inventing a dry hour.
         precipitation_frames: list[np.ndarray] = []
-        for step in steps:
+        precipitation_present: list[bool] = []
+        precipitation_gap_steps: list[int] = []
+        for index, step in enumerate(steps):
             key = (member, int(step), "tp", 0)
             if key in fields:
                 precipitation_frames.append(to_precip_mm(fields[key]))
+                precipitation_present.append(True)
+            elif index == 0 and int(step) == 0:
+                precipitation_frames.append(np.zeros_like(mslp[0], dtype=np.float32))
+                precipitation_present.append(True)
             elif precipitation_frames:
                 precipitation_frames.append(precipitation_frames[-1].copy())
+                precipitation_present.append(False)
+                precipitation_gap_steps.append(int(step))
             else:
                 precipitation_frames.append(np.zeros_like(mslp[0], dtype=np.float32))
+                precipitation_present.append(False)
+                precipitation_gap_steps.append(int(step))
         precipitation = np.maximum.accumulate(np.stack(precipitation_frames), axis=0)
+        precipitation_interval_valid = np.asarray(
+            [
+                True
+                if index == 0
+                else precipitation_present[index - 1] and precipitation_present[index]
+                for index in range(len(precipitation_present))
+            ],
+            dtype=bool,
+        )[:, None, None]
         role = "control" if member in {"c00", "h00"} else "perturbed"
         tracking = track_forecast_member(
             cycle=cycle,
@@ -1579,12 +1614,14 @@ class TiggeAdapter(BaseAdapter):
             wind_by_level=winds,
             wind_10m=(values("10u", 10), values("10v", 10)),
             precipitation_cumulative_mm=precipitation,
+            precipitation_interval_valid=precipitation_interval_valid,
         )
         return {
             "member": member,
             "tracks": tracking.tracks,
             "vorticity": vorticity[850],
             "precipitation": precipitation,
+            "precipitation_gap_steps": precipitation_gap_steps,
             "tracking_qa": {
                 "member": member,
                 "detector_candidates": tracking.detector_candidates,
@@ -1602,14 +1639,13 @@ class TiggeAdapter(BaseAdapter):
             with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
                 root = Path(directory)
                 requests = [
-                    (forecast_type, levtype, root / f"{forecast_type}-{levtype}.grib")
-                    for forecast_type in self.centre.forecast_types
+                    (levtype, root / f"all-{levtype}.grib")
                     for levtype in ("pl", "sfc")
                 ]
-                # ECDS stages pressure-level/surface and control/perturbed requests
-                # independently. Submit those independent pieces together so one
-                # cycle takes roughly one staging window instead of up to four;
-                # _retrieve's bounded queue-limit backoff remains the safety valve.
+                # ECDS accepts forecast types as a real multi-value list. Keep
+                # pressure-level and surface requests independent, but combine
+                # control and perturbed members within each request. This halves
+                # the remote queue footprint without dropping ensemble members.
                 with ThreadPoolExecutor(max_workers=min(self.workers, len(requests))) as executor:
                     futures = [
                         executor.submit(
@@ -1617,14 +1653,14 @@ class TiggeAdapter(BaseAdapter):
                             cycle,
                             steps,
                             target,
-                            forecast_type,
+                            self.centre.forecast_types,
                             levtype,
                         )
-                        for forecast_type, levtype, target in requests
+                        for levtype, target in requests
                     ]
                     for future in as_completed(futures):
                         future.result()
-                paths = [target for unused_type, unused_level, target in requests]
+                paths = [target for unused_level, target in requests]
                 fields = self._read_fields(paths, cycle)
 
         members = self._member_ids(fields)
@@ -1650,6 +1686,19 @@ class TiggeAdapter(BaseAdapter):
         if len(results) < minimum:
             raise DownloadError(
                 f"Only {len(results)}/{len(members)} {self.definition.label} members completed"
+            )
+        precipitation_gaps = {
+            str(result["member"]): [int(step) for step in result["precipitation_gap_steps"]]
+            for result in results
+            if result.get("precipitation_gap_steps")
+        }
+        if precipitation_gaps:
+            warnings.append(
+                "missing TIGGE accumulated-precipitation frames omitted from the detector score: "
+                + "; ".join(
+                    f"{member} at {', '.join(f'+{step} h' for step in member_steps)}"
+                    for member, member_steps in precipitation_gaps.items()
+                )
             )
         payload = self._payload(
             cycle,
@@ -1679,6 +1728,12 @@ class TiggeAdapter(BaseAdapter):
         else:
             payload["source"]["retrieval"] = (
                 f"ECMWF ECDS TIGGE {self.definition.centre} subset at 1 degree; {member_scope}"
+            )
+        if precipitation_gaps:
+            payload["source"]["precipitation_gap_steps_by_member"] = precipitation_gaps
+            payload["method"]["source_precipitation_gap_policy"] = (
+                "a missing cumulative frame invalidates the native intervals on either side; "
+                "the frozen detector renormalises optional score weights until a complete trailing window returns"
             )
         return payload
 

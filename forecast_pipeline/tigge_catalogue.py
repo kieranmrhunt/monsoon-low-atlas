@@ -18,10 +18,11 @@ from .sources import TIGGE_CENTRES
 CATALOGUE_URL = "https://ecds.ecmwf.int/api/catalogue/v1/collections/tigge-forecasts"
 USER_AGENT = "monsoon-low-atlas-forecast/1.0 (+https://kieranmrhunt.github.io/monsoon-low-atlas/)"
 
-# Precipitation is deliberately not part of the availability gate. It is not a
-# tracking/classification signal, and TIGGE contributors occasionally omit t+0
-# or isolated accumulated-precipitation frames. The adapter fills those frames
-# conservatively while requiring a complete dynamical axis.
+# Precipitation is deliberately not part of the availability gate. It is an
+# optional detector-score component, and TIGGE contributors occasionally omit
+# t+0 or isolated accumulated-precipitation frames. The adapter marks affected
+# accumulation intervals missing so the frozen score renormalises its optional
+# weights while still requiring a complete dynamical axis.
 REQUIRED_FIELDS = (
     ("u_component_of_wind", "pressure", "500_hpa"),
     ("u_component_of_wind", "pressure", "700_hpa"),

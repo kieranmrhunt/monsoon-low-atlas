@@ -137,6 +137,12 @@ and UKMO TIGGE data are CC BY 4.0; BoM, CMA, CPTEC, IMD, JMA, Météo-France and
 NCMRWF are CC BY-NC 4.0. The public manifest retains the provider and licence
 for every model rather than presenting TIGGE as one homogeneous system.
 
+ECDS control and perturbed forecasts are submitted as one genuine multi-value
+request for pressure levels and one for surface fields. This preserves every
+member while halving the remote queue footprint; missing accumulated-rainfall
+frames are recorded and excluded from the optional precipitation score rather
+than interpreted as dry intervals.
+
 The Met Office rolling MOGREPS-G archive can be captured before its oldest
 objects expire with:
 

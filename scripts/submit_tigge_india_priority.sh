@@ -7,7 +7,7 @@ OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_dat
 MODELS="${LPS_TIGGE_INDIA_MODELS:-tigge-imd,tigge-ncmrwf}"
 START="${LPS_TIGGE_INDIA_START:-2006100100}"
 END="${LPS_TIGGE_INDIA_END:-2025123112}"
-MAX_ACTIVE="${LPS_TIGGE_INDIA_MAX_ACTIVE:-5}"
+MAX_ACTIVE="${LPS_TIGGE_INDIA_MAX_ACTIVE:-10}"
 TIME_LIMIT="${LPS_TIGGE_TIME_LIMIT:-12:00:00}"
 CHUNK_SIZE="${LPS_TIGGE_ARRAY_CHUNK_SIZE:-9000}"
 QOS="${LPS_TIGGE_INDIA_QOS:-high}"
@@ -61,8 +61,9 @@ fi
 
 # These two centres are deliberately submitted ahead of the chronological
 # multi-centre queue. ECDS permits 20 queued requests per user and every TIGGE
-# cycle has four independent pressure/surface and control/perturbed pieces, so
-# five simultaneous cycles fill the service queue without starving each other.
+# cycle now has two independent pressure/surface pieces, each containing both
+# control and perturbed types, so ten simultaneous cycles fill the service
+# queue without dropping members or starving each other.
 # Each task still retries transient queue responses with bounded backoff.
 # ManifestLock makes concurrent progressive publication safe on JASMIN's shared
 # filesystem.
