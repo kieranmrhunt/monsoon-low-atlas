@@ -516,6 +516,18 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertTrue(aigefs_url.endswith("aigefs.t00z.sfc.f006.grib2"))
         self.assertEqual(len(aigefs._member_ids(datetime(2026, 8, 31, tzinfo=UTC), None)), 31)
 
+    def test_noaa_source_group_order_skips_absent_ai_file_groups(self) -> None:
+        combined = {"combined": ("data", [])}
+        self.assertEqual(
+            NcepAdapter._source_group_order(combined, ("sfc", "combined")),
+            ["combined"],
+        )
+        split = {"pres": ("pressure", []), "sfc": ("surface", [])}
+        self.assertEqual(
+            NcepAdapter._source_group_order(split, ("sfc", "combined")),
+            ["sfc", "pres"],
+        )
+
         graphcast = NoaaGraphCastAdapter(client=RecordingClient())
         self.assertTrue(
             graphcast._url(datetime(2026, 8, 31, 12, tzinfo=UTC)).endswith(

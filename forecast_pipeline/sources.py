@@ -2301,6 +2301,25 @@ class NcepAdapter(BaseAdapter):
             return values[: max(1, member_limit)]
         return values
 
+    @staticmethod
+    def _source_group_order(
+        sources: dict[str, tuple[str, list[IndexRecord]]],
+        preferred_groups: Sequence[str],
+    ) -> list[str]:
+        """Order present NOAA file groups without inventing split-file keys.
+
+        AIGFS/AIGEFS publish separate ``pres`` and ``sfc`` files, whereas
+        GFS/GEFS publish one ``combined`` file. Preferred split-file names must
+        therefore be ignored when they are absent rather than indexed into the
+        combined-source mapping.
+        """
+
+        return [
+            group
+            for group in dict.fromkeys((*preferred_groups, *sources))
+            if group in sources
+        ]
+
     def _load_member(self, cycle: datetime, steps: Sequence[int], member: str) -> dict[str, Any]:
         mslp: list[np.ndarray | None] = []
         winds: dict[int, dict[str, list[np.ndarray | None]]] = {
@@ -2364,9 +2383,7 @@ class NcepAdapter(BaseAdapter):
                 continue
             try:
                 def fetch(token: str, *preferred_groups: str) -> GridField:
-                    order = list(preferred_groups) + [
-                        group for group in sources if group not in preferred_groups
-                    ]
+                    order = self._source_group_order(sources, preferred_groups)
                     for group in order:
                         source_url, source_records = sources[group]
                         matches = [
