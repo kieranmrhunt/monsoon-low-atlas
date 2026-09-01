@@ -2501,7 +2501,7 @@ class NcepAdapter(BaseAdapter):
     def build(self, requested: str, steps: Sequence[int], member_limit: int | None = None) -> dict[str, Any]:
         cycle = self.resolve_cycle(requested, int(max(steps)))
         members = self._member_ids(cycle, member_limit)
-        results: list[dict[str, Any]] = []
+        results_by_member: dict[str, dict[str, Any]] = {}
         warnings: list[str] = []
         # NOMADS' AI-product edge is markedly less tolerant of parallel
         # byte-range traffic than NOAA's GFS/GEFS object stores. Four members
@@ -2510,14 +2510,39 @@ class NcepAdapter(BaseAdapter):
         maximum_workers = min(self.workers, len(members))
         if self.definition.id == "aigefs":
             maximum_workers = min(maximum_workers, 4)
-        with ThreadPoolExecutor(max_workers=maximum_workers) as executor:
-            future_map = {executor.submit(self._load_member, cycle, steps, member): member for member in members}
-            for future in as_completed(future_map):
-                member = future_map[future]
-                try:
-                    results.append(future.result())
-                except Exception as error:
-                    warnings.append(f"{member} unavailable: {error}")
+        pending = list(members)
+        passes = 1 if member_limit is not None or self.definition.id != "aigefs" else 2
+        final_errors: dict[str, str] = {}
+        for pass_index in range(passes):
+            pass_errors: dict[str, str] = {}
+            with ThreadPoolExecutor(max_workers=min(maximum_workers, len(pending))) as executor:
+                future_map = {
+                    executor.submit(self._load_member, cycle, steps, member): member
+                    for member in pending
+                }
+                for future in as_completed(future_map):
+                    member = future_map[future]
+                    try:
+                        results_by_member[member] = future.result()
+                    except Exception as error:
+                        pass_errors[member] = str(error)
+            pending = [member for member in members if member not in results_by_member]
+            final_errors = pass_errors
+            if not pending:
+                break
+            if pass_index + 1 < passes:
+                LOGGER.warning(
+                    "%s retrying %d members after transient source failures (%d/%d complete)",
+                    self.definition.label,
+                    len(pending),
+                    len(results_by_member),
+                    len(members),
+                )
+        warnings.extend(
+            f"{member} unavailable: {final_errors.get(member, 'unknown source failure')}"
+            for member in pending
+        )
+        results = list(results_by_member.values())
         results.sort(key=lambda item: members.index(item["member"]))
         # A deliberately capped development/QA run must be allowed to exercise a
         # single ensemble member. Operational runs still require at least 70% of

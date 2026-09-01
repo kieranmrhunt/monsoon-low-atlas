@@ -16,6 +16,7 @@ from .forecast_core import (
     iso_z,
     ManifestLock,
     manifest_entry_horizon_hours,
+    publish_client_manifests,
     utc_now,
 )
 from .update import read_manifest, replace_archive_entry
@@ -94,6 +95,13 @@ def main() -> None:
                 )
                 if not already_complete:
                     atomic_write_json_gz(args.target / relative, payload)
+                    tracks_relative = str(entry.get("tracks_url", ""))
+                    if tracks_relative and tracks_relative != relative:
+                        with gzip.open(source_root / tracks_relative, "rt", encoding="utf-8") as stream:
+                            tracks_payload = json.load(stream)
+                        if tracks_payload.get("payload_variant") != "tracks":
+                            raise ValueError(f"{source_root / tracks_relative} is not a track sidecar")
+                        atomic_write_json_gz(args.target / tracks_relative, tracks_payload)
                     manifest[collection_key] = replace_archive_entry(
                         manifest.setdefault(collection_key, []), entry
                     )
@@ -164,6 +172,7 @@ def main() -> None:
                 "merged_utc": manifest["generated_utc"],
             }
         atomic_write_json(target_path, manifest)
+        publish_client_manifests(args.target, manifest)
     print(f"Merged {len(set(merged))} archive cases into {target_path}")
     if args.cleanup and complete and args.run_root:
         resolved = args.run_root.resolve()

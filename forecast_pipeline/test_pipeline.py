@@ -25,9 +25,12 @@ from forecast_pipeline.forecast_core import (
     atomic_write_json,
     candidate_cycles,
     compact_weather,
+    compact_track_payload,
     manifest_lock_path,
     manifest_entry_horizon_hours,
+    publish_client_manifests,
     trailing_24h,
+    track_sidecar_url,
     validate_cycle_payload,
 )
 from forecast_pipeline.sources import (
@@ -528,6 +531,33 @@ class ForecastPipelineContractTests(unittest.TestCase):
             ["sfc", "pres"],
         )
 
+    def test_aigefs_retries_whole_members_after_transient_nomads_failure(self) -> None:
+        adapter = NcepAdapter("aigefs", client=RecordingClient(), workers=3)
+        cycle = datetime(2026, 8, 31, tzinfo=UTC)
+        calls: dict[str, int] = {}
+
+        def load_member(unused_cycle, unused_steps, member):
+            calls[member] = calls.get(member, 0) + 1
+            if member == "p02" and calls[member] == 1:
+                raise DownloadError("HTTP Error 302: Moved Temporarily")
+            return {
+                "member": member,
+                "tracks": [],
+                "vorticity": np.ones((2, 1, 1), dtype=np.float32),
+                "precipitation": np.ones((2, 1, 1), dtype=np.float32),
+                "source_gap_steps": [],
+                "tracking_qa": {},
+            }
+
+        with (
+            patch.object(adapter, "resolve_cycle", return_value=cycle),
+            patch.object(adapter, "_member_ids", return_value=["p01", "p02", "p03"]),
+            patch.object(adapter, "_load_member", side_effect=load_member),
+            patch.object(adapter, "_payload", return_value={"source": {}, "method": {}}),
+        ):
+            adapter.build("2026083100", [0, 6])
+        self.assertEqual(calls, {"p01": 1, "p02": 2, "p03": 1})
+
         graphcast = NoaaGraphCastAdapter(client=RecordingClient())
         self.assertTrue(
             graphcast._url(datetime(2026, 8, 31, 12, tzinfo=UTC)).endswith(
@@ -658,6 +688,28 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(float(values.min()), 0.0)
         self.assertEqual(float(values.max()), 31.875)
 
+    def test_track_sidecar_keeps_tracks_and_advertises_deferred_weather(self) -> None:
+        payload = {
+            "schema": "mla-forecast-cycle-v1",
+            "tracks": [{"id": "a", "points": [[0, 80, 20, 8.0]]}],
+            "weather": {
+                "basis": "deterministic",
+                "vorticity": {"shape": [1, 2, 2], "data": "abc"},
+                "precipitation": {"shape": [1, 2, 2], "data": "def"},
+            },
+            "tracking_qa": [{"internal": True}],
+        }
+        sidecar = compact_track_payload(payload)
+        self.assertEqual(sidecar["tracks"], payload["tracks"])
+        self.assertEqual(sidecar["weather_available"], ["precipitation", "vorticity"])
+        self.assertEqual(sidecar["payload_variant"], "tracks")
+        self.assertNotIn("weather", sidecar)
+        self.assertNotIn("tracking_qa", sidecar)
+        self.assertEqual(
+            track_sidecar_url("cycles/gfs/2026083000.json.gz"),
+            "cycles/gfs/2026083000.tracks.json.gz",
+        )
+
     def test_payload_validator_rejects_duplicate_track_steps(self) -> None:
         payload = {
             "steps": [0, 6],
@@ -704,6 +756,29 @@ class ForecastPipelineContractTests(unittest.TestCase):
             atomic_write_json(target, {"schema": "test"})
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
             self.assertTrue(stat.S_IMODE(target.parent.stat().st_mode) & 0o005)
+
+    def test_client_manifests_keep_latest_separate_from_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = {
+                "schema": "mla-forecast-manifest-v1",
+                "models": [{"id": "gfs"}],
+                "latest": {"gfs": {"cycle": "2026083000"}},
+                "recent": {"gfs": []},
+                "analysis_history": {"gfs": []},
+                "archive": [{"model": "gfs", "cycle": "2026082800"}],
+                "tigge_archive": [{"model": "tigge-imd", "cycle": "2025082800"}],
+            }
+            publish_client_manifests(root, manifest)
+            with gzip.open(root / "latest-manifest.json.gz", "rt") as stream:
+                latest = json.load(stream)
+            with gzip.open(root / "archive-manifest.json.gz", "rt") as stream:
+                archive = json.load(stream)
+            self.assertEqual(latest["latest"], manifest["latest"])
+            self.assertNotIn("archive", latest)
+            self.assertEqual(archive["archive"], manifest["archive"])
+            self.assertEqual(archive["tigge_archive"], manifest["tigge_archive"])
+            self.assertNotIn("latest", archive)
 
     def test_progressive_publisher_ignores_a_stale_completed_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

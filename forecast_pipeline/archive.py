@@ -230,7 +230,11 @@ def archive_payload(
     return certify_archive_payload(output)
 
 
-def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[str, Any]:
+def archive_manifest_entry(
+    payload: dict[str, Any],
+    relative_url: str,
+    tracks_url: str | None = None,
+) -> dict[str, Any]:
     verification = payload.get("verification", {})
     labels = [str(track.get("label", "")) for track in verification.get("tracks", [])]
     version_label = str(payload.get("model_version", {}).get("label", ""))
@@ -242,6 +246,7 @@ def archive_manifest_entry(payload: dict[str, Any], relative_url: str) -> dict[s
         "valid_start_utc": payload["valid_times"][0],
         "valid_end_utc": payload["valid_times"][-1],
         "url": relative_url,
+        "tracks_url": tracks_url or relative_url,
         "forecast_tracks": len(payload.get("tracks", [])),
         "forecast_systems": len(payload.get("systems", [])),
         "forecast_track_points": sum(len(track.get("points", [])) for track in payload.get("tracks", [])),

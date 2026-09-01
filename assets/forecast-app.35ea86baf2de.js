@@ -26,6 +26,8 @@
 	const state = {
 		mode: 'latest', manifest: null, payload: null, geo: null, boundary: null,
 		selectedModels: new Set(), latestPayloads: new Map(), modelLoads: new Map(),
+		fullPayloads: new Map(), fullLoads: new Map(), archiveEntriesCache: null,
+		archiveColourIndexes: new Map(), archiveManifestLoaded: false, archiveManifestLoad: null,
 		selectedSystem: null, initialization: 'latest', initializationCount: 1, archiveDate: '', archiveHour: '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
 		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: false, showEra5: true,
@@ -34,6 +36,9 @@
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0,
 		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null
 	};
+	const meanTrackCaches = new WeakMap();
+	const analysisCentreCaches = new WeakMap();
+	const analysisHistoryCaches = new WeakMap();
 
 	function esc(value) {
 		return String(value == null ? '' : value).replace(/[&<>'"]/g, character => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[character]));
@@ -59,14 +64,30 @@
 		return gunzipJson(await fetch(url, {cache: 'force-cache'}));
 	}
 
+	async function fetchEntryPayload(entry, tracksOnly) {
+		const preferred = tracksOnly && entry.tracks_url ? entry.tracks_url : entry.url;
+		try {
+			return await fetchGzipJson(joinUrl(config.forecastBase, preferred));
+		} catch (error) {
+			if (preferred === entry.url) throw error;
+			console.warn(`Track sidecar unavailable for ${preferred}; using full payload`, error);
+			return fetchGzipJson(joinUrl(config.forecastBase, entry.url));
+		}
+	}
+
 	async function fetchManifest() {
 		let lastError = new Error('Forecast manifest is unavailable');
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			try {
-				const url = `${joinUrl(config.forecastBase, 'manifest.json')}?v=${Date.now()}-${attempt}`;
-				const response = await fetch(url, {cache: 'no-store'});
-				if (!response.ok) throw new Error(`Forecast manifest returned HTTP ${response.status}`);
-				const value = await response.json();
+				const suffix = `?v=${Date.now()}-${attempt}`;
+				let response = await fetch(`${joinUrl(config.forecastBase, 'latest-manifest.json.gz')}${suffix}`, {cache: 'no-store'});
+				let value;
+				if (response.ok) value = await gunzipJson(response);
+				else {
+					response = await fetch(`${joinUrl(config.forecastBase, 'manifest.json')}${suffix}`, {cache: 'no-store'});
+					if (!response.ok) throw new Error(`Forecast manifest returned HTTP ${response.status}`);
+					value = await response.json();
+				}
 				if (value.schema !== 'mla-forecast-manifest-v1') throw new Error('Unsupported forecast manifest');
 				return value;
 			} catch (error) {
@@ -75,6 +96,28 @@
 			}
 		}
 		throw lastError;
+	}
+
+	async function ensureArchiveManifest() {
+		if (state.archiveManifestLoaded) return state.manifest;
+		if (state.archiveManifestLoad) return state.archiveManifestLoad;
+		state.archiveManifestLoad = (async () => {
+			let response = await fetch(`${joinUrl(config.forecastBase, 'archive-manifest.json.gz')}?v=${Date.now()}`, {cache: 'no-store'});
+			let value;
+			if (response.ok) value = await gunzipJson(response);
+			else {
+				response = await fetch(`${joinUrl(config.forecastBase, 'manifest.json')}?v=${Date.now()}`, {cache: 'no-store'});
+				if (!response.ok) throw new Error(`Archive manifest returned HTTP ${response.status}`);
+				value = await response.json();
+			}
+			if (value.schema !== 'mla-forecast-manifest-v1') throw new Error('Unsupported archive manifest');
+			state.manifest = {...state.manifest, ...value};
+			state.archiveManifestLoaded = true;
+			state.archiveEntriesCache = null;
+			state.archiveAvailability = null;
+			return state.manifest;
+		})().finally(() => { state.archiveManifestLoad = null; });
+		return state.archiveManifestLoad;
 	}
 
 	function notice(message, tone, retry) {
@@ -122,6 +165,12 @@
 		const variant = RUN_COLOUR_VARIANTS[index % RUN_COLOUR_VARIANTS.length];
 		const cycle = Math.floor(index / RUN_COLOUR_VARIANTS.length);
 		return `hsl(${Math.round((hue + variant[0] + cycle * 4) % 360)} ${Math.round(clamp(saturation + variant[2], 45, 96))}% ${Math.round(clamp(lightness + variant[1] - cycle * 3, 18, 76))}%)`;
+	}
+
+	function setShowMembers(value) {
+		state.showMembers = Boolean(value);
+		$('#mlaForecastMembers').checked = state.showMembers;
+		$('#mlaForecastArchiveMembers').checked = state.showMembers;
 	}
 
 	async function loadBoundary() {
@@ -238,23 +287,27 @@
 		$('#mlaForecastModelChecks').innerHTML = models.map(model => {
 			const entry = latest[model.id];
 			const checked = state.selectedModels.has(model.id);
-			const title = entry ? `${model.label} initialized ${formatUtc(entry.cycle_utc)}` : `${model.label} unavailable`;
-			return `<label class="mla-forecast-model-choice" style="--model-colour:${esc(modelTrackColour(model.id, model.colour))}" title="${esc(title)}"><input type="checkbox" value="${esc(model.id)}" ${checked ? 'checked' : ''} ${entry ? '' : 'disabled'}><i aria-hidden="true"></i><span>${esc(model.label)}</span></label>`;
+			const attempt = (state.manifest.attempts || {})[model.id];
+			const unavailable = attempt && attempt.message ? ` · Last attempt: ${attempt.message}` : '';
+			const title = entry ? `${model.label} initialized ${formatUtc(entry.cycle_utc)}` : `${model.label} unavailable${unavailable}`;
+			return `<label class="mla-forecast-model-choice" style="--model-colour:${esc(modelTrackColour(model.id, model.colour))}" title="${esc(title)}"><input type="checkbox" value="${esc(model.id)}" ${checked ? 'checked' : ''} ${entry ? '' : 'disabled'}><i aria-hidden="true"></i><span>${esc(model.label)}</span>${entry ? '' : '<em>Unavailable</em>'}</label>`;
 		}).join('');
-		populateArchiveTimeControls();
+		if (state.archiveManifestLoaded) populateArchiveTimeControls();
 		populateInitializationControls();
 		populateWeatherModels();
 	}
 
 	function archiveEntries() {
 		if (!state.manifest) return [];
+		if (state.archiveEntriesCache) return state.archiveEntriesCache;
 		const entries = [...(state.manifest.archive || []), ...(state.manifest.tigge_archive || [])];
 		const unique = new Map();
 		for (const entry of entries) {
 			const key = `${entry.model}:${entry.cycle}`;
 			if (!unique.has(key)) unique.set(key, entry);
 		}
-		return [...unique.values()];
+		state.archiveEntriesCache = [...unique.values()];
+		return state.archiveEntriesCache;
 	}
 
 	function archiveAvailability() {
@@ -478,18 +531,29 @@
 
 	function displayEntries() {
 		if (state.mode !== 'latest') return [...state.archiveSelected].map(runKey => {
-			const payload = state.archivePayloads.get(runKey);
+			const payload = state.fullPayloads.get(runKey) || state.archivePayloads.get(runKey);
 			if (!payload) return null;
 			const entry = archiveEntries().find(item => payloadKey(item.model, item) === runKey) || null;
 			return {model: modelDefinition(payload.model.id), payload, entry, runKey};
 		}).filter(Boolean);
-		return latestEntries().filter(item => item.payload);
+		return latestEntries().filter(item => item.payload).map(item => ({...item, payload: state.fullPayloads.get(item.runKey) || item.payload}));
+	}
+
+	function weatherFields(item) {
+		const embedded = Object.entries((item.payload && item.payload.weather) || {})
+			.filter(([, field]) => field && typeof field === 'object' && field.shape)
+			.map(([name]) => name);
+		return new Set([
+			...embedded,
+			...((item.payload && item.payload.weather_available) || []),
+			...((item.entry && item.entry.weather_fields) || [])
+		]);
 	}
 
 	function populateWeatherModels() {
 		const entries = displayEntries().filter(item => {
-			const weather = item.payload && item.payload.weather;
-			return weather && (weather.vorticity || weather.precipitation) && (state.weather === 'none' || weather[state.weather]);
+			const fields = weatherFields(item);
+			return fields.size && (state.weather === 'none' || fields.has(state.weather));
 		});
 		if (!entries.some(item => item.runKey === state.weatherModel)) {
 			const preferred = entries.find(item => item.model.id === preferredModel()) || entries[0];
@@ -597,6 +661,15 @@
 		ensureArchiveTarget();
 		populateArchiveTimeControls();
 		const entries = filteredArchive();
+		state.archiveColourIndexes = new Map();
+		const colourGroups = new Map();
+		for (const entry of entries) {
+			if (!colourGroups.has(entry.model)) colourGroups.set(entry.model, []);
+			colourGroups.get(entry.model).push(entry);
+		}
+		for (const values of colourGroups.values()) values
+			.sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)))
+			.forEach((entry, index) => state.archiveColourIndexes.set(payloadKey(entry.model, entry), index));
 		const permitted = new Set(entries.map(entry => `${entry.model}:${entry.cycle}`));
 		let selectionChanged = false;
 		for (const key of [...state.archiveSelected]) if (!permitted.has(key)) {
@@ -628,7 +701,7 @@
 		state.loading = true;
 		notice(`Opening archived ${entry.model_label || entry.model} forecast…`, '', false);
 		const promise = (async () => {
-			const payload = await fetchGzipJson(joinUrl(config.forecastBase, entry.url));
+			const payload = await fetchEntryPayload(entry, true);
 			state.archivePayloads.set(key, payload);
 			return payload;
 		})();
@@ -643,12 +716,49 @@
 		const cached = state.latestPayloads.get(key);
 		if (cached && String(cached.cycle) === String(entry.cycle)) return cached;
 		if (state.modelLoads.has(key)) return state.modelLoads.get(key);
-		const promise = fetchGzipJson(joinUrl(config.forecastBase, entry.url)).then(payload => {
+		const promise = fetchEntryPayload(entry, true).then(payload => {
 			state.latestPayloads.set(key, payload);
 			return payload;
 		}).finally(() => state.modelLoads.delete(key));
 		state.modelLoads.set(key, promise);
 		return promise;
+	}
+
+	function entryForRunKey(runKey) {
+		if (state.mode === 'latest') {
+			const item = requestedLatestRuns().find(value => payloadKey(value.model.id, value.entry) === runKey);
+			return item && item.entry;
+		}
+		return archiveEntries().find(entry => payloadKey(entry.model, entry) === runKey) || null;
+	}
+
+	async function ensureFullPayload(runKey) {
+		if (!runKey) return null;
+		if (state.fullPayloads.has(runKey)) return state.fullPayloads.get(runKey);
+		if (state.fullLoads.has(runKey)) return state.fullLoads.get(runKey);
+		const entry = entryForRunKey(runKey);
+		if (!entry || !entry.url) return null;
+		const current = state.latestPayloads.get(runKey) || state.archivePayloads.get(runKey);
+		if (current && current.weather) {
+			state.fullPayloads.set(runKey, current);
+			return current;
+		}
+		const promise = fetchEntryPayload(entry, false).then(payload => {
+			state.fullPayloads.set(runKey, payload);
+			return payload;
+		}).finally(() => state.fullLoads.delete(runKey));
+		state.fullLoads.set(runKey, promise);
+		return promise;
+	}
+
+	async function loadWeatherForSelection() {
+		if (state.weather === 'none' || !state.weatherModel) return;
+		try {
+			await ensureFullPayload(state.weatherModel);
+		} catch (error) {
+			notice(`Weather fields could not be loaded: ${error.message || error}`, 'flag', true);
+		}
+		populateWeatherModels();
 	}
 
 	async function loadSelectedModels() {
@@ -681,6 +791,7 @@
 		state.archiveSelected.add(key);
 		state.archiveEntry = entry;
 		state.selectedSystem = null;
+		if (modelDefinition(entry.model).kind === 'ensemble') setShowMembers(true);
 		populateArchive(false);
 		try {
 			const payload = await loadArchivePayload(entry);
@@ -798,14 +909,20 @@
 			[state.manifest, state.geo, state.boundary] = await Promise.all([
 				fetchManifest(), loadGeography(), loadBoundary()
 			]);
+			state.archiveManifestLoaded = Array.isArray(state.manifest.archive) || Array.isArray(state.manifest.tigge_archive);
+			state.archiveEntriesCache = null;
 			state.initialised = true;
 			buildModelControls();
-			populateArchive(false);
-			renderAvailability();
-			state.loading = false;
 			if (state.mode !== 'latest') {
+				await ensureArchiveManifest();
+				populateArchiveTimeControls();
+				renderAvailability();
+				state.loading = false;
 				populateArchive(true);
-			} else loadSelectedModels();
+			} else {
+				state.loading = false;
+				loadSelectedModels();
+			}
 		} catch (error) {
 			state.loading = false;
 			notice(`Forecast service is unavailable: ${error.message || error}`, 'flag', true);
@@ -826,8 +943,7 @@
 		$('#mlaForecastArchiveWeatherField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveWeatherSourceField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveMembersLabel').hidden = mode !== 'archive';
-		state.showMembers = false;
-		$('#mlaForecastArchiveMembers').checked = false;
+		setShowMembers(false);
 		if (!state.initialised) { initialise(); return; }
 		state.payload = null;
 		state.selectedSystem = null;
@@ -838,14 +954,25 @@
 		$('#mlaForecastArchiveSearch').value = '';
 		$('#mlaForecastArchiveDate').value = '';
 		$('#mlaForecastArchiveHour').value = state.archiveHour;
-		populateArchiveTimeControls();
-		renderAvailability();
 		render();
 		if (mode !== 'latest') {
 			state.weather = 'none';
 			populateWeatherModels();
-			populateArchive(true);
+			state.loading = true;
+			notice('Opening the processed archive index…', '', false);
+			ensureArchiveManifest().then(() => {
+				state.loading = false;
+				if (state.mode === 'latest') return;
+				populateArchiveTimeControls();
+				renderAvailability();
+				populateArchive(true);
+			}).catch(error => {
+				state.loading = false;
+				if (state.mode === 'latest') return;
+				notice(`Forecast archive is unavailable: ${error.message || error}`, 'flag', true);
+			});
 		} else {
+			renderAvailability();
 			state.weather = $('#mlaForecastWeather').value;
 			populateWeatherModels();
 			loadSelectedModels();
@@ -1085,6 +1212,10 @@
 	}
 
 	function meanTrack(payload, system) {
+		if (!payload || !system) return [];
+		let cache = meanTrackCaches.get(payload);
+		if (!cache) { cache = new Map(); meanTrackCaches.set(payload, cache); }
+		if (cache.has(system.id)) return cache.get(system.id);
 		const tracks = tracksForSystem(payload, system);
 		const byStep = new Map();
 		for (const track of tracks) for (const point of track.points) {
@@ -1092,12 +1223,14 @@
 			byStep.get(point[0]).push(point);
 		}
 		const minimum = Math.max(1, Math.ceil((system.member_count || tracks.length) * .2));
-		return [...byStep.entries()].filter(([, points]) => points.length >= minimum).sort((a, b) => a[0] - b[0]).map(([step, points]) => [
+		const result = [...byStep.entries()].filter(([, points]) => points.length >= minimum).sort((a, b) => a[0] - b[0]).map(([step, points]) => [
 			step,
 			points.reduce((sum, point) => sum + Number(point[1]), 0) / points.length,
 			points.reduce((sum, point) => sum + Number(point[2]), 0) / points.length,
 			points.length
 		]);
+		cache.set(system.id, result);
+		return result;
 	}
 
 	function haversineKm(longitudeA, latitudeA, longitudeB, latitudeB) {
@@ -1130,18 +1263,24 @@
 	}
 
 	function payloadAnalysisCentres(payload) {
+		if (analysisCentreCaches.has(payload)) return analysisCentreCaches.get(payload);
 		const output = [];
 		for (const item of payload.systems || []) {
 			const point = meanTrack(payload, item).find(value => Number(value[0]) === 0);
 			if (point) output.push({system_id: String(item.id), longitude: Number(point[1]), latitude: Number(point[2])});
 		}
+		analysisCentreCaches.set(payload, output);
 		return output;
 	}
 
 	function analysisHistory(payload, system, modelId) {
+		let cache = analysisHistoryCaches.get(payload);
+		if (!cache) { cache = new Map(); analysisHistoryCaches.set(payload, cache); }
+		const cacheKey = `${state.mode}:${modelId}:${system.id}`;
+		if (cache.has(cacheKey)) return cache.get(cacheKey);
 		const forecast = meanTrack(payload, system);
 		const initial = forecast.find(point => Number(point[0]) === 0);
-		if (!initial) return [];
+		if (!initial) { cache.set(cacheKey, []); return []; }
 		const currentCycle = new Date(payload.cycle_utc).getTime();
 		let anchor = {time: currentCycle, longitude: Number(initial[1]), latitude: Number(initial[2]), systemId: String(system.id), cohort: payloadAnalysisCentres(payload)};
 		let later = null;
@@ -1183,7 +1322,9 @@
 			later = anchor;
 			anchor = {time: entryTime, longitude: best.longitude, latitude: best.latitude, systemId: String(best.centre.system_id), cohort: entry.centres || []};
 		}
-		return matched.reverse();
+		const result = matched.reverse();
+		cache.set(cacheKey, result);
+		return result;
 	}
 
 	function stitchedTrack(payload, system, modelId) {
@@ -1219,7 +1360,8 @@
 	function runColour(entry) {
 		const siblings = state.mode === 'latest'
 			? requestedLatestRuns().filter(item => item.entry && item.model.id === entry.model.id).map(item => ({runKey: payloadKey(item.model.id, item.entry), cycle: item.entry.cycle}))
-			: filteredArchive().filter(item => item.model === entry.model.id).map(item => ({runKey: payloadKey(item.model, item), cycle: item.cycle}));
+			: [];
+		if (state.mode !== 'latest') return modelRunColour(entry.model.id, entry.model.colour || entry.payload.model.colour, state.archiveColourIndexes.get(entry.runKey) || 0);
 		siblings.sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)));
 		const index = Math.max(0, siblings.findIndex(item => item.runKey === entry.runKey));
 		return modelRunColour(entry.model.id, entry.model.colour || entry.payload.model.colour, index);
@@ -1270,6 +1412,148 @@
 		drawAnnotations(target);
 	}
 
+	function selectedForecast() {
+		if (!state.selectedSystem) return null;
+		const entry = displayEntries().find(item => item.runKey === state.selectedSystem.runKey);
+		if (!entry) return null;
+		const system = (entry.payload.systems || []).find(item => item.id === state.selectedSystem.systemId);
+		return system ? {...entry, system} : null;
+	}
+
+	function evolutionCanvasContext() {
+		const canvas = $('#mlaForecastEvolution');
+		const rectangle = canvas.getBoundingClientRect();
+		const width = Math.max(1, rectangle.width), height = Math.max(1, rectangle.height);
+		const ratio = Math.min(2, window.devicePixelRatio || 1);
+		if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
+			canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
+		}
+		const context = canvas.getContext('2d');
+		context.setTransform(ratio, 0, 0, ratio, 0, 0);
+		context.clearRect(0, 0, width, height);
+		return {canvas, context, width, height};
+	}
+
+	function sampledWeatherValue(record, payload, frame, longitude, latitude) {
+		if (!record || !payload || !payload.grid) return null;
+		const shape = record.field.shape || [];
+		if (shape.length !== 3 || frame < 0 || frame >= shape[0]) return null;
+		const ny = Number(shape[1]), nx = Number(shape[2]), grid = payload.grid;
+		const x = clamp(Math.round((Number(longitude) - Number(grid.west)) / (Number(grid.east) - Number(grid.west)) * (nx - 1)), 0, nx - 1);
+		const y = clamp(Math.round((Number(latitude) - Number(grid.south)) / (Number(grid.north) - Number(grid.south)) * (ny - 1)), 0, ny - 1);
+		const encoded = record.decoded[frame * ny * nx + y * nx + x];
+		return Number(encoded) * Number(record.field.scale) + Number(record.field.offset || 0);
+	}
+
+	async function forecastEvolutionSeries(item) {
+		const tracks = tracksForSystem(item.payload, item.system);
+		const byStep = new Map();
+		for (const track of tracks) for (const point of track.points || []) {
+			const step = Number(point[0]);
+			if (!byStep.has(step)) byStep.set(step, []);
+			byStep.get(step).push(point);
+		}
+		let vorticity = [...byStep.entries()].sort((a, b) => a[0] - b[0]).map(([step, points]) => ({
+			step,
+			value: points.filter(point => point[7] !== 'i').reduce((sum, point) => sum + Number(point[3] || 0), 0) / Math.max(1, points.filter(point => point[7] !== 'i').length),
+			observed: points.some(point => point[7] !== 'i')
+		})).filter(point => point.observed);
+		let precipitation = [];
+		const precipitationRecord = item.payload.weather && item.payload.weather.precipitation
+			? await decodeWeather(item.payload, 'precipitation')
+			: null;
+		const vorticityRecord = item.payload.weather && item.payload.weather.vorticity
+			? await decodeWeather(item.payload, 'vorticity')
+			: null;
+		if (precipitationRecord || vorticityRecord) {
+			const mean = new Map(meanTrack(item.payload, item.system).map(point => [Number(point[0]), point]));
+			const native = (item.payload.steps || []).map((step, frame) => {
+				const point = mean.get(Number(step));
+				if (!point) return null;
+				return {step: Number(step), frame, longitude: point[1], latitude: point[2]};
+			}).filter(Boolean);
+			if (vorticityRecord) vorticity = native.map(point => ({
+				step: point.step,
+				value: sampledWeatherValue(vorticityRecord, item.payload, point.frame, point.longitude, point.latitude)
+			})).filter(point => Number.isFinite(point.value));
+			if (precipitationRecord) precipitation = native.map(point => ({
+				step: point.step,
+				value: sampledWeatherValue(precipitationRecord, item.payload, point.frame, point.longitude, point.latitude)
+			})).filter(point => Number.isFinite(point.value));
+		}
+		return {vorticity, precipitation};
+	}
+
+	function chartNumber(value, digits) {
+		return Number(value).toLocaleString('en-GB', {maximumFractionDigits: digits, minimumFractionDigits: digits});
+	}
+
+	async function drawForecastEvolution() {
+		const section = $('#mlaForecastEvolutionPanel');
+		const item = selectedForecast();
+		section.hidden = !item;
+		if (!item) return;
+		const {canvas, context, width, height} = evolutionCanvasContext();
+		const series = await forecastEvolutionSeries(item);
+		if (!series.vorticity.length) return;
+		const dark = getComputedStyle(root).getPropertyValue('--mla-ink').trim() || '#28211a';
+		const muted = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63';
+		const line = getComputedStyle(root).getPropertyValue('--mla-line').trim() || '#d8d0c4';
+		const compact = width < 560;
+		const left = 55, right = 58, top = compact ? 55 : 38, bottom = 43;
+		const plotWidth = Math.max(1, width - left - right), plotHeight = Math.max(1, height - top - bottom);
+		const first = Math.min(...series.vorticity.map(point => point.step));
+		const last = Math.max(...series.vorticity.map(point => point.step));
+		const span = Math.max(1, last - first);
+		const x = step => left + (Number(step) - first) / span * plotWidth;
+		const vortMaximum = Math.max(1, ...series.vorticity.map(point => point.value)) * 1.08;
+		const rainMaximum = Math.max(1, ...series.precipitation.map(point => point.value)) * 1.08;
+		const yVort = value => top + plotHeight * (1 - Number(value) / vortMaximum);
+		const yRain = value => top + plotHeight * (1 - Number(value) / rainMaximum);
+		context.font = '12px "effra", Effra, Arial, sans-serif';
+		context.strokeStyle = line; context.fillStyle = muted; context.lineWidth = 1;
+		context.textBaseline = 'middle';
+		for (let index = 0; index <= 4; index++) {
+			const fraction = index / 4, yy = top + plotHeight * (1 - fraction);
+			context.beginPath(); context.moveTo(left, yy); context.lineTo(width - right, yy); context.stroke();
+			context.textAlign = 'right'; context.fillText(chartNumber(vortMaximum * fraction, 1), left - 8, yy);
+			context.textAlign = 'left'; context.fillText(chartNumber(rainMaximum * fraction, 0), width - right + 8, yy);
+		}
+		context.textBaseline = 'top'; context.textAlign = 'center';
+		for (let index = 0; index <= 5; index++) {
+			const step = first + span * index / 5;
+			context.fillText(`+${Math.round(step)} h`, x(step), height - bottom + 10);
+		}
+		if (series.precipitation.length) {
+			const barWidth = Math.max(2, Math.min(13, plotWidth / Math.max(1, series.precipitation.length) * .72));
+			context.fillStyle = 'rgba(213, 68, 128, .48)';
+			for (const point of series.precipitation) {
+				const yy = yRain(point.value);
+				context.fillRect(x(point.step) - barWidth / 2, yy, barWidth, top + plotHeight - yy);
+			}
+		}
+		context.beginPath();
+		series.vorticity.forEach((point, index) => { if (!index) context.moveTo(x(point.step), yVort(point.value)); else context.lineTo(x(point.step), yVort(point.value)); });
+		context.strokeStyle = '#1f6fb2'; context.lineWidth = 2.3; context.lineJoin = 'round'; context.lineCap = 'round'; context.stroke();
+		const current = stepForPayload(item.payload);
+		if (current >= first && current <= last) {
+			context.save(); context.setLineDash([5, 4]); context.strokeStyle = dark; context.lineWidth = 1.25;
+			context.beginPath(); context.moveTo(x(current), top); context.lineTo(x(current), top + plotHeight); context.stroke(); context.restore();
+		}
+		context.textBaseline = 'middle'; context.textAlign = 'left'; context.fillStyle = '#1f6fb2';
+		context.fillRect(left, 13, 20, 3); context.fillStyle = dark; context.fillText('Vorticity (10⁻⁵ s⁻¹)', left + 27, 15);
+		const rainLegendX = compact ? left : left + 176, rainLegendY = compact ? 31 : 15;
+		context.fillStyle = 'rgba(213, 68, 128, .62)'; context.fillRect(rainLegendX, rainLegendY - 6, 12, 11); context.fillStyle = dark; context.fillText('Trailing 24 h precipitation (mm)', rainLegendX + 18, rainLegendY);
+		canvas._forecastTimeline = {left, right: width - right, first, last, cycle: new Date(item.payload.cycle_utc).getTime()};
+		const status = $('#mlaForecastEvolutionStatus');
+		const prefix = `${item.model.label} · ${item.system.label || item.system.id}`;
+		status.textContent = series.precipitation.length
+			? `${prefix} · track-centred ${item.payload.model.kind === 'ensemble' ? 'ensemble-mean' : 'deterministic'} weather.`
+			: state.fullLoads.has(item.runKey)
+				? `${prefix} · loading track-centred precipitation…`
+				: `${prefix} · precipitation is unavailable for this track-only archive.`;
+	}
+
 	async function render() {
 		const serial = ++state.renderSerial;
 		drawBase();
@@ -1277,6 +1561,8 @@
 		await drawWeather();
 		if (serial !== state.renderSerial) return;
 		drawTracks();
+		await drawForecastEvolution();
+		if (serial !== state.renderSerial) return;
 		updateTimeLabel();
 		const entries = displayEntries();
 		const count = entries.reduce((sum, item) => sum + (item.payload.tracks || []).length, 0);
@@ -1333,7 +1619,40 @@
 		if (best && best.distance <= (event.pointerType === 'touch' ? 25 : 18)) {
 			state.selectedSystem = {runKey: best.runKey, systemId: best.system.id};
 			render();
+			const selected = displayEntries().find(item => item.runKey === best.runKey);
+			if (selected && weatherFields(selected).has('precipitation') && !selected.payload.weather) {
+				ensureFullPayload(best.runKey).then(() => render()).catch(error => {
+					console.warn('Forecast evolution weather unavailable', error);
+					render();
+				});
+			}
 		}
+	}
+
+	function bindForecastEvolution() {
+		const canvas = $('#mlaForecastEvolution');
+		let dragging = false;
+		function move(event) {
+			const timeline = canvas._forecastTimeline;
+			if (!timeline || !state.timelineTimes.length) return;
+			const rectangle = canvas.getBoundingClientRect();
+			const local = clamp(event.clientX - rectangle.left, timeline.left, timeline.right);
+			const step = timeline.first + (local - timeline.left) / Math.max(1, timeline.right - timeline.left) * (timeline.last - timeline.first);
+			const target = timeline.cycle + step * 3600000;
+			let nearest = 0;
+			for (let index = 1; index < state.timelineTimes.length; index++) if (Math.abs(state.timelineTimes[index] - target) < Math.abs(state.timelineTimes[nearest] - target)) nearest = index;
+			state.leadIndex = nearest;
+			$('#mlaForecastLead').value = nearest;
+			render();
+		}
+		canvas.addEventListener('pointerdown', event => {
+			dragging = true;
+			if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
+			move(event);
+		});
+		canvas.addEventListener('pointermove', event => { if (dragging) move(event); });
+		canvas.addEventListener('pointerup', () => { dragging = false; });
+		canvas.addEventListener('pointercancel', () => { dragging = false; });
 	}
 
 	function bindForecastMap() {
@@ -1419,7 +1738,10 @@
 	$('#mlaForecastModelChecks').addEventListener('change', event => {
 		const input = event.target.closest('input[type="checkbox"]');
 		if (!input) return;
-		if (input.checked) state.selectedModels.add(input.value); else state.selectedModels.delete(input.value);
+		if (input.checked) {
+			state.selectedModels.add(input.value);
+			if (modelDefinition(input.value).kind === 'ensemble') setShowMembers(true);
+		} else state.selectedModels.delete(input.value);
 		if (!state.selectedModels.size) { state.selectedModels.add(input.value); input.checked = true; notice('Keep at least one forecast model selected.', 'flag', false); return; }
 		if (state.selectedModels.size > 1) state.initializationCount = 1;
 		state.selectedSystem = null;
@@ -1444,12 +1766,12 @@
 		state.leadIndex = 0;
 		loadSelectedModels();
 	});
-	$('#mlaForecastWeather').addEventListener('change', async event => { state.weather = event.target.value; populateWeatherModels(); await render(); });
-	$('#mlaForecastWeatherModel').addEventListener('change', async event => { state.weatherModel = event.target.value; await render(); });
-	$('#mlaForecastArchiveWeather').addEventListener('change', async event => { state.weather = event.target.value; populateWeatherModels(); await render(); });
-	$('#mlaForecastArchiveWeatherModel').addEventListener('change', async event => { state.weatherModel = event.target.value; await render(); });
-	$('#mlaForecastMembers').addEventListener('change', event => { state.showMembers = event.target.checked; render(); });
-	$('#mlaForecastArchiveMembers').addEventListener('change', event => { state.showMembers = event.target.checked; render(); });
+	$('#mlaForecastWeather').addEventListener('change', async event => { state.weather = event.target.value; populateWeatherModels(); await loadWeatherForSelection(); await render(); });
+	$('#mlaForecastWeatherModel').addEventListener('change', async event => { state.weatherModel = event.target.value; await loadWeatherForSelection(); await render(); });
+	$('#mlaForecastArchiveWeather').addEventListener('change', async event => { state.weather = event.target.value; populateWeatherModels(); await loadWeatherForSelection(); await render(); });
+	$('#mlaForecastArchiveWeatherModel').addEventListener('change', async event => { state.weatherModel = event.target.value; await loadWeatherForSelection(); await render(); });
+	$('#mlaForecastMembers').addEventListener('change', event => { setShowMembers(event.target.checked); render(); });
+	$('#mlaForecastArchiveMembers').addEventListener('change', event => { setShowMembers(event.target.checked); render(); });
 	$('#mlaForecastLead').addEventListener('input', event => { state.leadIndex = Number(event.target.value); render(); });
 	$('#mlaForecastPrevious').addEventListener('click', () => { state.leadIndex = Math.max(0, state.leadIndex - 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
 	$('#mlaForecastNext').addEventListener('click', () => { if (!state.timelineTimes.length) return; state.leadIndex = Math.min(state.timelineTimes.length - 1, state.leadIndex + 1); $('#mlaForecastLead').value = state.leadIndex; render(); });
@@ -1516,6 +1838,7 @@
 		if (entry) loadArchive(entry);
 	});
 	bindForecastMap();
+	bindForecastEvolution();
 	window.addEventListener('mla:forecast-visible', () => initialise());
 	window.addEventListener('resize', () => { clearTimeout(state.resizeTimer); state.resizeTimer = setTimeout(resizeAndRender, 120); });
 

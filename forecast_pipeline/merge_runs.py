@@ -18,6 +18,7 @@ from .forecast_core import (
     iso_z,
     ManifestLock,
     manifest_entry_horizon_hours,
+    publish_client_manifests,
     utc_now,
 )
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS
@@ -47,14 +48,33 @@ def copy_payload(source: Path, target: Path, schema: str) -> dict[str, Any]:
     return payload
 
 
+def copy_track_sidecar(source_root: Path, target_root: Path, entry: dict[str, Any]) -> None:
+    """Copy an optional lightweight track payload referenced by a manifest."""
+
+    relative = str(entry.get("tracks_url", ""))
+    if not relative or relative == str(entry.get("url", "")):
+        return
+    source = source_root / relative
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    payload = read_gzip_json(source)
+    if payload.get("payload_variant") != "tracks":
+        raise ValueError(f"{source} is not a track sidecar")
+    atomic_write_json_gz(target_root / relative, payload)
+
+
 def clean_superseded_weather(target: Path, manifest: dict[str, Any]) -> None:
     for model, entry in manifest.get("latest", {}).items():
         cycle_dir = target / "cycles" / model
         keep = {
-            cycle_dir / Path(str(item.get("url", ""))).name
+            cycle_dir / Path(str(url)).name
             for item in manifest.get("recent", {}).get(model, [])
+            for url in (item.get("url", ""), item.get("tracks_url", ""))
+            if url
         }
-        keep.add(cycle_dir / Path(str(entry.get("url", ""))).name)
+        for url in (entry.get("url", ""), entry.get("tracks_url", "")):
+            if url:
+                keep.add(cycle_dir / Path(str(url)).name)
         if not cycle_dir.is_dir():
             continue
         for candidate in cycle_dir.glob("*.json.gz"):
@@ -96,6 +116,7 @@ def main() -> None:
                     args.target / relative,
                     "mla-forecast-cycle-v1",
                 )
+                copy_track_sidecar(source_root, args.target, entry)
                 if payload.get("qa", {}).get("status") == "failed":
                     raise ValueError(f"{model} latest payload failed its embedded QA")
                 previous = manifest.setdefault("latest", {}).get(model)
@@ -114,6 +135,7 @@ def main() -> None:
                         args.target / relative,
                         "mla-forecast-cycle-v1",
                     )
+                    copy_track_sidecar(source_root, args.target, entry)
                     if payload.get("qa", {}).get("status") == "failed":
                         raise ValueError(f"{model} recent payload failed its embedded QA")
                     current = manifest.setdefault("recent", {}).setdefault(model, [])
@@ -129,6 +151,7 @@ def main() -> None:
                     args.target / relative,
                     "mla-forecast-archive-cycle-v1",
                 )
+                copy_track_sidecar(source_root, args.target, entry)
                 if "tracking_qa" in payload:
                     raise ValueError(f"{source_root / relative} contains internal tracking QA")
                 enriched_entry = {**entry, "analysis_centres": analysis_centres(payload)}
@@ -201,6 +224,7 @@ def main() -> None:
                 "merged_utc": manifest["generated_utc"],
             }
         atomic_write_json(target_manifest_path, manifest)
+        publish_client_manifests(args.target, manifest)
         clean_superseded_weather(args.target, manifest)
 
     if not args.keep_staging and complete:

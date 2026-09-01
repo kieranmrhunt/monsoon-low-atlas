@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from .analysis_history import analysis_centres, analysis_entry, replace_analysis_entry
-from .forecast_core import atomic_write_json, iso_z, ManifestLock, utc_now
+from .forecast_core import (
+    atomic_write_json,
+    iso_z,
+    ManifestLock,
+    publish_client_manifests,
+    utc_now,
+)
 from .update import read_manifest
 
 
@@ -75,6 +81,7 @@ def main() -> None:
         )
         manifest["analysis_history_generated_utc"] = iso_z(utc_now())
         atomic_write_json(manifest_path, manifest)
+        publish_client_manifests(args.target, manifest)
 
     print(
         f"Enriched {archive_cycles} archive cycles and {live_cycles} live cycles in "

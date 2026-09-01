@@ -18,9 +18,12 @@ from .archive import AtlasVerifier, archive_manifest_entry, archive_payload
 from .forecast_core import (
     atomic_write_json,
     atomic_write_json_gz,
+    compact_track_payload,
     cycle_id,
     iso_z,
     ManifestLock,
+    publish_client_manifests,
+    track_sidecar_url,
     utc_now,
 )
 from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
@@ -90,13 +93,23 @@ def model_ids(value: str) -> list[str]:
     return values
 
 
-def latest_entry(payload: dict[str, Any], relative_url: str) -> dict[str, Any]:
+def latest_entry(
+    payload: dict[str, Any],
+    relative_url: str,
+    tracks_url: str | None = None,
+) -> dict[str, Any]:
     return {
         "cycle": payload["cycle"],
         "cycle_utc": payload["cycle_utc"],
         "generated_utc": payload["generated_utc"],
         "valid_end_utc": payload["valid_times"][-1],
         "url": relative_url,
+        "tracks_url": tracks_url or relative_url,
+        "weather_fields": sorted(
+            name
+            for name, field in payload.get("weather", {}).items()
+            if isinstance(field, dict) and "shape" in field and "data" in field
+        ),
         "forecast_tracks": len(payload.get("tracks", [])),
         "forecast_systems": len(payload.get("systems", [])),
         "members_available": payload["members"]["available"],
@@ -197,20 +210,35 @@ def main() -> int:
             payload = adapter.build(build_cycle, steps, member_limit=args.members)
             cycle = str(payload["cycle"])
             cycle_relative = f"cycles/{model}/{cycle}.json.gz"
+            cycle_tracks_relative = track_sidecar_url(cycle_relative)
             archive_relative = (
                 f"tigge/{model}/{cycle}.json.gz"
                 if args.archive_collection == "tigge"
                 else f"archive/{model}/{cycle}.json.gz"
             )
+            archive_tracks_relative = track_sidecar_url(archive_relative)
             atomic_write_json_gz(args.output_root / cycle_relative, payload)
+            atomic_write_json_gz(
+                args.output_root / cycle_tracks_relative,
+                compact_track_payload(payload),
+            )
             archived = archive_payload(
                 payload,
                 verifier,
                 include_weather=args.archive_collection != "tigge",
             )
             atomic_write_json_gz(args.output_root / archive_relative, archived)
+            if archived.get("weather"):
+                atomic_write_json_gz(
+                    args.output_root / archive_tracks_relative,
+                    compact_track_payload(archived),
+                )
+            else:
+                archive_tracks_relative = archive_relative
             if not args.archive_only:
-                current_entry = latest_entry(payload, cycle_relative)
+                current_entry = latest_entry(
+                    payload, cycle_relative, cycle_tracks_relative
+                )
                 previous = manifest.setdefault("latest", {}).get(model)
                 if previous is None or str(previous.get("cycle", "")) <= cycle:
                     manifest["latest"][model] = current_entry
@@ -223,7 +251,9 @@ def main() -> int:
             collection_key = "tigge_archive" if args.archive_collection == "tigge" else "archive"
             manifest[collection_key] = replace_archive_entry(
                 manifest.setdefault(collection_key, []),
-                archive_manifest_entry(archived, archive_relative),
+                archive_manifest_entry(
+                    archived, archive_relative, archive_tracks_relative
+                ),
             )
             manifest.setdefault("attempts", {})[model] = {
                 "status": "success",
@@ -295,6 +325,7 @@ def main() -> int:
         },
     })
     atomic_write_json(manifest_path, manifest)
+    publish_client_manifests(args.output_root, manifest)
     if not args.archive_only:
         # Keep a rolling 48-hour comparison window in the full-cycle namespace.
         # Long-term operational searches retain weather in their archive assets,
@@ -302,10 +333,14 @@ def main() -> int:
         for model, entry in manifest.get("latest", {}).items():
             cycle_dir = args.output_root / "cycles" / model
             keep = {
-                cycle_dir / Path(str(item.get("url", ""))).name
+                cycle_dir / Path(str(url)).name
                 for item in manifest.get("recent", {}).get(model, [])
+                for url in (item.get("url", ""), item.get("tracks_url", ""))
+                if url
             }
-            keep.add(cycle_dir / Path(str(entry.get("url", ""))).name)
+            for url in (entry.get("url", ""), entry.get("tracks_url", "")):
+                if url:
+                    keep.add(cycle_dir / Path(str(url)).name)
             if not cycle_dir.is_dir():
                 continue
             for candidate in cycle_dir.glob("*.json.gz"):

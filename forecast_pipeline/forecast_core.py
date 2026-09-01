@@ -40,6 +40,8 @@ GRID_LONS = np.arange(DOMAIN[0], DOMAIN[2] + 0.01, GRID_RESOLUTION, dtype=np.flo
 GRID_LATS = np.arange(DOMAIN[1], DOMAIN[3] + 0.01, GRID_RESOLUTION, dtype=np.float32)
 MANIFEST_LOCK_NAME = ".manifest-v3-lock"
 MANIFEST_LOCK_STALE_SECONDS = 600.0
+LATEST_CLIENT_MANIFEST = "latest-manifest.json.gz"
+ARCHIVE_CLIENT_MANIFEST = "archive-manifest.json.gz"
 
 
 def manifest_lock_path(root: Path) -> Path:
@@ -554,6 +556,36 @@ def compact_weather(vorticity: np.ndarray, precipitation: np.ndarray, basis: str
     }
 
 
+def compact_track_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the fast map-first variant of a public forecast payload.
+
+    Weather grids dominate deterministic cycle downloads and are unnecessary
+    until somebody requests an overlay or selects a system for its rainfall
+    evolution.  The sidecar retains the complete published tracks and a small
+    field inventory, while omitting both grids and internal tracker QA.
+    """
+
+    output = dict(payload)
+    weather = output.pop("weather", {})
+    output.pop("tracking_qa", None)
+    output["weather_available"] = sorted(
+        name
+        for name, field in weather.items()
+        if isinstance(field, dict) and "shape" in field and "data" in field
+    )
+    output["payload_variant"] = "tracks"
+    return output
+
+
+def track_sidecar_url(relative_url: str) -> str:
+    """Return the stable map-first sidecar name for a compressed payload."""
+
+    suffix = ".json.gz"
+    if not str(relative_url).endswith(suffix):
+        raise ValueError(f"forecast payload URL must end in {suffix}: {relative_url}")
+    return f"{str(relative_url)[:-len(suffix)]}.tracks{suffix}"
+
+
 def trailing_24h(cumulative: np.ndarray, steps: Sequence[int]) -> np.ndarray:
     values = np.asarray(cumulative, dtype=np.float32)
     output = np.zeros_like(values)
@@ -600,6 +632,51 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     finally:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
+
+
+def publish_client_manifests(root: Path, manifest: dict[str, Any]) -> None:
+    """Publish small mode-specific manifests for the static browser client.
+
+    ``manifest.json`` remains the authoritative writer/merge contract.  The
+    browser should not download its complete archive inventory merely to open
+    current guidance, so Latest and Archive receive independently compressed
+    projections of that contract.
+    """
+
+    latest_keys = (
+        "schema",
+        "generated_utc",
+        "run_started_utc",
+        "schedule",
+        "forecast_horizon_hours",
+        "forecast_horizons_hours",
+        "forecast_horizon_policy",
+        "weather_archive_policy",
+        "analysis_stitch_policy",
+        "catalogue_verification",
+        "models",
+        "latest",
+        "recent",
+        "analysis_history",
+        "attempts",
+        "source_notes",
+        "run",
+    )
+    latest = {key: manifest[key] for key in latest_keys if key in manifest}
+    latest["client_manifest"] = "latest"
+    archive = {
+        "schema": manifest.get("schema", "mla-forecast-manifest-v1"),
+        "generated_utc": manifest.get("generated_utc"),
+        "models": manifest.get("models", []),
+        "archive": manifest.get("archive", []),
+        "tigge_archive": manifest.get("tigge_archive", []),
+        "client_manifest": "archive",
+    }
+    for key in ("archive_horizons_hours", "tigge_archive_horizons_hours"):
+        if key in manifest:
+            archive[key] = manifest[key]
+    atomic_write_json_gz(root / LATEST_CLIENT_MANIFEST, latest)
+    atomic_write_json_gz(root / ARCHIVE_CLIENT_MANIFEST, archive)
 
 
 def grid_metadata() -> dict[str, Any]:

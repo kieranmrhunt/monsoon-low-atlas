@@ -17,6 +17,7 @@ from .forecast_core import (
     iso_z,
     ManifestLock,
     manifest_entry_horizon_hours,
+    publish_client_manifests,
     utc_now,
 )
 from .update import read_manifest
@@ -124,6 +125,7 @@ def update_progress(
         }
         manifest["generated_utc"] = now
         atomic_write_json(manifest_path, manifest)
+        publish_client_manifests(target, manifest)
 
 
 def publish(target: Path, collection: str, sources: list[Path]) -> None:

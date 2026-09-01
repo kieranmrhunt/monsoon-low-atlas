@@ -15,6 +15,7 @@ from .forecast_core import (
     atomic_write_json_gz,
     iso_z,
     ManifestLock,
+    publish_client_manifests,
     utc_now,
 )
 from .update import read_manifest, replace_archive_entry
@@ -56,6 +57,7 @@ def main() -> None:
         }
         manifest["generated_utc"] = iso_z(utc_now())
         atomic_write_json(manifest_path, manifest)
+        publish_client_manifests(args.target, manifest)
     print(f"Certified {len(rebuilt)} existing archive cycles in {manifest_path}")
 
 

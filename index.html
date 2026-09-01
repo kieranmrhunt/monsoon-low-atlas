@@ -497,6 +497,7 @@
 .mla-forecast-model-choice i { width: 10px; height: 10px; border: 2px solid var(--model-colour); border-radius: 50%; background: transparent; }
 .mla-forecast-model-choice input:checked + i { background: var(--model-colour); box-shadow: 0 0 0 2px var(--mla-card) inset; }
 .mla-forecast-model-choice input:focus-visible + i { outline: 2px solid var(--mla-ink); outline-offset: 3px; }
+.mla-forecast-model-choice em { color: var(--mla-muted); font-size: 9px; font-style: normal; letter-spacing: .02em; text-transform: uppercase; }
 .mla-forecast-options { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; align-items: end; margin-top: 10px; }
 .mla-forecast-archive-controls { display: grid; grid-template-columns: minmax(230px, 1.5fr) minmax(150px, .65fr) minmax(125px, .45fr) minmax(155px, .7fr) minmax(190px, .9fr); gap: 9px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card); }
 #mlaForecastArchiveMembersLabel { grid-column: 1 / -1; justify-self: start; }
@@ -568,6 +569,11 @@
 .mla-forecast-run-key i { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--run-colour); border-radius: 999px; }
 .mla-forecast-key-ramp { width: 120px; height: 10px; border-radius: 999px; background: linear-gradient(90deg, transparent, #54bce4, #75cd6e, #ffd34d, #f4713d, #8f2938); }
 .mla-forecast-era5-key i { display: inline-block; width: 30px; height: 0; border-top: 2px solid #000; }
+.mla-forecast-evolution { padding: 12px; border-top: 1px solid var(--mla-line); background: var(--mla-card); }
+.mla-forecast-evolution[hidden] { display: none; }
+.mla-forecast-evolution h3 { margin: 0 0 5px; font-size: 17px; }
+.mla-forecast-evolution canvas { display: block; width: 100%; height: 250px; cursor: crosshair; touch-action: none; }
+.mla-forecast-evolution .mla-chart-readout { min-height: 1.2em; margin: 5px 0 0; color: var(--mla-muted); font-size: 11px; }
 
 @media (max-width: 1180px) {
 	.mla-filter-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -651,6 +657,7 @@
 	.mla-forecast-calendar-day { min-height: 40px; padding-inline: 2px; }
 	.mla-forecast-options { grid-template-columns: 1fr; }
 	.mla-forecast-map-stack { min-height: 310px; height: 48vh; }
+	.mla-forecast-evolution canvas { height: 225px; }
 }
 
 @media (pointer: coarse), (max-width: 760px) {
@@ -870,6 +877,7 @@
 						<output class="mla-forecast-time" id="mlaForecastTime">—</output>
 					</div>
 					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-key mla-forecast-era5-key" id="mlaForecastEra5Key" hidden><i aria-hidden="true"></i><span>ERA5 v5.6 catalogue track</span></span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span><div class="mla-forecast-run-key" id="mlaForecastRunKey" aria-label="Forecast track colours" hidden></div></div>
+					<section class="mla-forecast-evolution" id="mlaForecastEvolutionPanel" hidden><h3>Selected forecast evolution</h3><canvas id="mlaForecastEvolution" role="img" tabindex="0" aria-label="Vorticity and trailing 24-hour precipitation along the selected forecast track; drag to change valid time"></canvas><p class="mla-chart-readout" id="mlaForecastEvolutionStatus" role="status" aria-live="polite"></p></section>
 				</section>
 				<aside class="mla-card mla-forecast-archive-sidebar" id="mlaForecastArchiveSidebar" hidden><h3 class="mla-sr-only">Forecast model and lead-time selection</h3><div class="mla-forecast-archive-results" id="mlaForecastArchiveResults" aria-live="polite"></div></aside>
 			</div>
@@ -1001,7 +1009,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.d65121672ad2.js"></script>
-<script src="assets/forecast-app.ac3d597158b7.js"></script>
+<script src="assets/forecast-app.35ea86baf2de.js"></script>
 
 </body>
 </html>
