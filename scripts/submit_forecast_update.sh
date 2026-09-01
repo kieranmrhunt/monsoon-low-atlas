@@ -33,13 +33,13 @@ for model in "${MODELS[@]}"; do
   safe_name="${model//-/_}"
   if [[ "$model" == ifs* || "$model" == aifs* ]]; then
     if [[ -n "$ECMWF_PREVIOUS" ]]; then
-      job_id="$(sbatch --parsable --dependency="afterany:$ECMWF_PREVIOUS" --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")"
+      job_id="$(sbatch --parsable --dependency="afterany:$ECMWF_PREVIOUS" --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model" "$OUTPUT")"
     else
-      job_id="$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")"
+      job_id="$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model" "$OUTPUT")"
     fi
     ECMWF_PREVIOUS="$job_id"
   else
-    job_id="$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model")"
+    job_id="$(sbatch --parsable --job-name="mla-fc-$safe_name" scripts/update_forecasts.slurm "$model" "$RUN_ROOT/$model" "$OUTPUT")"
   fi
   JOB_IDS+=("$job_id")
 done
