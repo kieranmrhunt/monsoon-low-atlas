@@ -352,6 +352,45 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(requests[0]["step"], "0/6")
         self.assertEqual(requests[0]["type"], ["cf", "pf"])
 
+    def test_tigge_retrieval_combines_pressure_and_surface_level_families(self) -> None:
+        requests = []
+
+        class RecordingCdsClient:
+            def __init__(self, **unused) -> None:
+                pass
+
+            def retrieve(self, unused_dataset, request, target) -> None:
+                requests.append(request)
+                Path(target).write_bytes(b"GRIB")
+
+        adapter = TiggeAdapter("tigge-ncmrwf")
+        cycle = datetime(2025, 10, 27, 12, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.dict("sys.modules", {"cdsapi": SimpleNamespace(Client=RecordingCdsClient)}),
+                patch.object(adapter, "_credentials", return_value="test-key"),
+            ):
+                adapter._retrieve(
+                    cycle,
+                    [0, 6],
+                    Path(directory) / "ncmrwf.grib",
+                    ("cf", "pf"),
+                    ("pl", "sfc"),
+                )
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["levtype"], ["pl", "sfc"])
+        self.assertEqual(requests[0]["levelist"], "500/700/850")
+        self.assertEqual(requests[0]["param"], "131/132/151/165/166/228")
+
+    def test_tigge_download_cache_is_cycle_and_model_specific(self) -> None:
+        adapter = TiggeAdapter("tigge-imd")
+        cycle = datetime(2024, 7, 1, 0, tzinfo=UTC)
+        with patch.dict("os.environ", {"LPS_TIGGE_DOWNLOAD_CACHE": "/tmp/tigge-cache"}):
+            self.assertEqual(
+                adapter._ecds_cache_path(cycle),
+                Path("/tmp/tigge-cache/tigge-imd/2024070100/all.grib"),
+            )
+
     def test_tigge_missing_precipitation_does_not_become_a_dry_score_interval(self) -> None:
         adapter = TiggeAdapter("tigge-ncmrwf")
         cycle = datetime(2025, 10, 27, 12, tzinfo=UTC)

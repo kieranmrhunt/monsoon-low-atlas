@@ -20,11 +20,22 @@ PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/pyth
 ROW="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$JOBS")"
 IFS=$'\t' read -r INDEX MODEL CYCLE HORIZON FIRST_STEP <<< "$ROW"
 [[ -n "${INDEX:-}" && -n "${MODEL:-}" && -n "${CYCLE:-}" ]]
+if [[ ! "$MODEL" =~ ^[a-z0-9-]+$ || ! "$CYCLE" =~ ^[0-9]{10}$ ]]; then
+  echo "Invalid model/cycle in job table: $MODEL $CYCLE" >&2
+  exit 2
+fi
 HORIZON="${HORIZON:-available}"
 FIRST_STEP="${FIRST_STEP:-0}"
 BUILD_MANIFEST="$ATLAS_ROOT/assets/atlas-build-manifest.json"
 CORE_NAME="$("$PYTHON" -c "import json; print(json.load(open('$BUILD_MANIFEST'))['core'])")"
 OUTPUT="$RUN_ROOT/${MODEL}-${CYCLE}"
+RAW_CACHE_FILE=""
+if [[ "$MODE" == "tigge" ]]; then
+  # Keep a validated raw ECDS cycle if processing or publication is
+  # interrupted. A rerun can then skip the expensive tape staging step.
+  export LPS_TIGGE_DOWNLOAD_CACHE="${LPS_TIGGE_DOWNLOAD_CACHE:-$RUN_ROOT/raw-tigge}"
+  RAW_CACHE_FILE="$LPS_TIGGE_DOWNLOAD_CACHE/$MODEL/$CYCLE/all.grib"
+fi
 ARGS=()
 if [[ "$MODE" == "archive" ]]; then
   ARGS+=(--archive-only)
@@ -52,4 +63,12 @@ if [[ -n "$PUBLISH_TARGET" && "$MODE" != "recent" ]]; then
     --collection "$MODE" \
     --nonblocking-lock \
     "$OUTPUT"
+fi
+
+# Successful processing has a complete compact cycle asset, so retain the raw
+# ECDS file only when a task fails and might benefit from a cheap retry.
+if [[ -n "$RAW_CACHE_FILE" ]]; then
+  rm -f "$RAW_CACHE_FILE"
+  rmdir "$(dirname "$RAW_CACHE_FILE")" 2>/dev/null || true
+  rmdir "$(dirname "$(dirname "$RAW_CACHE_FILE")")" 2>/dev/null || true
 fi

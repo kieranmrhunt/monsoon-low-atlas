@@ -1417,7 +1417,7 @@ class TiggeAdapter(BaseAdapter):
         steps: Sequence[int],
         target: Path,
         forecast_types: Sequence[str] | str,
-        levtype: str,
+        levtypes: Sequence[str] | str,
     ) -> None:
         try:
             import cdsapi
@@ -1430,20 +1430,41 @@ class TiggeAdapter(BaseAdapter):
         )
         if not requested_types:
             raise DownloadError("TIGGE retrieval requires at least one forecast type")
+        requested_level_types = (
+            [levtypes]
+            if isinstance(levtypes, str)
+            else [str(value) for value in levtypes]
+        )
+        if not requested_level_types:
+            raise DownloadError("TIGGE retrieval requires at least one level type")
+        unknown_level_types = set(requested_level_types) - {"pl", "sfc"}
+        if unknown_level_types:
+            raise DownloadError(
+                "Unsupported TIGGE level types: " + ", ".join(sorted(unknown_level_types))
+            )
+        parameters: list[str] = []
+        if "pl" in requested_level_types:
+            parameters.extend(("131", "132"))
+        if "sfc" in requested_level_types:
+            parameters.extend(("151", "165", "166", "228"))
         request = {
             "class": "ti",
             "date": cycle.strftime("%Y-%m-%d"),
             "expver": "prod",
             "grid": "1/1",
             "area": "45/45/-15/120",
-            "levtype": levtype,
+            "levtype": (
+                requested_level_types[0]
+                if len(requested_level_types) == 1
+                else requested_level_types
+            ),
             "origin": self.centre.archive_origin,
-            "param": "131/132" if levtype == "pl" else "151/165/166/228",
+            "param": "/".join(parameters),
             "step": "/".join(str(int(step)) for step in steps),
             "time": cycle.strftime("%H:00:00"),
             "type": requested_types,
         }
-        if levtype == "pl":
+        if "pl" in requested_level_types:
             request["levelist"] = "500/700/850"
         for attempt in range(1, self.queue_retry_attempts + 1):
             try:
@@ -1466,12 +1487,20 @@ class TiggeAdapter(BaseAdapter):
                     self.definition.label,
                     cycle_id(cycle),
                     "/".join(requested_types),
-                    levtype,
+                    "/".join(requested_level_types),
                     attempt + 1,
                     self.queue_retry_attempts,
                     delay,
                 )
                 time.sleep(delay)
+
+    def _ecds_cache_path(self, cycle: datetime) -> Path | None:
+        """Return the optional persistent raw-ECDS cache path for one cycle."""
+
+        root = os.environ.get("LPS_TIGGE_DOWNLOAD_CACHE", "").strip()
+        if not root:
+            return None
+        return Path(root) / self.definition.id / cycle_id(cycle) / "all.grib"
 
     def _cma_cache_paths(self, cycle: datetime) -> list[Path]:
         root = os.environ.get("LPS_CMA_TIGGE_CACHE", "").strip()
@@ -1636,32 +1665,41 @@ class TiggeAdapter(BaseAdapter):
         if cached_paths:
             fields = self._read_fields(cached_paths, cycle)
         else:
-            with tempfile.TemporaryDirectory(prefix=f"mla-tigge-{cycle_id(cycle)}-") as directory:
-                root = Path(directory)
-                requests = [
-                    (levtype, root / f"all-{levtype}.grib")
-                    for levtype in ("pl", "sfc")
-                ]
-                # ECDS accepts forecast types as a real multi-value list. Keep
-                # pressure-level and surface requests independent, but combine
-                # control and perturbed members within each request. This halves
-                # the remote queue footprint without dropping ensemble members.
-                with ThreadPoolExecutor(max_workers=min(self.workers, len(requests))) as executor:
-                    futures = [
-                        executor.submit(
-                            self._retrieve,
+            ecds_cache_path = self._ecds_cache_path(cycle)
+            if ecds_cache_path is not None and ecds_cache_path.is_file():
+                fields = self._read_fields([ecds_cache_path], cycle)
+            else:
+                with tempfile.TemporaryDirectory(
+                    prefix=f"mla-tigge-{cycle_id(cycle)}-"
+                ) as directory:
+                    temporary_target = Path(directory) / "all.grib"
+                    if ecds_cache_path is None:
+                        target = temporary_target
+                    else:
+                        ecds_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        target = ecds_cache_path.with_name(
+                            f".{ecds_cache_path.name}.{os.getpid()}.part"
+                        )
+                        target.unlink(missing_ok=True)
+                    # ECDS accepts forecast types and level types as real
+                    # multi-value lists. One request therefore carries all
+                    # control/perturbed members and both pressure/surface
+                    # families, minimising the account's remote queue footprint
+                    # without dropping any detector input.
+                    try:
+                        self._retrieve(
                             cycle,
                             steps,
                             target,
                             self.centre.forecast_types,
-                            levtype,
+                            ("pl", "sfc"),
                         )
-                        for levtype, target in requests
-                    ]
-                    for future in as_completed(futures):
-                        future.result()
-                paths = [target for unused_level, target in requests]
-                fields = self._read_fields(paths, cycle)
+                        fields = self._read_fields([target], cycle)
+                        if ecds_cache_path is not None:
+                            os.replace(target, ecds_cache_path)
+                    finally:
+                        if ecds_cache_path is not None:
+                            target.unlink(missing_ok=True)
 
         members = self._member_ids(fields)
         if member_limit is not None:
