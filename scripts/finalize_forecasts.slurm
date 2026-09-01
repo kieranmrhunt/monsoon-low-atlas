@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
 #SBATCH --time=00:20:00
-#SBATCH --job-name=mla-forecast
+#SBATCH --job-name=mla-fc-operational
 #SBATCH --output=hpc-logs/mla-forecast-final-%j.out
 #SBATCH --error=hpc-logs/mla-forecast-final-%j.err
 

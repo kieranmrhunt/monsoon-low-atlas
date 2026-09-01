@@ -4,10 +4,21 @@ set -euo pipefail
 ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ATLAS_ROOT/hpc-logs"
 
-if [[ -n "$(squeue -h -u "$USER" -n mla-forecast -o '%A')" ]]; then
-  echo "An mla-forecast update is already queued or running; no duplicate submitted."
-  exit 0
-fi
+# Only suppress a submission when an operational refresh is already active.
+# Archive/backfill finalizers historically used the generic `mla-forecast`
+# name too, so matching that name caused unrelated archive work to skip a
+# six-hourly live update.
+while IFS= read -r job_name; do
+  case "$job_name" in
+    mla-fc-gfs|mla-fc-gefs|mla-fc-aigfs|mla-fc-aigefs|\
+    mla-fc-graphcast_noaa|mla-fc-graphcast_ifs_noaa|mla-fc-mogreps_g|\
+    mla-fc-ifs|mla-fc-ifs_ens|mla-fc-aifs|mla-fc-aifs_ens|\
+    mla-fc-operational)
+      echo "An operational forecast update is already queued or running; no duplicate submitted."
+      exit 0
+      ;;
+  esac
+done < <(squeue -h -u "$USER" -o '%j')
 
 cd "$ATLAS_ROOT"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -33,5 +44,7 @@ for model in "${MODELS[@]}"; do
   JOB_IDS+=("$job_id")
 done
 DEPENDENCY="$(IFS=:; echo "${JOB_IDS[*]}")"
-FINAL_ID="$(sbatch --parsable --dependency="afterany:$DEPENDENCY" scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT")"
+FINAL_ID="$(sbatch --parsable --job-name=mla-fc-operational \
+  --dependency="afterany:$DEPENDENCY" \
+  scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT")"
 echo "Submitted model jobs ${JOB_IDS[*]} and finalizer $FINAL_ID"
