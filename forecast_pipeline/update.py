@@ -32,7 +32,7 @@ from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
 LOGGER = logging.getLogger("mla.forecast.update")
 NCEI_ARCHIVE_ROOT = "https://www.ncei.noaa.gov/oa/prod-model"
 NOAA_AWS_ARCHIVE_ROOT = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
-RECENT_WINDOW_HOURS = 48
+RECENT_WINDOW_HOURS = 72
 
 
 def parse_args() -> argparse.Namespace:
@@ -129,7 +129,7 @@ def replace_archive_entry(entries: list[dict[str, Any]], new: dict[str, Any]) ->
 
 
 def replace_recent_entry(entries: list[dict[str, Any]], new: dict[str, Any]) -> list[dict[str, Any]]:
-    """Retain full weather-capable cycles within 48 hours of the newest run."""
+    """Retain full weather-capable cycles within 72 hours of the newest run."""
 
     combined = [item for item in entries if str(item.get("cycle", "")) != str(new["cycle"])] + [new]
     combined.sort(key=lambda item: str(item.get("cycle", "")), reverse=True)
@@ -298,7 +298,7 @@ def main() -> int:
             if explicit_horizon is None
             else f"explicit +{explicit_horizon} h"
         ),
-        "weather_archive_policy": "latest, rolling 48-hour cycles and the operational archive include ensemble-mean vorticity and trailing-24-hour precipitation; TIGGE omits weather; all public archives omit internal tracking QA",
+        "weather_archive_policy": "latest, rolling 72-hour cycles and the operational archive include ensemble-mean vorticity and trailing-24-hour precipitation; TIGGE omits weather; all public archives omit internal tracking QA",
         "analysis_stitch_policy": "displayed history uses continuity-matched t+0 centres from the same model and operational version; live history retains 14 days and archive history uses the processed archive cadence",
         "catalogue_verification": {
             "version": verifier.catalogue_version,
@@ -327,7 +327,7 @@ def main() -> int:
     atomic_write_json(manifest_path, manifest)
     publish_client_manifests(args.output_root, manifest)
     if not args.archive_only:
-        # Keep a rolling 48-hour comparison window in the full-cycle namespace.
+        # Keep a rolling 72-hour selection window in the full-cycle namespace.
         # Long-term operational searches retain weather in their archive assets,
         # so discard older duplicate cycle bundles only after the manifest is safe.
         for model, entry in manifest.get("latest", {}).items():

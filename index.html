@@ -489,7 +489,10 @@
 .mla-forecast-controls { padding: 12px; border-bottom: 1px solid var(--mla-line); }
 .mla-forecast-model-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
 .mla-forecast-model-picker legend { padding: 0; margin: 0 0 7px; font-size: 12px; font-weight: 550; color: var(--mla-muted); }
-.mla-forecast-model-checks { display: flex; flex-wrap: wrap; gap: 7px; }
+.mla-forecast-model-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mla-forecast-model-group { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 8px; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-well); }
+.mla-forecast-model-group > strong { color: var(--mla-muted); font-size: 11px; font-weight: 550; }
+.mla-forecast-model-group > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .mla-forecast-model-choice { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 5px 9px; border: 1px solid var(--mla-line); border-radius: 999px; background: var(--mla-card); cursor: pointer; user-select: none; }
 .mla-forecast-model-choice:has(input:checked) { border-color: color-mix(in srgb, var(--model-colour) 62%, var(--mla-line)); background: color-mix(in srgb, var(--model-colour) 8%, var(--mla-card)); }
 .mla-forecast-model-choice:has(input:disabled) { opacity: .48; cursor: not-allowed; }
@@ -498,7 +501,7 @@
 .mla-forecast-model-choice input:checked + i { background: var(--model-colour); box-shadow: 0 0 0 2px var(--mla-card) inset; }
 .mla-forecast-model-choice input:focus-visible + i { outline: 2px solid var(--mla-ink); outline-offset: 3px; }
 .mla-forecast-model-choice em { color: var(--mla-muted); font-size: 9px; font-style: normal; letter-spacing: .02em; text-transform: uppercase; }
-.mla-forecast-options { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; align-items: end; margin-top: 10px; }
+.mla-forecast-options { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 9px; align-items: end; margin-top: 10px; }
 .mla-forecast-archive-controls { display: grid; grid-template-columns: minmax(230px, 1.5fr) minmax(150px, .65fr) minmax(125px, .45fr) minmax(155px, .7fr) minmax(190px, .9fr); gap: 9px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--mla-line); border-radius: 10px; background: var(--mla-card); }
 #mlaForecastArchiveMembersLabel { grid-column: 1 / -1; justify-self: start; }
 .mla-forecast-archive-calendar { grid-column: 1 / -1; display: grid; gap: 8px; margin-top: 3px; padding-top: 10px; border-top: 1px solid var(--mla-line); }
@@ -513,8 +516,11 @@
 .mla-forecast-calendar-day[aria-pressed="true"] { border-color: var(--mla-indigo-deep); box-shadow: inset 0 0 0 1px var(--mla-indigo-deep); background: color-mix(in srgb, var(--mla-indigo) 7%, var(--mla-card)); }
 .mla-forecast-calendar-day:disabled { border-color: transparent; background: transparent; color: var(--mla-faint); cursor: default; }
 .mla-forecast-calendar-day > strong { font-size: 12px; font-weight: 550; text-align: left; }
-.mla-forecast-calendar-hours { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
-.mla-forecast-calendar-hours i { height: 5px; border-radius: 999px; background: var(--mla-indigo); opacity: var(--availability, .08); }
+.mla-forecast-calendar-models { display: flex; gap: 2px; min-height: 5px; overflow: hidden; }
+.mla-forecast-calendar-models i { flex: 1 1 4px; min-width: 3px; max-width: 13px; height: 5px; border-radius: 999px; background: var(--calendar-model-colour); }
+.mla-forecast-calendar-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; min-height: 14px; color: var(--mla-muted); font-size: 10px; }
+.mla-forecast-calendar-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.mla-forecast-calendar-legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--calendar-model-colour); }
 .mla-forecast-calendar-empty { visibility: hidden; }
 .mla-forecast-archive-sidebar { grid-area: selector; position: sticky; top: 72px; max-height: min(78vh, 760px); overflow-y: auto; padding: 12px; scrollbar-width: thin; }
 .mla-forecast-archive-results { display: grid; gap: 9px; min-height: 34px; }
@@ -531,6 +537,7 @@
 .mla-forecast-era5-tile { position: relative; display: grid; place-content: center; gap: 2px; width: 86px; aspect-ratio: 1; padding: 7px; border: 1px solid var(--mla-line-strong); border-radius: 9px; background: var(--mla-card); color: var(--mla-ink); font: inherit; text-align: center; cursor: pointer; }
 .mla-forecast-era5-tile strong { font-size: 17px; font-weight: 550; }
 .mla-forecast-era5-tile small { color: var(--mla-muted); font-size: 11px; }
+.mla-forecast-era5-tile:disabled { opacity: .45; cursor: not-allowed; }
 .mla-forecast-era5-tile[aria-pressed="true"] { border-color: var(--mla-ink); background: color-mix(in srgb, var(--mla-ink) 8%, var(--mla-card)); box-shadow: inset 0 0 0 1px var(--mla-ink); }
 .mla-forecast-era5-tile[aria-pressed="true"]::after,
 .mla-forecast-matrix-cell[aria-pressed="true"]::after { content: "✓"; position: absolute; top: 3px; right: 5px; font-size: 11px; font-weight: 650; }
@@ -635,6 +642,7 @@
 	.mla-forecast-calendar-head { grid-template-columns: auto minmax(0, 1fr) auto; }
 	.mla-forecast-calendar-head p { grid-column: 1 / -1; margin: 0; text-align: left; }
 	.mla-forecast-options { grid-template-columns: 1fr 1fr; }
+	.mla-forecast-model-checks { grid-template-columns: 1fr; }
 	.mla-forecast-matrix-cells { grid-template-columns: repeat(auto-fill, minmax(66px, 1fr)); }
 	.mla-forecast-map-stack { min-height: 400px; height: 56vh; }
 	.mla-forecast-timeline { grid-template-columns: auto minmax(0, 1fr) auto; }
@@ -852,8 +860,9 @@
 				<label class="mla-field" id="mlaForecastArchiveWeatherField" for="mlaForecastArchiveWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastArchiveWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 				<label class="mla-field" id="mlaForecastArchiveWeatherSourceField" for="mlaForecastArchiveWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastArchiveWeatherModel"><option value="">Select a run below</option></select></label>
 				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show ensemble members</label>
-				<section class="mla-forecast-archive-calendar" id="mlaForecastArchiveCalendar" aria-label="Processed forecast availability by date and UTC hour">
-					<div class="mla-forecast-calendar-head"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarPrevious" type="button" aria-label="Previous available month">‹</button><label class="mla-field" for="mlaForecastCalendarMonth"><span class="mla-label">Available month</span><select class="mla-select" id="mlaForecastCalendarMonth"></select></label><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarNext" type="button" aria-label="Next available month">›</button><p>Bars show availability at 00, 06, 12 and 18 UTC; stronger bars mean more model–lead choices.</p></div>
+				<section class="mla-forecast-archive-calendar" id="mlaForecastArchiveCalendar" aria-label="Processed forecast availability by date and model">
+					<div class="mla-forecast-calendar-head"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarPrevious" type="button" aria-label="Previous available month">‹</button><label class="mla-field" for="mlaForecastCalendarMonth"><span class="mla-label">Available month</span><select class="mla-select" id="mlaForecastCalendarMonth"></select></label><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarNext" type="button" aria-label="Next available month">›</button><p>Coloured marks show models with output valid on each date.</p></div>
+					<div class="mla-forecast-calendar-legend" id="mlaForecastCalendarLegend" aria-label="Calendar model colours"></div>
 					<div class="mla-forecast-calendar-weekdays" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
 					<div class="mla-forecast-calendar-days" id="mlaForecastCalendarDays"></div>
 				</section>
@@ -865,7 +874,6 @@
 						<fieldset class="mla-forecast-model-picker"><legend>Models</legend><div class="mla-forecast-model-checks" id="mlaForecastModelChecks"></div></fieldset>
 						<div class="mla-forecast-options">
 							<label class="mla-field" for="mlaForecastInitialization"><span class="mla-label">Initialization</span><select class="mla-select" id="mlaForecastInitialization"><option value="latest">Latest available</option></select></label>
-							<label class="mla-field" for="mlaForecastRunCount"><span class="mla-label">Compare cycles</span><select class="mla-select" id="mlaForecastRunCount" title="Select exactly one model to compare neighbouring initializations"><option value="1">Current only</option></select></label>
 							<label class="mla-field" for="mlaForecastWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 							<label class="mla-field" for="mlaForecastWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastWeatherModel"></select></label>
 							<label class="mla-map-toggle" for="mlaForecastMembers"><input id="mlaForecastMembers" type="checkbox"> Show ensemble members</label>
@@ -980,7 +988,16 @@
 			<section class="mla-card mla-section-card">
 				<div class="mla-toolbar">
 					<div class="mla-toolbar-group">
-						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Rank by</span><select class="mla-select" id="mlaExtremeMetric"><optgroup label="Track and compound intensity"><option value="compoundIntensity">Highest compound intensity</option><option value="duration">Longest duration</option><option value="distance">Longest path</option><option value="meanSpeed">Mean translation speed</option><option value="deficit">Largest pressure deficit</option><option value="wind">Highest circulation wind</option><option value="rain">Highest 24 h precipitation</option><option value="vort">Highest smoothed vorticity</option><option value="mslp">Lowest minimum MSLP</option><option value="q850">Highest q850</option><option value="rh850">Highest RH850</option></optgroup><optgroup label="Evolution and persistence"><option value="deepening24">Fastest 24 h pressure-deficit growth</option><option value="windGrowth24">Fastest 24 h circulation-wind growth</option><option value="vortGrowth24">Fastest 24 h vorticity growth</option><option value="closedIsobars">Most closed isobars</option><option value="depressionHours">Most hours at depression strength or above</option><option value="landHours">Most hours over majority land</option></optgroup><optgroup label="Support and continuity"><option value="observedPositions">Most observed positions</option><option value="qualifyingPositions">Most release-domain qualifying positions</option><option value="lowestCoverage">Lowest observed coverage</option><option value="posteriorShare">Largest posterior-position share</option><option value="missingRun">Longest supported missing run</option><option value="maxStepSpeed">Highest step speed</option><option value="rainDays">Most UTC rain days</option><option value="stateRain">Highest crossed-state mean rain</option></optgroup><optgroup label="Genesis location"><option value="northGenesis">Northernmost</option><option value="southGenesis">Southernmost</option><option value="eastGenesis">Easternmost</option><option value="westGenesis">Westernmost</option></optgroup></select></label>
+						<label class="mla-field" for="mlaExtremeMetric"><span class="mla-label">Rank by</span><select class="mla-select" id="mlaExtremeMetric">
+							<optgroup label="Track and compound intensity"><option value="compoundIntensity">Highest compound intensity</option><option value="duration">Longest duration</option><option value="distance">Longest path</option><option value="meanSpeed">Mean translation speed</option><option value="deficit">Largest pressure deficit</option><option value="wind">Highest circulation wind</option><option value="maxWind">Highest maximum 10-m wind</option><option value="meanWind">Highest mean 10-m wind</option><option value="rain">Highest 24 h precipitation</option><option value="hourlyRain">Highest hourly precipitation</option><option value="vort">Highest smoothed vorticity</option><option value="coreVortMax">Highest maximum core vorticity</option><option value="coreVortMean">Highest mean core vorticity</option><option value="mslp">Lowest minimum MSLP</option><option value="ringMslp">Lowest environmental MSLP</option></optgroup>
+							<optgroup label="Vorticity structure"><option value="vort850">Highest mean 850-hPa vorticity</option><option value="vort700">Highest mean 700-hPa vorticity</option><option value="vort500">Highest mean 500-hPa vorticity</option><option value="vortDeep">Highest deep-layer mean vorticity</option></optgroup>
+							<optgroup label="Environmental flow"><option value="backgroundWind">Strongest background wind</option><option value="westerlyBackground">Strongest westerly background flow</option><option value="easterlyBackground">Strongest easterly background flow</option></optgroup>
+							<optgroup label="Moisture"><option value="q850">Highest q850</option><option value="q700">Highest q700</option><option value="q500">Highest q500</option><option value="qDeep">Highest deep-layer specific humidity</option><option value="rh850">Highest RH850</option><option value="rh700">Highest RH700</option><option value="rh500">Highest RH500</option><option value="rhDeep">Highest deep-layer RH</option><option value="dryRh500">Lowest RH500</option></optgroup>
+							<optgroup label="Temperature and vertical structure"><option value="t850Warm">Warmest T850</option><option value="t850Cold">Coldest T850</option><option value="t700Warm">Warmest T700</option><option value="t500Cold">Coldest T500</option><option value="warmCore850">Largest 850-hPa inner temperature anomaly</option><option value="warmCore700">Largest 700-hPa inner temperature anomaly</option><option value="warmCore500">Largest 500-hPa inner temperature anomaly</option><option value="warmCoreDeep">Largest deep inner temperature anomaly</option><option value="coldCoreDeep">Most negative deep inner temperature anomaly</option><option value="stability850500">Largest T850−T500 difference</option><option value="stability700500">Largest T700−T500 difference</option></optgroup>
+							<optgroup label="Evolution and persistence"><option value="deepening24">Fastest 24 h pressure-deficit growth</option><option value="windGrowth24">Fastest 24 h circulation-wind growth</option><option value="vortGrowth24">Fastest 24 h vorticity growth</option><option value="closedIsobars">Most closed isobars</option><option value="depressionHours">Most hours at depression strength or above</option><option value="landHours">Most hours over majority land</option><option value="orography">Highest centre orography</option></optgroup>
+							<optgroup label="Support and continuity"><option value="observedPositions">Most observed positions</option><option value="qualifyingPositions">Most release-domain qualifying positions</option><option value="lowestCoverage">Lowest observed coverage</option><option value="posteriorShare">Largest posterior-position share</option><option value="missingRun">Longest supported missing run</option><option value="maxStepSpeed">Highest step speed</option><option value="rainDays">Most UTC rain days</option><option value="stateRain">Highest crossed-state mean rain</option></optgroup>
+							<optgroup label="Genesis location"><option value="northGenesis">Northernmost</option><option value="southGenesis">Southernmost</option><option value="eastGenesis">Easternmost</option><option value="westGenesis">Westernmost</option></optgroup>
+						</select></label>
 						<label class="mla-field" for="mlaExtremeEligibility" hidden><span class="mla-label">Eligibility</span><select class="mla-select" id="mlaExtremeEligibility"><option value="all">All filtered systems</option></select></label>
 					</div>
 					<span class="mla-badge" data-tone="review" id="mlaExtremeCaveat">Catalogue diagnostics · not externally validated records</span>
@@ -1015,8 +1032,8 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.d65121672ad2.js"></script>
-<script src="assets/forecast-app.410d667a0e3e.js"></script>
+<script src="assets/atlas-app.e5d8cb13124a.js"></script>
+<script src="assets/forecast-app.bfada9a6599a.js"></script>
 
 </body>
 </html>

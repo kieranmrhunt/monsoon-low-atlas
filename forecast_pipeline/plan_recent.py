@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan the rolling 48-hour weather-capable forecast-cycle window."""
+"""Plan the rolling 72-hour weather-capable forecast-cycle window."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=Path, required=True)
-    parser.add_argument("--hours", type=int, default=48)
+    parser.add_argument("--hours", type=int, default=72)
     return parser.parse_args()
 
 
@@ -48,7 +48,7 @@ def main() -> None:
         "schema": "mla-forecast-recent-plan-v1",
         "generated_utc": iso_z(utc_now()),
         "window_hours": args.hours,
-        "selection_policy": "every six-hourly initialization through the preceding 48 hours, retaining each cycle's complete provider/model lead axis",
+        "selection_policy": f"every six-hourly initialization through the preceding {args.hours} hours, retaining each cycle's complete provider/model lead axis",
         "cycles": cycles,
         "pending_cycles": pending,
     }

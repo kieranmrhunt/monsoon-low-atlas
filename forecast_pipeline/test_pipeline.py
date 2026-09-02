@@ -832,7 +832,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
             )
             self.assertEqual(status, "incomplete")
 
-    def test_recent_cycle_window_keeps_weather_cycles_for_48_hours(self) -> None:
+    def test_recent_cycle_window_keeps_weather_cycles_for_72_hours(self) -> None:
         def entry(hours_ago: int) -> dict[str, object]:
             cycle = datetime(2026, 8, 30, 12, tzinfo=UTC) - timedelta(hours=hours_ago)
             return {
@@ -841,8 +841,8 @@ class ForecastPipelineContractTests(unittest.TestCase):
                 "url": f"cycles/gfs/{cycle:%Y%m%d%H}.json.gz",
             }
 
-        retained = replace_recent_entry([entry(54), entry(48), entry(42), entry(6)], entry(0))
-        self.assertEqual([item["cycle"] for item in retained], [entry(0)["cycle"], entry(6)["cycle"], entry(42)["cycle"], entry(48)["cycle"]])
+        retained = replace_recent_entry([entry(78), entry(72), entry(66), entry(6)], entry(0))
+        self.assertEqual([item["cycle"] for item in retained], [entry(0)["cycle"], entry(6)["cycle"], entry(66)["cycle"], entry(72)["cycle"]])
 
     def test_analysis_centres_average_t0_and_keep_six_hour_signature(self) -> None:
         payload = {

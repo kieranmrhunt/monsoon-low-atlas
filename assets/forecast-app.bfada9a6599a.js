@@ -7,37 +7,45 @@
 	const $ = selector => root.querySelector(selector);
 	const config = JSON.parse(document.getElementById('mla-data-config').textContent || '{}');
 	const DOMAIN = {west: 45, east: 120, south: -15, north: 45};
-	const DEFAULT_MAP = {zoom: 1.25, longitude: 82.5, latitude: 17};
+	const DEFAULT_MAP = {zoom: 1.45, longitude: 82, latitude: 20};
+	const DEFAULT_ARCHIVE_DATE = '2016-07-01';
+	const PREFERENCES_KEY = 'monsoon-low-atlas.forecast.v2';
 	const MODEL_TRACK_COLOURS = {
-		gfs: '#e00013', gefs: '#00c200', ifs: '#317ae0', 'ifs-ens': '#e0ae16',
-		aigfs: '#00cee0', aigefs: '#e000ce',
-		'graphcast-noaa': '#4916e0', 'graphcast-ifs-noaa': '#854200',
-		aifs: '#c24483', 'aifs-ens': '#00854d', 'ukmo-global': '#e000ce', 'mogreps-g': '#4d4d4d',
-		'gefs-control': '#00854d', 'tigge-ecmwf': '#317ae0',
-		'tigge-bom': '#e0ae16', 'tigge-cma': '#00cee0', 'tigge-cptec': '#854200',
-		'tigge-dwd': '#00c200', 'tigge-eccc': '#4916e0', 'tigge-imd': '#e000ce',
-		'tigge-jma': '#c24483', 'tigge-kma': '#00854d', 'tigge-mf': '#9a9e00',
-		'tigge-ncep': '#e00013', 'tigge-ncmrwf': '#ff7f00', 'tigge-ukmo': '#4d4d4d'
+		gfs: '#d7191c', gefs: '#f07c00', ifs: '#2166ac', 'ifs-ens': '#00a6ca',
+		aigfs: '#7b2cbf', aigefs: '#d45087',
+		'graphcast-noaa': '#1b9e77', 'graphcast-ifs-noaa': '#00796b',
+		aifs: '#5e3c99', 'aifs-ens': '#b358c8', 'ukmo-global': '#8c510a', 'mogreps-g': '#4d4d4d',
+		'gefs-control': '#e66101', 'tigge-ecmwf': '#4575b4',
+		'tigge-bom': '#b8860b', 'tigge-cma': '#00a8a8', 'tigge-cptec': '#a65628',
+		'tigge-dwd': '#4daf4a', 'tigge-eccc': '#6a3d9a', 'tigge-imd': '#e7298a',
+		'tigge-jma': '#984ea3', 'tigge-kma': '#238b45', 'tigge-mf': '#9a8700',
+		'tigge-ncep': '#e41a1c', 'tigge-ncmrwf': '#ff7f00', 'tigge-ukmo': '#795548'
 	};
-	const DISTINCT_RUN_COLOURS = [
-		'#e00013', '#00c200', '#317ae0', '#e0ae16', '#00cee0', '#e000ce',
-		'#4916e0', '#854200', '#c24483', '#00854d', '#4d4d4d', '#ff7f00',
-		'#1f78b4', '#66a61e', '#d81b60', '#7570b3', '#a6761d', '#00a6d6'
-	];
 	const OPERATIONAL_MODEL_ORDER = [
 		'gfs', 'gefs', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
 		'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
 	];
-	const runColourSequences = new Map();
+	let storedPreferences = {};
+	try {
+		storedPreferences = JSON.parse(localStorage.getItem(PREFERENCES_KEY) || '{}');
+		if (!storedPreferences || typeof storedPreferences !== 'object') storedPreferences = {};
+	} catch (_) {
+		storedPreferences = {};
+	}
+	const storedModels = Array.isArray(storedPreferences.selectedModels)
+		? storedPreferences.selectedModels.filter(value => typeof value === 'string')
+		: null;
 	const state = {
-		mode: 'latest', manifest: null, payload: null, geo: null, boundary: null,
-		selectedModels: new Set(), latestPayloads: new Map(), modelLoads: new Map(),
+		mode: storedPreferences.mode === 'archive' ? 'archive' : 'latest', manifest: null, payload: null, geo: null, boundary: null,
+		selectedModels: new Set(storedModels || []), hasModelPreference: storedModels !== null, latestPayloads: new Map(), modelLoads: new Map(),
 		fullPayloads: new Map(), fullLoads: new Map(), fullFailures: new Set(), archiveEntriesCache: null,
 		archiveColourIndexes: new Map(), archiveManifestLoaded: false, archiveManifestLoad: null,
 		systemGroupsCache: null, systemGroupsCacheKey: '',
-		selectedSystem: null, initialization: 'latest', initializationCount: 1, archiveDate: '', archiveHour: '00', archiveMonth: '', archiveEntry: null,
+		selectedSystem: null, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
+		archiveDate: /^\d{4}-\d{2}-\d{2}$/.test(storedPreferences.archiveDate || '') ? storedPreferences.archiveDate : DEFAULT_ARCHIVE_DATE,
+		archiveHour: ['00', '06', '12', '18'].includes(storedPreferences.archiveHour) ? storedPreferences.archiveHour : '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
-		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: false, showEra5: true,
+		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: Boolean(storedPreferences.showMembers), showEra5: storedPreferences.showEra5 !== false,
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0,
@@ -48,6 +56,22 @@
 	const evolutionSeriesCaches = new WeakMap();
 	const analysisCentreCaches = new WeakMap();
 	const analysisHistoryCaches = new WeakMap();
+
+	function persistPreferences() {
+		try {
+			localStorage.setItem(PREFERENCES_KEY, JSON.stringify({
+				mode: state.mode,
+				selectedModels: [...state.selectedModels],
+				initialization: state.initialization,
+				archiveDate: state.archiveDate,
+				archiveHour: state.archiveHour,
+				showMembers: state.showMembers,
+				showEra5: state.showEra5
+			}));
+		} catch (_) {
+			// Browsers with blocked storage still retain the same choices for this page view.
+		}
+	}
 
 	function esc(value) {
 		return String(value == null ? '' : value).replace(/[&<>'"]/g, character => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[character]));
@@ -160,38 +184,24 @@
 		return match ? match.slice(1).map(channel => parseInt(channel, 16)) : [0, 87, 184];
 	}
 
-	function colourDistance(first, second) {
+	function mixColour(first, second, amount) {
 		const a = colourChannels(first), b = colourChannels(second);
-		return Math.sqrt(2 * (a[0] - b[0]) ** 2 + 4 * (a[1] - b[1]) ** 2 + 3 * (a[2] - b[2]) ** 2);
+		const weight = clamp(Number(amount) || 0, 0, 1);
+		return `#${a.map((channel, index) => Math.round(channel * (1 - weight) + b[index] * weight).toString(16).padStart(2, '0')).join('')}`;
 	}
 
-	function contrastingColourSequence(base) {
-		const key = String(base).toLowerCase();
-		if (runColourSequences.has(key)) return runColourSequences.get(key);
-		const sequence = [base];
-		const remaining = DISTINCT_RUN_COLOURS.filter(colour => colour.toLowerCase() !== key);
-		while (remaining.length) {
-			let bestIndex = 0, bestDistance = -1;
-			for (let index = 0; index < remaining.length; index++) {
-				const distance = Math.min(...sequence.map(selected => colourDistance(remaining[index], selected)));
-				if (distance > bestDistance) { bestDistance = distance; bestIndex = index; }
-			}
-			sequence.push(remaining.splice(bestIndex, 1)[0]);
-		}
-		runColourSequences.set(key, sequence);
-		return sequence;
-	}
-
-	function modelRunColour(id, fallback, index) {
+	function modelLeadColour(id, fallback, lead, maximumLead) {
 		const base = modelTrackColour(id, fallback);
-		const sequence = contrastingColourSequence(base);
-		return sequence[Math.abs(Number(index) || 0) % sequence.length];
+		const fraction = maximumLead > 0 ? clamp(Number(lead) / Number(maximumLead), 0, 1) : 0;
+		// Model is encoded by hue; increasing lead is encoded by a restrained lightness ramp.
+		return mixColour(base, '#ffffff', .06 + .38 * fraction);
 	}
 
 	function setShowMembers(value) {
 		state.showMembers = Boolean(value);
 		$('#mlaForecastMembers').checked = state.showMembers;
 		$('#mlaForecastArchiveMembers').checked = state.showMembers;
+		persistPreferences();
 	}
 
 	async function loadBoundary() {
@@ -243,22 +253,9 @@
 	function requestedLatestRuns() {
 		if (!state.manifest) return [];
 		const definitions = new Map((state.manifest.models || []).map(model => [model.id, model]));
-		const modelIds = [...state.selectedModels];
-		if (state.initializationCount !== 1 && modelIds.length === 1) {
-			const modelId = modelIds[0];
-			const anchor = activeEntry(modelId);
-			if (!anchor) return [];
-			const candidates = new Map();
-			for (const entry of [...((state.manifest.recent || {})[modelId] || []), (state.manifest.latest || {})[modelId]].filter(Boolean)) candidates.set(String(entry.cycle), entry);
-			const anchorTime = new Date(anchor.cycle_utc).getTime();
-			const limit = state.initializationCount === 0 ? candidates.size : state.initializationCount;
-			return [...candidates.values()]
-				.sort((a, b) => Math.abs(new Date(a.cycle_utc).getTime() - anchorTime) - Math.abs(new Date(b.cycle_utc).getTime() - anchorTime) || String(b.cycle).localeCompare(String(a.cycle)))
-				.slice(0, limit)
-				.sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)))
-				.map(entry => ({model: definitions.get(modelId) || modelDefinition(modelId), entry}));
-		}
-		return modelIds.map(modelId => ({model: definitions.get(modelId) || modelDefinition(modelId), entry: activeEntry(modelId)}));
+		return [...state.selectedModels]
+			.map(modelId => ({model: definitions.get(modelId) || modelDefinition(modelId), entry: activeEntry(modelId)}))
+			.filter(item => item.entry);
 	}
 
 	function populateInitializationControls() {
@@ -266,7 +263,10 @@
 		if (!select || !state.manifest) return;
 		const selected = [...state.selectedModels];
 		const cycles = new Map();
-		for (const modelId of selected) for (const entry of (state.manifest.recent || {})[modelId] || []) {
+		for (const modelId of selected) for (const entry of [
+			...(((state.manifest.recent || {})[modelId]) || []),
+			(state.manifest.latest || {})[modelId]
+		].filter(Boolean)) {
 			const key = String(entry.cycle || '');
 			if (!key) continue;
 			if (!cycles.has(key)) cycles.set(key, {utc: entry.cycle_utc, models: new Set()});
@@ -274,21 +274,12 @@
 		}
 		const options = [...cycles.entries()].sort((a, b) => String(b[0]).localeCompare(String(a[0])));
 		if (state.initialization !== 'latest' && !cycles.has(String(state.initialization))) state.initialization = 'latest';
-		select.innerHTML = '<option value="latest">Latest available for each model</option>' + options.map(([cycle, item]) => `<option value="${esc(cycle)}">${esc(formatUtc(item.utc))} · ${item.models.size}/${selected.length} models</option>`).join('');
+		select.innerHTML = selected.length
+			? '<option value="latest">Latest available for each model</option>' + options.map(([cycle, item]) => `<option value="${esc(cycle)}">${esc(formatUtc(item.utc))} · ${item.models.size}/${selected.length} models</option>`).join('')
+			: '<option value="latest">Select a model to see cycles</option>';
 		select.value = state.initialization;
-		const count = $('#mlaForecastRunCount');
-		if (selected.length !== 1) state.initializationCount = 1;
-		const runCount = selected.length === 1
-			? new Set([...((state.manifest.recent || {})[selected[0]] || []), (state.manifest.latest || {})[selected[0]]].filter(Boolean).map(entry => String(entry.cycle))).size
-			: 1;
-		if (runCount <= 1) state.initializationCount = 1;
-		else if (state.initializationCount >= runCount) state.initializationCount = 0;
-		count.innerHTML = '<option value="1">Current only</option>'
-			+ Array.from({length: Math.max(0, runCount - 2)}, (unused, index) => `<option value="${index + 2}">${index + 2} initializations</option>`).join('')
-			+ (runCount > 1 ? `<option value="0">All ${runCount} available</option>` : '');
-		count.value = String(state.initializationCount);
-		count.disabled = selected.length !== 1;
-		count.title = selected.length === 1 ? 'Compare this model across neighbouring initialization cycles' : 'Select exactly one model to compare neighbouring initializations';
+		select.disabled = !selected.length;
+		persistPreferences();
 	}
 
 	function buildModelControls() {
@@ -299,22 +290,29 @@
 				? {id, label: 'MOGREPS-G', centre: 'Met Office', kind: 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
 				: {id, label: id.toUpperCase(), kind: ['gfs', 'aigfs', 'graphcast-noaa', 'graphcast-ifs-noaa', 'ifs', 'aifs'].includes(id) ? 'deterministic' : 'ensemble', colour: MODEL_TRACK_COLOURS[id]}
 		));
-		if (!state.selectedModels.size) {
+		if (!state.hasModelPreference) {
 			for (const model of models) if (model.kind === 'deterministic' && latest[model.id]) state.selectedModels.add(model.id);
 			if (!state.selectedModels.size && preferredModel()) state.selectedModels.add(preferredModel());
+			state.hasModelPreference = true;
 		}
-		state.selectedModels = new Set([...state.selectedModels].filter(id => latest[id]));
-		$('#mlaForecastModelChecks').innerHTML = models.map(model => {
+		const modelChoice = model => {
 			const entry = latest[model.id];
 			const checked = state.selectedModels.has(model.id);
 			const attempt = (state.manifest.attempts || {})[model.id];
 			const unavailable = attempt && attempt.message ? ` · Last attempt: ${attempt.message}` : '';
 			const title = entry ? `${model.label} initialized ${formatUtc(entry.cycle_utc)}` : `${model.label} unavailable${unavailable}`;
 			return `<label class="mla-forecast-model-choice" style="--model-colour:${esc(modelTrackColour(model.id, model.colour))}" title="${esc(title)}"><input type="checkbox" value="${esc(model.id)}" ${checked ? 'checked' : ''} ${entry ? '' : 'disabled'}><i aria-hidden="true"></i><span>${esc(model.label)}</span>${entry ? '' : '<em>Unavailable</em>'}</label>`;
-		}).join('');
+		};
+		const grouped = [
+			['Deterministic', models.filter(model => model.kind !== 'ensemble')],
+			['Ensemble', models.filter(model => model.kind === 'ensemble')]
+		];
+		$('#mlaForecastModelChecks').innerHTML = grouped.map(([label, values]) => `<section class="mla-forecast-model-group" aria-label="${esc(label)} models"><strong>${esc(label)}</strong><div>${values.map(modelChoice).join('')}</div></section>`).join('');
+		setShowMembers(state.showMembers);
 		if (state.archiveManifestLoaded) populateArchiveTimeControls();
 		populateInitializationControls();
 		populateWeatherModels();
+		persistPreferences();
 	}
 
 	function archiveEntries() {
@@ -396,26 +394,32 @@
 		const leading = (first.getUTCDay() + 6) % 7;
 		const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
 		const availability = archiveAvailability();
-		let maximum = 1;
+		const monthModels = new Set();
 		for (let day = 1; day <= days; day += 1) {
 			const date = `${state.archiveMonth}-${String(day).padStart(2, '0')}`;
-			for (const slot of (availability.get(date) || new Map()).values()) maximum = Math.max(maximum, slot.runs.size);
+			for (const slot of (availability.get(date) || new Map()).values()) for (const model of slot.models) monthModels.add(model);
 		}
+		const legend = $('#mlaForecastCalendarLegend');
+		if (legend) legend.innerHTML = archiveModelOrder(monthModels).map(modelId => {
+			const model = modelDefinition(modelId);
+			return `<span><i style="--calendar-model-colour:${esc(modelTrackColour(modelId, model.colour))}" aria-hidden="true"></i>${esc(model.label)}</span>`;
+		}).join('');
 		const cells = Array.from({length: leading}, () => '<span class="mla-forecast-calendar-empty"></span>');
 		for (let day = 1; day <= days; day += 1) {
 			const date = `${state.archiveMonth}-${String(day).padStart(2, '0')}`;
 			const slots = availability.get(date) || new Map();
 			const available = slots.size > 0;
-			const details = ['00', '06', '12', '18'].map(hour => {
-				const slot = slots.get(hour);
-				return `${hour}Z ${slot ? `${slot.runs.size} run${slot.runs.size === 1 ? '' : 's'} across ${slot.models.size} model${slot.models.size === 1 ? '' : 's'}` : 'unavailable'}`;
-			}).join('; ');
-			const bars = ['00', '06', '12', '18'].map(hour => {
-				const count = slots.get(hour) ? slots.get(hour).runs.size : 0;
-				const opacity = count ? (.22 + .78 * Math.sqrt(count / maximum)).toFixed(2) : '.06';
-				return `<i style="--availability:${opacity}" aria-hidden="true"></i>`;
+			const dayModels = new Set();
+			for (const slot of slots.values()) for (const model of slot.models) dayModels.add(model);
+			const orderedModels = archiveModelOrder(dayModels);
+			const details = orderedModels.length
+				? orderedModels.map(modelId => modelDefinition(modelId).label).join(', ')
+				: 'No processed models';
+			const bars = orderedModels.map(modelId => {
+				const model = modelDefinition(modelId);
+				return `<i style="--calendar-model-colour:${esc(modelTrackColour(modelId, model.colour))}" title="${esc(model.label)}" aria-hidden="true"></i>`;
 			}).join('');
-			cells.push(`<button class="mla-forecast-calendar-day" type="button" data-forecast-calendar-date="${esc(date)}" aria-pressed="${state.archiveDate === date}" title="${esc(details)}" ${available ? '' : 'disabled'}><strong>${day}</strong><span class="mla-forecast-calendar-hours">${bars}</span></button>`);
+			cells.push(`<button class="mla-forecast-calendar-day" type="button" data-forecast-calendar-date="${esc(date)}" aria-pressed="${state.archiveDate === date}" title="${esc(details)}" ${available ? '' : 'disabled'}><strong>${day}</strong><span class="mla-forecast-calendar-models">${bars}</span></button>`);
 		}
 		node.innerHTML = cells.join('');
 	}
@@ -446,6 +450,7 @@
 		const hour = $('#mlaForecastArchiveHour');
 		if (calendar) calendar.value = state.archiveDate;
 		if (hour) hour.value = state.archiveHour;
+		persistPreferences();
 	}
 
 	function archiveTargetTime() {
@@ -498,6 +503,7 @@
 			state.archiveDate = parsed.date;
 			state.archiveHour = parsed.hour;
 			state.archiveMonth = parsed.date.slice(0, 7);
+			persistPreferences();
 		} else if (!state.archiveDate) {
 			const matches = archiveNameEntries();
 			const target = raw ? bestArchiveTarget(matches) : Math.max(...archiveEntries().map(entry => new Date(entry.cycle_utc).getTime()).filter(Number.isFinite));
@@ -630,6 +636,7 @@
 
 	function archiveRunMatrix(entries) {
 		const target = archiveTargetTime();
+		const maximumLead = Math.max(1, ...entries.map(entry => entryLeadAt(entry, target)).filter(Number.isFinite));
 		const grouped = new Map();
 		for (const entry of entries) {
 			if (!grouped.has(entry.model)) grouped.set(entry.model, []);
@@ -641,7 +648,6 @@
 			const model = modelDefinition(modelId);
 			const modelColour = modelTrackColour(model.id, model.colour);
 			const values = grouped.get(modelId).sort((a, b) => entryLeadAt(a, target) - entryLeadAt(b, target));
-			const colourOrder = [...values].sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)));
 			const versions = [...new Set(values.map(entry => versionLabel(entry.model_version)).filter(Boolean))];
 			const version = versions.length === 1 ? versions[0] : versions.length ? `${versions.length} versions at this valid time` : 'Version unavailable';
 			const cells = values.map(entry => {
@@ -649,7 +655,7 @@
 				const key = `${entry.model}:${entry.cycle}`;
 				const active = state.archiveSelected.has(key);
 				const loading = state.archiveLoads.has(key);
-				const cellColour = modelRunColour(model.id, model.colour, Math.max(0, colourOrder.findIndex(item => item.cycle === entry.cycle)));
+				const cellColour = modelLeadColour(model.id, model.colour, lead, maximumLead);
 				const initialization = shortArchiveInitialization(entry.cycle_utc);
 				const names = (entry.verification_labels || []).join(', ');
 				const title = [entry.model_label || entry.model, versionLabel(entry.model_version), `initialized ${formatUtc(entry.cycle_utc)}`, `valid ${formatUtc(target)}`, `lead +${lead} h`, names].filter(Boolean).join(' · ');
@@ -658,12 +664,13 @@
 			return `<section class="mla-forecast-matrix-group" style="--model-colour:${esc(modelColour)}"><div class="mla-forecast-matrix-model" title="${esc(version)}"><i aria-hidden="true"></i><span><strong>${esc(model.label)}</strong><small>${esc(version)}</small></span></div><div class="mla-forecast-matrix-cells">${cells}</div></section>`;
 		}).join('');
 		const available = entries.length;
+		const era5Available = entries.some(entry => entry.verification_status === 'matched' || (entry.verification_labels || []).length);
 		const summary = available
 			? `${available} model–lead pair${available === 1 ? '' : 's'} available · ${selected} selected`
 			: 'No model–lead pairs available';
 		return `<div class="mla-forecast-matrix-layout">
 			<div class="mla-forecast-matrix-toolbar"><span><strong>${esc(formatUtc(target))}</strong><small>${esc(summary)}</small></span><button class="mla-btn mla-btn-small mla-btn-quiet" type="button" data-forecast-archive-clear ${selected ? '' : 'hidden'}>Clear</button></div>
-			<div class="mla-forecast-matrix-intro"><p>Choose any model–lead squares; click a selected square again to remove it.</p><aside class="mla-forecast-analysis-choice"><span class="mla-label">Analysis</span><button class="mla-forecast-era5-tile" id="mlaForecastEra5Tile" type="button" aria-pressed="${state.showEra5}" title="Show or hide matched ERA5 catalogue tracks"><strong>ERA5</strong><small>v5.6 track</small></button></aside></div>
+			<div class="mla-forecast-matrix-intro"><p>Choose any model–lead squares; click a selected square again to remove it.</p><aside class="mla-forecast-analysis-choice"><span class="mla-label">Analysis</span><button class="mla-forecast-era5-tile" id="mlaForecastEra5Tile" type="button" aria-pressed="${state.showEra5 && era5Available}" title="${era5Available ? 'Show or hide matched ERA5 catalogue tracks' : 'No matched ERA5 track is available at this valid time'}" ${era5Available ? '' : 'disabled'}><strong>ERA5</strong><small>${era5Available ? 'v5.6 track' : 'No match'}</small></button></aside></div>
 			<div class="mla-forecast-matrix-groups">${groups || `<p class="mla-forecast-matrix-no-match">${esc(noArchiveMatchMessage())}</p>`}</div>
 		</div>`;
 	}
@@ -681,15 +688,21 @@
 		ensureArchiveTarget();
 		populateArchiveTimeControls();
 		const entries = filteredArchive();
+		const target = archiveTargetTime();
+		const maximumLead = Math.max(1, ...entries.map(entry => entryLeadAt(entry, target)).filter(Number.isFinite));
 		state.archiveColourIndexes = new Map();
 		const colourGroups = new Map();
 		for (const entry of entries) {
 			if (!colourGroups.has(entry.model)) colourGroups.set(entry.model, []);
 			colourGroups.get(entry.model).push(entry);
 		}
-		for (const values of colourGroups.values()) values
-			.sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)))
-			.forEach((entry, index) => state.archiveColourIndexes.set(payloadKey(entry.model, entry), index));
+		for (const [modelId, values] of colourGroups) {
+			const model = modelDefinition(modelId);
+			for (const entry of values) state.archiveColourIndexes.set(
+				payloadKey(entry.model, entry),
+				modelLeadColour(model.id, model.colour, entryLeadAt(entry, target), maximumLead)
+			);
+		}
 		const permitted = new Set(entries.map(entry => `${entry.model}:${entry.cycle}`));
 		let selectionChanged = false;
 		for (const key of [...state.archiveSelected]) if (!permitted.has(key)) {
@@ -784,8 +797,10 @@
 	async function loadSelectedModels() {
 		const selected = requestedLatestRuns();
 		if (!selected.length) {
-			notice('Select at least one forecast model.', 'flag', false);
-			configureTimeline(true);
+			state.selectedSystem = null;
+			notice('', '', false);
+			populateWeatherModels();
+			configureTimeline(false);
 			return render();
 		}
 		state.loading = true;
@@ -951,9 +966,8 @@
 		}
 	}
 
-	function setMode(mode) {
-		if (mode === 'tigge') mode = 'archive';
-		state.mode = mode;
+	function syncModeControls() {
+		const mode = state.mode;
 		$('#mlaForecastModeLatest').setAttribute('aria-pressed', String(mode === 'latest'));
 		$('#mlaForecastModeArchive').setAttribute('aria-pressed', String(mode === 'archive'));
 		$('#mlaForecastLayout').dataset.mode = mode;
@@ -964,16 +978,21 @@
 		$('#mlaForecastArchiveWeatherField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveWeatherSourceField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveMembersLabel').hidden = mode !== 'archive';
-		setShowMembers(false);
-		if (!state.initialised) { initialise(); return; }
+	}
+
+	function setMode(mode) {
+		if (mode === 'tigge') mode = 'archive';
+		const changed = state.mode !== mode;
+		state.mode = mode;
+		syncModeControls();
+		persistPreferences();
+		if (!state.initialised) { if (!panel.hidden) initialise(); return; }
+		if (!changed) { resizeAndRender(); return; }
 		state.payload = null;
 		state.selectedSystem = null;
 		state.archiveEntry = null;
 		state.archiveSelected.clear();
-		state.archiveDate = '';
-		state.archiveHour = '00';
-		$('#mlaForecastArchiveSearch').value = '';
-		$('#mlaForecastArchiveDate').value = '';
+		$('#mlaForecastArchiveDate').value = state.archiveDate;
 		$('#mlaForecastArchiveHour').value = state.archiveHour;
 		render();
 		if (mode !== 'latest') {
@@ -1492,13 +1511,9 @@
 	}
 
 	function runColour(entry) {
-		const siblings = state.mode === 'latest'
-			? requestedLatestRuns().filter(item => item.entry && item.model.id === entry.model.id).map(item => ({runKey: payloadKey(item.model.id, item.entry), cycle: item.entry.cycle}))
-			: [];
-		if (state.mode !== 'latest') return modelRunColour(entry.model.id, entry.model.colour || entry.payload.model.colour, state.archiveColourIndexes.get(entry.runKey) || 0);
-		siblings.sort((a, b) => String(b.cycle).localeCompare(String(a.cycle)));
-		const index = Math.max(0, siblings.findIndex(item => item.runKey === entry.runKey));
-		return modelRunColour(entry.model.id, entry.model.colour || entry.payload.model.colour, index);
+		if (state.mode !== 'latest') return state.archiveColourIndexes.get(entry.runKey)
+			|| modelTrackColour(entry.model.id, entry.model.colour || entry.payload.model.colour);
+		return modelTrackColour(entry.model.id, entry.model.colour || entry.payload.model.colour);
 	}
 
 	function drawTracks(systemGroups) {
@@ -1941,28 +1956,17 @@
 			state.selectedModels.add(input.value);
 			if (modelDefinition(input.value).kind === 'ensemble') setShowMembers(true);
 		} else state.selectedModels.delete(input.value);
-		if (!state.selectedModels.size) { state.selectedModels.add(input.value); input.checked = true; notice('Keep at least one forecast model selected.', 'flag', false); return; }
-		if (state.selectedModels.size > 1) state.initializationCount = 1;
+		state.hasModelPreference = true;
 		state.selectedSystem = null;
 		populateInitializationControls();
+		persistPreferences();
 		loadSelectedModels();
 	});
 	$('#mlaForecastInitialization').addEventListener('change', event => {
 		state.initialization = event.target.value;
 		state.selectedSystem = null;
 		state.leadIndex = 0;
-		loadSelectedModels();
-	});
-	$('#mlaForecastRunCount').addEventListener('change', event => {
-		const count = Number(event.target.value);
-		if (count > 1 && state.selectedModels.size !== 1) {
-			event.target.value = '1';
-			notice('Select exactly one model before comparing neighbouring initializations.', 'flag', false);
-			return;
-		}
-		state.initializationCount = count === 0 ? 0 : Math.max(1, count);
-		state.selectedSystem = null;
-		state.leadIndex = 0;
+		persistPreferences();
 		loadSelectedModels();
 	});
 	$('#mlaForecastWeather').addEventListener('change', async event => { state.weather = event.target.value; populateWeatherModels(); await loadWeatherForSelection(); await render(); });
@@ -1985,12 +1989,14 @@
 		state.archiveDate = event.target.value;
 		state.archiveMonth = state.archiveDate ? state.archiveDate.slice(0, 7) : state.archiveMonth;
 		state.archiveEntry = null;
+		persistPreferences();
 		populateArchive(false);
 	});
 	$('#mlaForecastArchiveHour').addEventListener('change', event => {
 		if (parseArchiveTarget($('#mlaForecastArchiveSearch').value)) $('#mlaForecastArchiveSearch').value = '';
 		state.archiveHour = event.target.value;
 		state.archiveEntry = null;
+		persistPreferences();
 		populateArchive(false);
 	});
 	$('#mlaForecastCalendarMonth').addEventListener('change', event => {
@@ -2019,6 +2025,7 @@
 		state.archiveEntry = null;
 		$('#mlaForecastArchiveDate').value = state.archiveDate;
 		$('#mlaForecastArchiveHour').value = state.archiveHour;
+		persistPreferences();
 		populateArchive(false);
 	});
 	$('#mlaForecastArchiveSearch').addEventListener('input', () => {
@@ -2030,7 +2037,9 @@
 	$('#mlaForecastArchiveResults').addEventListener('click', event => {
 		if (event.target.closest('[data-forecast-archive-clear]')) { clearArchiveRuns(); return; }
 		if (event.target.closest('#mlaForecastEra5Tile')) {
+			if (event.target.closest('#mlaForecastEra5Tile').disabled) return;
 			state.showEra5 = !state.showEra5;
+			persistPreferences();
 			populateArchive(false);
 			render();
 			return;
@@ -2045,8 +2054,35 @@
 	bindForecastMap();
 	bindForecastEvolution();
 	window.addEventListener('mla:forecast-visible', () => initialise());
+	window.addEventListener('mla:open-forecast-archive', event => {
+		const detail = event.detail || {};
+		if (/^\d{4}-\d{2}-\d{2}$/.test(detail.date || '')) {
+			state.archiveDate = detail.date;
+			state.archiveMonth = detail.date.slice(0, 7);
+		}
+		if (['00', '06', '12', '18'].includes(detail.hour)) state.archiveHour = detail.hour;
+		if (typeof detail.query === 'string') $('#mlaForecastArchiveSearch').value = detail.query;
+		state.archiveEntry = null;
+		state.archiveSelected.clear();
+		state.selectedSystem = null;
+		persistPreferences();
+		const alreadyArchive = state.mode === 'archive';
+		setMode('archive');
+		if (state.initialised && alreadyArchive) ensureArchiveManifest().then(() => populateArchive(true)).catch(error => {
+			notice(`Forecast archive is unavailable: ${error.message || error}`, 'flag', true);
+		});
+	});
 	window.addEventListener('resize', () => { clearTimeout(state.resizeTimer); state.resizeTimer = setTimeout(resizeAndRender, 120); });
 
 	const parameters = new URLSearchParams(location.search);
-	if (['archive', 'tigge'].includes(parameters.get('fmode'))) setMode('archive');
+	if (['archive', 'tigge'].includes(parameters.get('fmode'))) state.mode = 'archive';
+	else if (parameters.get('fmode') === 'latest') state.mode = 'latest';
+	const requestedArchiveDate = parameters.get('fdate');
+	if (/^\d{4}-\d{2}-\d{2}$/.test(requestedArchiveDate || '')) {
+		state.archiveDate = requestedArchiveDate;
+		state.archiveMonth = requestedArchiveDate.slice(0, 7);
+	}
+	if (['00', '06', '12', '18'].includes(parameters.get('fhour'))) state.archiveHour = parameters.get('fhour');
+	syncModeControls();
+	persistPreferences();
 })();

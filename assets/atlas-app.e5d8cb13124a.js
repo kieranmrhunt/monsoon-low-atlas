@@ -87,10 +87,13 @@
 	let exactSearchIndex = null;
 	let exactSearchConflicts = [];
 	let extremeScatterPoints = [];
+	let forecastArchiveIndexPromise = null;
+	let forecastDossierSerial = 0;
 	const compositeCache = new Map();
 	const compositePromises = new Map();
 	const compositeErrors = new Map();
 	const sectionMeanCache = new Map();
+	const forecastOpportunityCache = new Map();
 
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
@@ -393,6 +396,19 @@
 		const response = await fetch(url, {cache: 'force-cache'});
 		if (!response.ok) throw new Error(`Could not fetch ${label} (${response.status})`);
 		return decodeJsonBytes(new Uint8Array(await response.arrayBuffer()));
+	}
+
+	async function ensureForecastArchiveIndex() {
+		ensureAtlasConfig();
+		if (!atlasConfig.forecastBase) throw new Error('Forecast archive is not configured');
+		if (!forecastArchiveIndexPromise) {
+			const base = String(atlasConfig.forecastBase).replace(/\/$/, '');
+			forecastArchiveIndexPromise = fetchJsonAsset(`${base}/archive-manifest.json.gz`, 'forecast archive index').then(value => {
+				if (value.schema !== 'mla-forecast-manifest-v1') throw new Error('Unsupported forecast archive index');
+				return value;
+			});
+		}
+		return forecastArchiveIndexPromise;
 	}
 
 	async function loadGzipJson(id) {
@@ -2929,6 +2945,66 @@
 		return `${['La Niña', 'Neutral', 'El Niño'][category]} (${fmt(CLIMATE.enso.oni_x100[index] / 100, 2)} °C)`;
 	}
 
+	function forecastArchiveOpportunity(manifest, trackIndex) {
+		const row = track(trackIndex);
+		const start = Number(row[T.start_ms]);
+		const end = Number(row[T.end_ms]);
+		const token = `ERA5 v5.6 track ${atlasId(trackIndex)}`;
+		const entries = [...(manifest.archive || []), ...(manifest.tigge_archive || [])].filter(entry => {
+			const first = new Date(entry.valid_start_utc || entry.cycle_utc).getTime();
+			const last = new Date(entry.valid_end_utc).getTime();
+			return Number.isFinite(first) && Number.isFinite(last) && first <= end && last >= start;
+		});
+		if (!entries.length) return null;
+		const firstTime = Math.ceil(start / (6 * HOUR_MS)) * 6 * HOUR_MS;
+		const candidates = [];
+		for (let time = firstTime; time <= end; time += 6 * HOUR_MS) candidates.push(time);
+		if (!candidates.length) candidates.push(Math.round((start + end) / (12 * HOUR_MS)) * 6 * HOUR_MS);
+		let best = null;
+		for (const time of candidates) {
+			const valid = entries.filter(entry => new Date(entry.valid_start_utc || entry.cycle_utc).getTime() <= time && new Date(entry.valid_end_utc).getTime() >= time);
+			if (!valid.length) continue;
+			const matched = valid.filter(entry => (entry.verification_labels || []).some(label => String(label).includes(token)));
+			const pool = matched.length ? matched : valid;
+			const modelIds = new Set(pool.map(entry => entry.model));
+			const score = Number(Boolean(matched.length)) * 100000 + modelIds.size * 1000 + pool.length - Math.abs(time - (start + end) / 2) / HOUR_MS / 1000;
+			if (!best || score > best.score) best = {time, pool, matched: Boolean(matched.length), score};
+		}
+		if (!best) return null;
+		const definitions = new Map((manifest.models || []).map(model => [model.id, model.label]));
+		const labels = [...new Set(best.pool.map(entry => entry.model_label || definitions.get(entry.model) || entry.model))].sort();
+		const target = new Date(best.time);
+		return {
+			date: target.toISOString().slice(0, 10),
+			hour: String(target.getUTCHours()).padStart(2, '0'),
+			query: best.matched ? token : '',
+			labels
+		};
+	}
+
+	function renderForecastArchiveAction(trackIndex) {
+		const button = $('#mlaOpenForecastArchive');
+		if (!button) return;
+		const serial = ++forecastDossierSerial;
+		button.hidden = true;
+		ensureForecastArchiveIndex().then(manifest => {
+			if (serial !== forecastDossierSerial || state.selected !== trackIndex) return;
+			if (!forecastOpportunityCache.has(trackIndex)) forecastOpportunityCache.set(trackIndex, forecastArchiveOpportunity(manifest, trackIndex));
+			const opportunity = forecastOpportunityCache.get(trackIndex);
+			if (!opportunity) return;
+			button.dataset.forecastDate = opportunity.date;
+			button.dataset.forecastHour = opportunity.hour;
+			button.dataset.forecastQuery = opportunity.query;
+			const visible = opportunity.labels.slice(0, 3).join(', ');
+			const remainder = opportunity.labels.length > 3 ? ` +${opportunity.labels.length - 3}` : '';
+			button.textContent = `Forecast archive · ${visible}${remainder}`;
+			button.title = `Open ${opportunity.date} ${opportunity.hour} UTC with ${opportunity.labels.join(', ')}`;
+			button.hidden = false;
+		}).catch(() => {
+			// Forecast availability is optional context and must not disturb the explorer.
+		});
+	}
+
 	function renderDossier() {
 		const node = $('#mlaDossier');
 		const content = node;
@@ -2938,6 +3014,7 @@
 		$('#mlaSelectedEvolutionCard').hidden = !hasSelection;
 		$('#mlaCompositeCard').hidden = !hasSelection;
 		if (state.selected == null) {
+			forecastDossierSerial++;
 			if (!state.active.length) {
 				content.innerHTML = '<div class="mla-dossier-head"><div><h3>No matching systems</h3><p class="mla-dossier-sub">Adjust or reset the active filters.</p></div></div>';
 				return;
@@ -2981,12 +3058,22 @@
 			<div class="mla-fact-grid">${facts.map(fact => `<div class="mla-fact"><span>${esc(fact[0])}</span><strong>${esc(fact[1])}</strong></div>`).join('')}</div>
 			<p class="mla-dossier-empty">Peak class is ERA5-derived and uses IMD-equivalent wind thresholds. CS means Cyclonic Storm, not Saffir–Simpson Category 1 or an official agency classification.</p>
 			<div class="mla-match-box"><h4>Closest catalogue analogues</h4><div class="mla-chip-row">${analogues.map(([analogue, distance]) => `<button class="mla-chip" type="button" data-select-track="${analogue}" data-keep-map="true" title="track, intensity and impact analogue distance ${distance.toFixed(2)}">${esc(systemLabel(analogue))}</button>`).join('')}</div></div>
-			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download track points</button></div>
+			<div class="mla-dossier-actions"><button class="mla-btn mla-btn-small" id="mlaPreviousTrack" type="button">Previous</button><button class="mla-btn mla-btn-small" id="mlaNextTrack" type="button">Next</button><button class="mla-btn mla-btn-small" id="mlaFitTrack" type="button">Fit track</button><button class="mla-btn mla-btn-small" id="mlaSelectedFixes" type="button">Download track points</button><button class="mla-btn mla-btn-small" id="mlaOpenForecastArchive" type="button" hidden>Forecast archive</button></div>
 			`;
 		$('#mlaPreviousTrack').addEventListener('click', () => stepSelected(-1));
 		$('#mlaNextTrack').addEventListener('click', () => stepSelected(1));
 		$('#mlaFitTrack').addEventListener('click', fitSelected);
 		$('#mlaSelectedFixes').addEventListener('click', downloadSelectedFixes);
+		$('#mlaOpenForecastArchive').addEventListener('click', event => {
+			const button = event.currentTarget;
+			window.dispatchEvent(new CustomEvent('mla:open-forecast-archive', {detail: {
+				date: button.dataset.forecastDate,
+				hour: button.dataset.forecastHour,
+				query: button.dataset.forecastQuery
+			}}));
+			activateTab('forecast', true);
+		});
+		renderForecastArchiveAction(index);
 	}
 
 	function sortedActive(sortValue) {
@@ -4268,8 +4355,31 @@
 
 	function maximumSeriesValue(index, field, divisor) {
 		if (!DETAIL) return NaN;
-		const values = DETAIL.series[index][S[field]].filter(value => value != null).map(Number);
+		const source = DETAIL.series[index][S[field]];
+		if (!source) return NaN;
+		const values = source.filter(value => value != null).map(Number);
 		return values.length ? Math.max(...values) / (divisor || 1) : NaN;
+	}
+
+	function minimumSeriesValue(index, field, divisor) {
+		if (!DETAIL) return NaN;
+		const source = DETAIL.series[index][S[field]];
+		if (!source) return NaN;
+		const values = source.filter(value => value != null).map(Number);
+		return values.length ? Math.min(...values) / (divisor || 1) : NaN;
+	}
+
+	function maximumVectorSeriesValue(index, firstField, secondField, divisor) {
+		if (!DETAIL) return NaN;
+		const first = DETAIL.series[index][S[firstField]];
+		const second = DETAIL.series[index][S[secondField]];
+		if (!first || !second) return NaN;
+		let maximum = -Infinity;
+		for (let point = 0; point < Math.min(first.length, second.length); point++) {
+			if (first[point] == null || second[point] == null) continue;
+			maximum = Math.max(maximum, Math.hypot(Number(first[point]), Number(second[point])) / (divisor || 1));
+		}
+		return Number.isFinite(maximum) ? maximum : NaN;
 	}
 
 	function maximumLagGrowth(index, field, divisor, lag) {
@@ -4300,6 +4410,38 @@
 		mslp: {label: 'Minimum MSLP', unit: 'hPa', decimals: 1, value: index => track(index)[T.min_mslp_x10] / 10, descending: false},
 		q850: {label: 'q850', unit: 'g kg⁻¹', decimals: 1, value: index => track(index)[T.peak_q850_x10] / 10, descending: true},
 		rh850: {label: 'RH850', unit: '%', decimals: 1, value: index => track(index)[T.peak_rh850_x10] / 10, descending: true},
+		coreVortMax: {label: 'Maximum core vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'max_vort_x10', 10), descending: true, requiresDetail: true},
+		coreVortMean: {label: 'Maximum mean core vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'mean_vort_x10', 10), descending: true, requiresDetail: true},
+		vort850: {label: 'Maximum mean 850-hPa vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'vort850_x10', 10), descending: true, requiresDetail: true},
+		vort700: {label: 'Maximum mean 700-hPa vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'vort700_x10', 10), descending: true, requiresDetail: true},
+		vort500: {label: 'Maximum mean 500-hPa vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'vort500_x10', 10), descending: true, requiresDetail: true},
+		vortDeep: {label: 'Maximum deep-layer mean vorticity', unit: '10⁻⁵ s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'vort_deep_x10', 10), descending: true, requiresDetail: true},
+		maxWind: {label: 'Maximum 10-m wind', unit: 'm s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'max_wind_x10', 10), descending: true, requiresDetail: true},
+		meanWind: {label: 'Maximum mean 10-m wind', unit: 'm s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'mean_wind_x10', 10), descending: true, requiresDetail: true},
+		backgroundWind: {label: 'Strongest background wind', unit: 'm s⁻¹', decimals: 1, value: index => maximumVectorSeriesValue(index, 'background_u_x10', 'background_v_x10', 10), descending: true, requiresDetail: true, note: 'Largest 300–500 km environmental vector speed sampled along the track'},
+		westerlyBackground: {label: 'Strongest westerly background flow', unit: 'm s⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'background_u_x10', 10), descending: true, requiresDetail: true},
+		easterlyBackground: {label: 'Strongest easterly background flow', unit: 'm s⁻¹', decimals: 1, value: index => minimumSeriesValue(index, 'background_u_x10', 10), descending: false, requiresDetail: true},
+		ringMslp: {label: 'Lowest environmental MSLP', unit: 'hPa', decimals: 1, value: index => minimumSeriesValue(index, 'ring_mslp_x10', 10), descending: false, requiresDetail: true},
+		hourlyRain: {label: 'Maximum hourly precipitation', unit: 'mm h⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'precip1_x100', 100), descending: true, requiresDetail: true},
+		q700: {label: 'Maximum q700', unit: 'g kg⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'q700_x10', 10), descending: true, requiresDetail: true},
+		q500: {label: 'Maximum q500', unit: 'g kg⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'q500_x10', 10), descending: true, requiresDetail: true},
+		qDeep: {label: 'Maximum deep-layer specific humidity', unit: 'g kg⁻¹', decimals: 1, value: index => maximumSeriesValue(index, 'q_deep_x10', 10), descending: true, requiresDetail: true},
+		rh700: {label: 'Maximum RH700', unit: '%', decimals: 1, value: index => maximumSeriesValue(index, 'rh700_x10', 10), descending: true, requiresDetail: true},
+		rh500: {label: 'Maximum RH500', unit: '%', decimals: 1, value: index => maximumSeriesValue(index, 'rh500_x10', 10), descending: true, requiresDetail: true},
+		rhDeep: {label: 'Maximum deep-layer relative humidity', unit: '%', decimals: 1, value: index => maximumSeriesValue(index, 'rh_deep_x10', 10), descending: true, requiresDetail: true},
+		dryRh500: {label: 'Minimum RH500', unit: '%', decimals: 1, value: index => minimumSeriesValue(index, 'rh500_x10', 10), descending: false, requiresDetail: true},
+		t850Warm: {label: 'Maximum T850', unit: 'K', decimals: 1, value: index => maximumSeriesValue(index, 't850_x10', 10), descending: true, requiresDetail: true},
+		t850Cold: {label: 'Minimum T850', unit: 'K', decimals: 1, value: index => minimumSeriesValue(index, 't850_x10', 10), descending: false, requiresDetail: true},
+		t700Warm: {label: 'Maximum T700', unit: 'K', decimals: 1, value: index => maximumSeriesValue(index, 't700_x10', 10), descending: true, requiresDetail: true},
+		t500Cold: {label: 'Minimum T500', unit: 'K', decimals: 1, value: index => minimumSeriesValue(index, 't500_x10', 10), descending: false, requiresDetail: true},
+		warmCore850: {label: 'Largest 850-hPa inner temperature anomaly', unit: 'K', decimals: 2, value: index => maximumSeriesValue(index, 't850_inner_anomaly_x100', 100), descending: true, requiresDetail: true},
+		warmCore700: {label: 'Largest 700-hPa inner temperature anomaly', unit: 'K', decimals: 2, value: index => maximumSeriesValue(index, 't700_inner_anomaly_x100', 100), descending: true, requiresDetail: true},
+		warmCore500: {label: 'Largest 500-hPa inner temperature anomaly', unit: 'K', decimals: 2, value: index => maximumSeriesValue(index, 't500_inner_anomaly_x100', 100), descending: true, requiresDetail: true},
+		warmCoreDeep: {label: 'Largest deep inner temperature anomaly', unit: 'K', decimals: 2, value: index => maximumSeriesValue(index, 't_inner_anomaly_deep_x100', 100), descending: true, requiresDetail: true},
+		coldCoreDeep: {label: 'Most negative deep inner temperature anomaly', unit: 'K', decimals: 2, value: index => minimumSeriesValue(index, 't_inner_anomaly_deep_x100', 100), descending: false, requiresDetail: true},
+		stability850500: {label: 'Largest T850−T500 difference', unit: 'K', decimals: 1, value: index => maximumSeriesValue(index, 't850_minus_t500_x10', 10), descending: true, requiresDetail: true},
+		stability700500: {label: 'Largest T700−T500 difference', unit: 'K', decimals: 1, value: index => maximumSeriesValue(index, 't700_minus_t500_x10', 10), descending: true, requiresDetail: true},
+		orography: {label: 'Highest centre orography', unit: 'm', decimals: 0, value: index => maximumSeriesValue(index, 'orography_m', 1), descending: true, requiresDetail: true},
 		deepening24: {label: 'Maximum 24 h pressure-deficit growth', unit: 'hPa day⁻¹', decimals: 1, value: index => maximumLagGrowth(index, 'pressure_deficit_x10', 10, 24), descending: true, requiresDetail: true, note: 'Largest end-minus-start change across any 24-hour interval; this is pressure-deficit growth, not central-pressure fall'},
 		windGrowth24: {label: 'Maximum 24 h circulation-wind growth', unit: 'm s⁻¹ day⁻¹', decimals: 1, value: index => maximumLagGrowth(index, 'circulation_wind_x10', 10, 24), descending: true, requiresDetail: true, note: 'Largest end-minus-start change across any 24-hour interval'},
 		vortGrowth24: {label: 'Maximum 24 h smoothed-vorticity growth', unit: '10⁻⁵ s⁻¹ day⁻¹', decimals: 1, value: index => maximumLagGrowth(index, 'vort_smooth_x10', 10, 24), descending: true, requiresDetail: true, note: 'Largest end-minus-start change across any 24-hour interval'},
@@ -4319,7 +4461,7 @@
 		eastGenesis: {label: 'Genesis longitude', unit: '°E', decimals: 2, value: index => track(index)[T.gen_lon_x1000] / 1000, descending: true, note: 'Easternmost first published centre'},
 		westGenesis: {label: 'Genesis longitude', unit: '°E', decimals: 2, value: index => track(index)[T.gen_lon_x1000] / 1000, descending: false, note: 'Westernmost first published centre'}
 	};
-	const EXTREME_RELATIONSHIP_KEYS = ['compoundIntensity', 'duration', 'distance', 'meanSpeed', 'deficit', 'wind', 'rain', 'vort', 'mslp', 'q850', 'rh850', 'stateRain', 'deepening24', 'windGrowth24', 'vortGrowth24', 'depressionHours', 'landHours'];
+	const EXTREME_RELATIONSHIP_KEYS = ['compoundIntensity', 'duration', 'distance', 'meanSpeed', 'deficit', 'wind', 'rain', 'hourlyRain', 'vort', 'coreVortMax', 'coreVortMean', 'vort850', 'vort700', 'vort500', 'vortDeep', 'mslp', 'ringMslp', 'maxWind', 'meanWind', 'backgroundWind', 'q850', 'q700', 'q500', 'qDeep', 'rh850', 'rh700', 'rh500', 'rhDeep', 'dryRh500', 't850Warm', 't850Cold', 't700Warm', 't500Cold', 'warmCore850', 'warmCore700', 'warmCore500', 'warmCoreDeep', 'coldCoreDeep', 'stability850500', 'stability700500', 'orography', 'stateRain', 'deepening24', 'windGrowth24', 'vortGrowth24', 'depressionHours', 'landHours'];
 
 	function extremeValueMap(indexes, definition) {
 		const values = new Map();
