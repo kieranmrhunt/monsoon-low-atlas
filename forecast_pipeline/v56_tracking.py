@@ -61,8 +61,8 @@ RETROSPECTIVE_MINIMUM_CONTIGUOUS_PHYSICAL_HOURS = 12
 RETROSPECTIVE_MINIMUM_OBSERVED_SPAN_HOURS = 72
 RETROSPECTIVE_MINIMUM_OBSERVED_POSITIONS = 36
 MINIMUM_RELEASE_DOMAIN_POSITIONS = 3
-FORECAST_COALESCENCE_DISTANCE_KM = 50.0
-FORECAST_COALESCENCE_MINIMUM_HOURS = 18
+FORECAST_COALESCENCE_DISTANCE_KM = 75.0
+FORECAST_COALESCENCE_MINIMUM_HOURS = 6
 
 
 def parameter_sha256() -> str:
@@ -270,17 +270,17 @@ def _forecast_haversine_km(
     return 12_742.0 * np.arcsin(np.sqrt(np.clip(value, 0.0, 1.0)))
 
 
-def _terminal_coalescence(
+def _sustained_coalescence(
     first: pd.DataFrame,
     second: pd.DataFrame,
 ) -> tuple[pd.Timestamp, int] | None:
-    """Return the start of a persistent, terminally co-located track tail.
+    """Return the first sustained same-member coalescence.
 
     Two features can be physically distinct for much of a forecast and then
-    merge.  Once the one-degree detector alternates the same centre between
-    two linked identities, publishing both tails produces duplicate guidance.
-    A short crossing is deliberately retained; only an hourly, terminal run
-    within 50 km for at least 18 hours is treated as coalescence.
+    merge. At the one-degree tracking resolution, two centres from the same
+    model member that remain within 75 km for six consecutive hourly analyses
+    are not independently resolvable. The first identity is therefore kept
+    after that sustained encounter. One-off crossings remain distinct.
     """
 
     first_positions = first[["time", "lon", "lat"]].copy()
@@ -302,25 +302,33 @@ def _terminal_coalescence(
         common["lat_second"].to_numpy(),
     )
     close = distance <= FORECAST_COALESCENCE_DISTANCE_KM
-    if not bool(close[-1]):
-        return None
     times = pd.DatetimeIndex(common["time"])
-    start_index = len(common) - 1
-    while start_index > 0:
-        step_hours = (times[start_index] - times[start_index - 1]).total_seconds() / 3600.0
-        if not bool(close[start_index - 1]) or not math.isclose(step_hours, 1.0):
-            break
-        start_index -= 1
-    duration_hours = int(round((times[-1] - times[start_index]).total_seconds() / 3600.0)) + 1
-    if duration_hours < FORECAST_COALESCENCE_MINIMUM_HOURS:
-        return None
-    return pd.Timestamp(times[start_index]), duration_hours
+    run_start: int | None = None
+    for index, is_close in enumerate(close):
+        contiguous = (
+            index == 0
+            or math.isclose(
+                (times[index] - times[index - 1]).total_seconds() / 3600.0,
+                1.0,
+            )
+        )
+        if not is_close:
+            run_start = None
+            continue
+        if run_start is None or not contiguous:
+            run_start = index
+        duration_hours = int(
+            round((times[index] - times[run_start]).total_seconds() / 3600.0)
+        ) + 1
+        if duration_hours >= FORECAST_COALESCENCE_MINIMUM_HOURS:
+            return pd.Timestamp(times[run_start]), duration_hours
+    return None
 
 
 def merge_persistent_same_member_coalescences(
     accepted: pd.DataFrame,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
-    """Collapse duplicate tails after two same-member forecast features merge.
+    """Collapse duplicate paths after same-member forecast features merge.
 
     The earlier identity is retained.  Within the merged tail, observed rows
     outrank interpolated rows so the surviving path follows the actual detected
@@ -341,7 +349,7 @@ def merge_persistent_same_member_coalescences(
         identifiers = list(groups)
         for first_index, first_id in enumerate(identifiers):
             for second_id in identifiers[first_index + 1:]:
-                result = _terminal_coalescence(groups[first_id], groups[second_id])
+                result = _sustained_coalescence(groups[first_id], groups[second_id])
                 if result is not None:
                     match = (first_id, second_id, result[0], result[1])
                     break
@@ -397,7 +405,7 @@ def merge_persistent_same_member_coalescences(
             "kept_track_id": str(keeper),
             "terminated_track_id": str(terminated),
             "merge_time_utc": merge_time.isoformat().replace("+00:00", "Z"),
-            "close_tail_hours": int(close_hours),
+            "qualifying_close_run_hours": int(close_hours),
             "distance_threshold_km": FORECAST_COALESCENCE_DISTANCE_KM,
         })
     return frame.reset_index(drop=True), audit

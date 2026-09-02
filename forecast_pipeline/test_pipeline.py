@@ -733,7 +733,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
         steps = np.asarray([0, 1, 2, 3, 4, 6, 7])
         self.assertEqual(_longest_true_run(mask, steps), 2)
 
-    def test_persistent_same_member_coalescence_publishes_only_one_tail(self) -> None:
+    def test_sustained_same_member_coalescence_publishes_only_one_path(self) -> None:
         origin = pd.Timestamp("2026-09-02T00:00:00Z")
         rows = []
         for hour in range(41):
@@ -761,11 +761,41 @@ class ForecastPipelineContractTests(unittest.TestCase):
             & pd.to_datetime(merged["time"], utc=True).ge(origin + pd.Timedelta(hours=23))
         ]
         self.assertEqual(len(audit), 1)
-        self.assertEqual(audit[0]["close_tail_hours"], 18)
+        self.assertEqual(audit[0]["qualifying_close_run_hours"], 6)
         self.assertEqual(pd.to_datetime(later["time"], utc=True).max(), origin + pd.Timedelta(hours=22))
         self.assertEqual(len(surviving_tail), 18)
         self.assertTrue(surviving_tail["position_source"].eq("observed").all())
         self.assertTrue(np.allclose(surviving_tail["lon"], 70.1))
+
+    def test_same_member_paths_remain_merged_after_a_sustained_encounter(self) -> None:
+        origin = pd.Timestamp("2026-09-02T00:00:00Z")
+        rows = []
+        for hour in range(31):
+            rows.append({
+                "track_id": "first",
+                "time": origin + pd.Timedelta(hours=hour),
+                "lon": 70.0,
+                "lat": 22.0,
+                "position_source": "observed",
+                "score_v53": 6.0,
+            })
+        for hour in range(5, 31):
+            # Six unresolved hours, followed by an apparent lobe split. Once
+            # coalesced, publishing the second identity again would duplicate
+            # one same-member forecast disturbance.
+            rows.append({
+                "track_id": "second",
+                "time": origin + pd.Timedelta(hours=hour),
+                "lon": 70.4 if 10 <= hour <= 15 else 73.0,
+                "lat": 22.0,
+                "position_source": "observed",
+                "score_v53": 5.0,
+            })
+        merged, audit = merge_persistent_same_member_coalescences(pd.DataFrame(rows))
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(audit[0]["merge_time_utc"], "2026-09-02T10:00:00Z")
+        second_times = pd.to_datetime(merged.loc[merged["track_id"].eq("second"), "time"], utc=True)
+        self.assertEqual(second_times.max(), origin + pd.Timedelta(hours=9))
 
     def test_forecast_interpolation_can_begin_after_initialization(self) -> None:
         np.testing.assert_array_equal(_hourly_axis([6, 12]), np.arange(6, 13))
