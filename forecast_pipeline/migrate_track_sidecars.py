@@ -117,8 +117,11 @@ def main() -> None:
         }
         for future in as_completed(futures):
             model, cycle, relative, tracks_relative, weather_fields = future.result()
-            if weather_fields:
-                updates[(model, cycle, relative)] = (tracks_relative, weather_fields)
+            # Empty weather is also a material correction: old archive entries
+            # may retain a stale cycles/ sidecar URL after the duplicate live
+            # payload is cleaned. Point those entries back to their compact
+            # archive payload and stop advertising unavailable map fields.
+            updates[(model, cycle, relative)] = (tracks_relative, weather_fields)
     with ManifestLock(args.root):
         manifest = read_manifest(manifest_path)
         update_entries(manifest, updates)

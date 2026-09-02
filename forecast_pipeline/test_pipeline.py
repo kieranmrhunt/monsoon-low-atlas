@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from forecast_pipeline import merge_archives, merge_runs
+from forecast_pipeline import merge_archives, merge_runs, migrate_track_sidecars
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
     GRID_LONS,
@@ -817,6 +817,24 @@ class ForecastPipelineContractTests(unittest.TestCase):
         )
         self.assertEqual(projected["gfs"][1]["url"], "archive/gfs/2026082912.json.gz")
         self.assertNotIn("tigge-ncep", projected)
+
+    def test_sidecar_migration_clears_stale_weather_metadata(self) -> None:
+        manifest = {
+            "latest": {}, "recent": {},
+            "archive": [{
+                "model": "gfs", "cycle": "2026083000",
+                "url": "archive/gfs/2026083000.json.gz",
+                "tracks_url": "cycles/gfs/2026083000.tracks.json.gz",
+                "weather_fields": ["precipitation", "vorticity"],
+            }],
+        }
+        migrate_track_sidecars.update_entries(manifest, {
+            ("gfs", "2026083000", "archive/gfs/2026083000.json.gz"):
+                ("archive/gfs/2026083000.json.gz", []),
+        })
+        entry = manifest["archive"][0]
+        self.assertEqual(entry["tracks_url"], entry["url"])
+        self.assertEqual(entry["weather_fields"], [])
 
     def test_progressive_publisher_ignores_a_stale_completed_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
