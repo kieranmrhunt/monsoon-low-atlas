@@ -24,8 +24,11 @@
 	const ANALYSIS_TRACKS = Object.freeze({
 		era5: {label: 'ERA5', colour: '#000000', detail: 'v5.6 track'},
 		merra2: {label: 'MERRA-2', colour: '#c51b7d', detail: 'matched track'},
-		imdaa: {label: 'IMDAA', colour: '#008c95', detail: 'matched track'}
+		imdaa: {label: 'IMDAA', colour: '#008c95', detail: 'matched track'},
+		jra55: {label: 'JRA-55', colour: '#e66101', detail: 'matched track'},
+		erainterim: {label: 'ERA-Interim', colour: '#5e3c99', detail: 'matched track'}
 	});
+	const ALTERNATIVE_ANALYSIS_KEYS = Object.freeze(Object.keys(ANALYSIS_TRACKS).filter(source => source !== 'era5'));
 	const OPERATIONAL_MODEL_ORDER = [
 		'gfs', 'gefs', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
 		'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
@@ -160,7 +163,7 @@
 	async function initialiseReanalysisTracks() {
 		try {
 			const manifest = await ensureReanalysisManifest();
-			await Promise.allSettled(['merra2', 'imdaa'].filter(source => manifest.sources[source] && manifest.sources[source].status === 'ready').map(ensureReanalysisAsset));
+			await Promise.allSettled(ALTERNATIVE_ANALYSIS_KEYS.filter(source => manifest.sources[source] && manifest.sources[source].status === 'ready').map(ensureReanalysisAsset));
 			if (state.mode === 'archive') populateArchive(false);
 			render();
 		} catch (error) {
@@ -1789,7 +1792,7 @@
 			for (const {entry, track} of verificationTracks.values()) {
 				const currentStep = stepForPayload(entry.payload);
 				const validTime = currentValidTime();
-				for (const source of ['merra2', 'imdaa']) {
+				for (const source of ALTERNATIVE_ANALYSIS_KEYS) {
 					if (!state.analysisSources.has(source)) continue;
 					const matched = matchedReanalysisTrack(source, track.id);
 					if (matched) drawAnalysisPath(target, matched.points, ANALYSIS_TRACKS[source].colour, pointAtEpoch(matched.points, validTime));

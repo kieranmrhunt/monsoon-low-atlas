@@ -17,7 +17,12 @@ from .match import MATCH_SCHEMA
 
 
 MANIFEST_SCHEMA = "lps-atlas-reanalysis-manifest-v1"
-SOURCE_LABELS = {"merra2": "MERRA-2", "imdaa": "IMDAA"}
+SOURCE_LABELS = {
+    "merra2": "MERRA-2",
+    "imdaa": "IMDAA",
+    "jra55": "JRA-55",
+    "erainterim": "ERA-Interim",
+}
 
 
 def utc_now() -> str:
@@ -88,11 +93,34 @@ def atomic_copy(source: Path, destination: Path) -> None:
     os.replace(temporary, destination)
 
 
+def existing_assets(output: Path, supplied: Mapping[str, Path]) -> dict[str, Path]:
+    """Retain validated ready sources when publishing one completed backfill."""
+
+    assets = dict(supplied)
+    for source in SOURCE_LABELS:
+        existing = output / "matches" / f"{source}-matches.json.gz"
+        if source not in assets and existing.is_file():
+            try:
+                validate_match_asset(existing, source)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            assets[source] = existing
+    return assets
+
+
 def publish(output: Path, assets: Mapping[str, Path]) -> Path:
+    # Install newly completed assets first, then rescan the publication
+    # directory. If two source finalizers finish together, the later manifest
+    # writer therefore observes the earlier source file instead of dropping it.
+    for source, path in assets.items():
+        validate_match_asset(path, source)
+    for source, path in assets.items():
+        destination = output / "matches" / f"{source}-matches.json.gz"
+        atomic_copy(path, destination)
+    assets = existing_assets(output, {})
     manifest = build_manifest(assets)
     for source, path in assets.items():
         destination = output / manifest["sources"][source]["matches_url"]
-        atomic_copy(path, destination)
         if sha256(destination) != manifest["sources"][source]["sha256"]:
             raise RuntimeError(f"checksum mismatch after publishing {source}")
     output.mkdir(parents=True, exist_ok=True)
@@ -108,12 +136,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--merra2", type=Path)
     parser.add_argument("--imdaa", type=Path)
+    parser.add_argument("--jra55", type=Path)
+    parser.add_argument("--erainterim", type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    assets = {name: path for name, path in (("merra2", args.merra2), ("imdaa", args.imdaa)) if path}
+    assets = {
+        name: getattr(args, name)
+        for name in SOURCE_LABELS
+        if getattr(args, name) is not None
+    }
     print(publish(args.output, assets))
 
 

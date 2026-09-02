@@ -1,0 +1,62 @@
+{
+  "schema": "lps-atlas-climate-tab-contract-v1",
+  "created_utc": "2026-09-02T00:00:00Z",
+  "purpose": "Track monsoon low-pressure systems consistently in CMIP6 historical and future integrations and expose model-aware climate-change diagnostics in the atlas.",
+  "source_inventory": "badc-cmip6-summary.json",
+  "tracking_grain": [
+    "activity",
+    "institution",
+    "source_id",
+    "experiment_id",
+    "member_id",
+    "track_id",
+    "time"
+  ],
+  "minimum_candidate_fields": {
+    "circulation": "ua+va or vo at 850, 700 and 500 hPa at no worse than six-hour cadence",
+    "pressure": "mean sea-level pressure at no worse than six-hour cadence"
+  },
+  "optional_physics": [
+    "10-m vector wind",
+    "precipitation",
+    "pressure-level temperature",
+    "pressure-level humidity",
+    "surface pressure for hybrid-level conversion"
+  ],
+  "processing_rules": [
+    "Preserve each model's native calendar and retain cftime timestamps.",
+    "Run a month-scale field and timestep QA pilot before a model is admitted.",
+    "Use one frozen detector/linker version across historical and scenario segments.",
+    "Join historical and scenario segments only for the same model, member and compatible grid.",
+    "Store raw detector diagnostics so resolution sensitivity can be audited.",
+    "Do not tune thresholds to force agreement with ERA5 counts; report model biases separately."
+  ],
+  "comparison_defaults": {
+    "reference": "ERA5 LPS v5.6",
+    "historical_baseline": "1981-2010",
+    "future_windows": [
+      "2021-2050",
+      "2041-2070",
+      "2071-2100"
+    ],
+    "ensemble_weighting": "one model, one vote by default; member-weighted view optional",
+    "uncertainty": "show model spread and paired historical-to-scenario changes"
+  },
+  "planned_controls": [
+    "experiment/scenario",
+    "model",
+    "member",
+    "period",
+    "season/month",
+    "LPS class",
+    "genesis and lysis region",
+    "frequency, duration, intensity, pathway and rainfall metric"
+  ],
+  "publication_assets": [
+    "availability manifest",
+    "compact source-native track catalogue",
+    "model-period summary cube",
+    "precomputed spatial density and rainfall-change grids",
+    "QA and detector-version manifest"
+  ]
+}

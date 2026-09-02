@@ -74,7 +74,12 @@ def open_native_days(paths: Iterable[Path], variables: Sequence[str]) -> xr.Data
     return combined.isel(time=np.sort(indexes)).sortby("time")
 
 
-def resolve_precipitation_file(root: Path, day: datetime.date) -> Path:
+def resolve_precipitation_file(
+    root: Path,
+    day: datetime.date,
+    *,
+    raw_root: Path | None = None,
+) -> Path:
     stamp = day.strftime("%Y%m%d")
     candidates = [
         *sorted((root / "precip").glob(f"*{stamp}*.nc*")),
@@ -84,6 +89,8 @@ def resolve_precipitation_file(root: Path, day: datetime.date) -> Path:
             )
         ),
     ]
+    if raw_root is not None:
+        candidates.insert(0, raw_output_path(raw_root, "precipitation", day))
     if not candidates:
         raise FileNotFoundError(f"No local MERRA-2 PRECTOT file found for {day} below {root}")
     return candidates[0]
@@ -97,13 +104,26 @@ def label_precipitation_at_interval_end(values: xr.DataArray) -> xr.DataArray:
     )
 
 
-def precipitation_for_month(root: Path, start: pd.Timestamp, end: pd.Timestamp) -> xr.DataArray:
+def precipitation_for_month(
+    root: Path,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    raw_root: Path | None = None,
+) -> xr.DataArray:
     """Return hourly PRECTOT on the common grid, labelled at interval end."""
 
     days = daily_dates(start - pd.Timedelta(days=1), end - pd.Timedelta(days=1))
     parts: list[xr.DataArray] = []
     for day in days:
-        path = resolve_precipitation_file(root, day)
+        try:
+            path = resolve_precipitation_file(root, day, raw_root=raw_root)
+        except FileNotFoundError:
+            # MERRA-2 begins at 00 UTC 1 January 1980, so the trailing interval
+            # ending at that exact first hour has no preceding source record.
+            if start == pd.Timestamp("1980-01-01") and day == datetime(1979, 12, 31).date():
+                continue
+            raise
         with xr.open_dataset(path) as source:
             require_variables(source, ("PRECTOT",), path)
             sampled = target_grid(source[["PRECTOT"]]).astype(np.float32).load()["PRECTOT"]
@@ -118,9 +138,11 @@ def precipitation_for_month(root: Path, start: pd.Timestamp, end: pd.Timestamp) 
     combined = combined.isel(time=np.sort(indexes)).sel(time=slice(start, end - pd.Timedelta(hours=1)))
     expected = pd.date_range(start, end - pd.Timedelta(hours=1), freq="h")
     actual = pd.DatetimeIndex(pd.to_datetime(combined.time.values))
-    if not actual.equals(expected):
+    missing = expected.difference(actual)
+    allowed_missing = pd.DatetimeIndex([pd.Timestamp("1980-01-01T00:00")]) if start == pd.Timestamp("1980-01-01") else pd.DatetimeIndex([])
+    if len(missing.difference(allowed_missing)) or len(actual.difference(expected)):
         raise ValueError(f"MERRA-2 precipitation axis is {actual.min()}..{actual.max()}, expected {expected.min()}..{expected.max()}")
-    return combined
+    return combined.reindex(time=expected)
 
 
 def _require_time_axis(dataset: xr.Dataset, expected: pd.DatetimeIndex, label: str) -> None:
@@ -211,7 +233,7 @@ def standardise_month(root: Path, precip_root: Path, month: str) -> dict[str, ob
     surface_dataset["u10"].attrs.update({"long_name": "10 m eastward wind", "units": "m s-1"})
     surface_dataset["v10"].attrs.update({"long_name": "10 m northward wind", "units": "m s-1"})
 
-    precipitation = precipitation_for_month(precip_root, start, end)
+    precipitation = precipitation_for_month(precip_root, start, end, raw_root=root)
     precipitation_dataset = xr.Dataset(
         {"mtpr": precipitation.transpose("time", "latitude", "longitude")},
         attrs=_dataset_attrs(month, "hourly mean precipitation labelled at interval end"),
@@ -247,7 +269,8 @@ def standardise_month(root: Path, precip_root: Path, month: str) -> dict[str, ob
     # replaces it.
     next_month = end.strftime("%Y%m")
     next_auxiliary_path = standard_paths(root, next_month)["auxiliary"]
-    if not next_auxiliary_path.exists():
+    next_month_has_full_input = raw_output_path(root, "pressure", (end + pd.Timedelta(days=1)).date()).exists()
+    if not next_month_has_full_input:
         boundary = pressure.sel(time=[end]).copy()
         boundary_rh = np.clip(boundary["RH"] * np.float32(100.0), 0.0, 100.0)
         boundary_dataset = xr.Dataset(
@@ -294,19 +317,26 @@ def validate_month(root: Path, month: str) -> dict[str, object]:
     expected_native = pd.date_range(start, end - pd.Timedelta(hours=1), freq="3h")
     paths = standard_paths(root, month)
     contracts = {
-        "vorticity": (("vo",), expected_hourly),
-        "surface": (("msl", "sp", "u10", "v10"), expected_hourly),
-        "precipitation": (("mtpr",), expected_hourly),
-        "auxiliary": (("u", "v", "t", "r"), expected_native),
+        "vorticity": (("vo",), expected_hourly, ("time", "level", "latitude", "longitude")),
+        "surface": (("msl", "sp", "u10", "v10"), expected_hourly, ("time", "latitude", "longitude")),
+        "precipitation": (("mtpr",), expected_hourly, ("time", "latitude", "longitude")),
+        "auxiliary": (("u", "v", "t", "r"), expected_native, ("time", "level", "latitude", "longitude")),
     }
     result: dict[str, object] = {"month": month, "status": "passed", "files": {}}
-    for name, (variables, expected) in contracts.items():
+    for name, (variables, expected, dimensions) in contracts.items():
         path = paths[name]
         with xr.open_dataset(path) as dataset:
             require_variables(dataset, variables, path)
             _require_time_axis(dataset, expected, name)
             if dataset.sizes.get("latitude") != len(TARGET_LATS) or dataset.sizes.get("longitude") != len(TARGET_LONS):
                 raise ValueError(f"{path} does not use the common 1-degree grid")
+            for variable in variables:
+                if dataset[variable].dims != dimensions:
+                    raise ValueError(f"{path}:{variable} dimensions are {dataset[variable].dims}, expected {dimensions}")
+            if "level" in dimensions:
+                levels = np.asarray(dataset["level"].values, dtype=float)
+                if levels.shape != PRESSURE_LEVELS.shape or not np.allclose(levels, PRESSURE_LEVELS):
+                    raise ValueError(f"{path} does not use the common pressure levels")
             finite = {
                 variable: round(float(np.isfinite(dataset[variable].values).mean()), 6)
                 for variable in variables

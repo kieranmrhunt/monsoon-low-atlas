@@ -38,9 +38,9 @@ Upload `index.html`, `assets/`, and `data/` together. Hashed asset filenames are
 
 ## Matched reanalysis tracks
 
-The map's Track analysis control can show the ERA5 v5.6 catalogue geometry, a confidently matched MERRA-2 or IMDAA geometry, or all available analyses together. Alternative reanalyses are run through the frozen v5.6 detector/linker geometry and then assigned to an ERA5 physical-event identity only when at least 12 hours overlap, the median and 90th-percentile separations are at most 300 and 500 km, at least half of common hours are within 250 km, and the best identity is unambiguous. This comparison does not replace the ERA5 catalogue classification.
+The map's Track analysis control can show the ERA5 v5.6 catalogue geometry, a confidently matched MERRA-2, IMDAA, JRA-55 or ERA-Interim geometry, or all available analyses together. Alternative reanalyses are run through the frozen v5.6 detector/linker geometry and then assigned to an ERA5 physical-event identity only when at least 12 hours overlap, the median and 90th-percentile separations are at most 300 and 500 km, at least half of common hours are within 250 km, and the best identity is unambiguous. This comparison does not replace the ERA5 catalogue classification.
 
-MERRA-2 uses NASA GES DISC M2I3NPASM and M2I1NXASM fields plus the local M2T1NXFLX precipitation archive. IMDAA requests are submitted to the official NCMRWF Research Data Service. Both sources are standardized to the common one-degree detector contract, tracked natively, matched to the public ERA5 parquet file and published as compact gzip assets with checksums and explicit coverage. The same matched analyses are selectable beside forecast tracks in Archive view.
+MERRA-2 uses NASA GES DISC M2I3NPASM, M2I1NXASM and M2T1NXFLX subsets from 1980 through the latest complete common month. IMDAA requests cover its official 1979–2020 archive through the NCMRWF Research Data Service. JRA-55 uses regional NCSS subsets of NCAR GDEX d628000 for 1958–January 2024, while ERA-Interim reads the complete local BADC archive for 1979–August 2019. Every source is standardized to the common one-degree detector contract, tracked natively, matched to the public ERA5 parquet file and published as a compact gzip asset with checksums and explicit coverage. The same matched analyses are selectable beside forecast tracks in Archive view.
 
 Submit and validate one MERRA-2 month with:
 
@@ -50,6 +50,12 @@ python -m unittest discover -s reanalysis_pipeline -t . -p 'test_*.py'
 ```
 
 `python -m reanalysis_pipeline.publish` atomically writes the public `manifest.json` and only marks a source ready after validating its match asset.
+
+The full-period backfills are resumable Slurm arrays submitted by `scripts/submit_merra2_backfill.sh`, `scripts/submit_jra55_backfill.sh` and `scripts/submit_era_interim_backfill.sh`; the guarded IMDAA pump is `scripts/pump_imdaa_backfill.sh`. The JRA-55 downloader validates requested variables, pressure level and time range before accepting each NCSS response.
+
+## CMIP6 climate-track inventory
+
+`scripts/inventory_badc_cmip6.py` audits high-frequency CMIP, ScenarioMIP and HighResMIP holdings under `/badc/cmip6/data/CMIP6`. Its model/experiment/member table distinguishes verified fixed-pressure candidates, hybrid-level runs that need vertical interpolation and incomplete holdings; it does not call a model trackable from filenames alone. The accompanying climate-tab contract preserves native calendars, pairs like-for-like historical and scenario members, defaults to one-model-one-vote summaries and requires a month-scale QA pilot before full tracking.
 
 ## Weather archive and deployment
 

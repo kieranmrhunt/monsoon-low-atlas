@@ -20,6 +20,7 @@ DETECTOR = TRACKER_ROOT / "lps53_detect.py"
 LINKER = TRACKER_ROOT / "lps53_link.py"
 PARAMETERS = TRACKER_ROOT / "params/lps_v5.4.2_liberal_poststitch_identity.json"
 TRACKING_SCHEMA = "lps-atlas-reanalysis-tracking-v1"
+SOURCES = ("merra2", "imdaa", "jra55", "erainterim")
 
 
 def run(command: list[str]) -> None:
@@ -40,8 +41,7 @@ def source_paths(data_root: Path) -> dict[str, Path]:
 def detect_month(data_root: Path, output_root: Path, month: str, source: str) -> Path:
     data_root = data_root.resolve()
     output_root = output_root.resolve()
-    if source == "merra2":
-        validate_month(data_root, month)
+    validate_month(data_root, month)
     paths = source_paths(data_root)
     candidates = output_root / "candidates"
     log = output_root / "logs" / f"detect-{month}.log"
@@ -108,7 +108,7 @@ def link_candidates(output_root: Path, source: str) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", choices=("merra2", "imdaa"), required=True)
+    parser.add_argument("--source", choices=SOURCES, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)

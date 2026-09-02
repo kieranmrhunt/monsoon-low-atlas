@@ -1,0 +1,781 @@
+{
+  "candidate_ready_definition": "Verified 850/700/500-hPa ua+va or vo at <=6-hour cadence, plus <=6-hour psl; all fields still require common-grid standardisation.",
+  "counts": {
+    "candidate_ready_runs": 160,
+    "full_physics_ready_runs": 61,
+    "institutions": 30,
+    "metadata_error_records": 5,
+    "models": 59,
+    "runs": 624,
+    "scenario_runs_with_ready_historical_pair": 78,
+    "trackability": {
+      "candidate_fields_present_levels_unverified": 65,
+      "candidate_ready": 160,
+      "hybrid_levels_convertible": 46,
+      "incomplete": 331,
+      "pressure_circulation_without_mslp": 22
+    },
+    "variable_records": 4315
+  },
+  "full_physics_ready_definition": "Candidate-ready plus 10-m vector wind, precipitation, pressure-level temperature and humidity.",
+  "generated_utc": "2026-09-02T21:41:39Z",
+  "grain": "activity / institution / source_id / experiment_id / member_id",
+  "limitations": [
+    "Coverage bounds come from CMIP filenames; every timestep is not decoded in this filesystem inventory.",
+    "A candidate-ready run still requires a month-scale pilot for calendars, missing timesteps, grid orientation and units before tracking.",
+    "Hybrid-level runs are not called ready until model-level coefficients and surface pressure have been validated for pressure interpolation."
+  ],
+  "ready_experiments": {
+    "amip": 1,
+    "control-1950": 10,
+    "esm-hist": 1,
+    "highres-future": 10,
+    "highresSST-future": 12,
+    "highresSST-present": 18,
+    "hist-1950": 18,
+    "historical": 22,
+    "piControl": 13,
+    "spinup-1950": 1,
+    "ssp119": 1,
+    "ssp126": 14,
+    "ssp245": 10,
+    "ssp370": 14,
+    "ssp434": 1,
+    "ssp460": 1,
+    "ssp534-over": 1,
+    "ssp585": 12
+  },
+  "ready_models": [
+    "AWI-ESM-1-1-LR",
+    "CMCC-CM2-HR4",
+    "CMCC-CM2-SR5",
+    "CMCC-CM2-VHR4",
+    "CMCC-ESM2",
+    "CNRM-CM6-1",
+    "CNRM-CM6-1-HR",
+    "CNRM-ESM2-1",
+    "EC-Earth3",
+    "EC-Earth3-LR",
+    "EC-Earth3P",
+    "EC-Earth3P-HR",
+    "ECMWF-IFS-HR",
+    "ECMWF-IFS-LR",
+    "ECMWF-IFS-MR",
+    "GISS-E2-1-G",
+    "HadGEM3-GC31-LL",
+    "HadGEM3-GC31-MM",
+    "IPSL-CM5A2-INCA",
+    "IPSL-CM6A-LR",
+    "IPSL-CM6A-LR-INCA",
+    "MIROC6",
+    "MPI-ESM-1-2-HAM",
+    "MPI-ESM1-2-HR",
+    "MPI-ESM1-2-LR",
+    "MPI-ESM1-2-XR",
+    "MRI-ESM2-0"
+  ],
+  "recommended_first_wave": [
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "AWI-ESM-1-1-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-HR4"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-SR5"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-ESM2"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f2",
+      "source_id": "CNRM-CM6-1-HR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM-1-2-HAM"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r4i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r5i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r6i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r7i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r8i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r9i1p1f1",
+      "source_id": "IPSL-CM6A-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "IPSL-CM6A-LR-INCA"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f3",
+      "source_id": "HadGEM3-GC31-LL"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f3",
+      "source_id": "HadGEM3-GC31-MM"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    },
+    {
+      "experiment_id": "historical",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "GISS-E2-1-G"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-HR4"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-HR4"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-VHR4"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-VHR4"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f2",
+      "source_id": "CNRM-CM6-1"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f2",
+      "source_id": "CNRM-CM6-1"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f2",
+      "source_id": "CNRM-CM6-1-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f2",
+      "source_id": "CNRM-CM6-1-HR"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p2f1",
+      "source_id": "EC-Earth3P"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r2i1p2f1",
+      "source_id": "EC-Earth3P"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p2f1",
+      "source_id": "EC-Earth3P"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r2i1p2f1",
+      "source_id": "EC-Earth3P"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p2f1",
+      "source_id": "EC-Earth3P-HR"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r2i1p2f1",
+      "source_id": "EC-Earth3P-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p2f1",
+      "source_id": "EC-Earth3P-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r2i1p2f1",
+      "source_id": "EC-Earth3P-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "ECMWF-IFS-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r5i1p1f1",
+      "source_id": "ECMWF-IFS-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r6i1p1f1",
+      "source_id": "ECMWF-IFS-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "ECMWF-IFS-LR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r7i1p1f1",
+      "source_id": "ECMWF-IFS-LR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r8i1p1f1",
+      "source_id": "ECMWF-IFS-LR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "ECMWF-IFS-MR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "ECMWF-IFS-MR"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "highres-future",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-XR"
+    },
+    {
+      "experiment_id": "hist-1950",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-XR"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-SR5"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-CM2-SR5"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-ESM2"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "CMCC-ESM2"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f2",
+      "source_id": "CNRM-ESM2-1"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-HR"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "EC-Earth3"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "EC-Earth3"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "EC-Earth3"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "EC-Earth3"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r1i1p1f1",
+      "source_id": "EC-Earth3"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM-1-2-HAM"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM-1-2-HAM"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MIROC6"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f3",
+      "source_id": "HadGEM3-GC31-LL"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f3",
+      "source_id": "HadGEM3-GC31-MM"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f3",
+      "source_id": "HadGEM3-GC31-MM"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MPI-ESM1-2-LR"
+    },
+    {
+      "experiment_id": "ssp126",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    },
+    {
+      "experiment_id": "ssp245",
+      "full_physics_ready": true,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r2i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    },
+    {
+      "experiment_id": "ssp370",
+      "full_physics_ready": false,
+      "historical_pair_available": false,
+      "member_id": "r3i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    },
+    {
+      "experiment_id": "ssp585",
+      "full_physics_ready": false,
+      "historical_pair_available": true,
+      "member_id": "r1i1p1f1",
+      "source_id": "MRI-ESM2-0"
+    }
+  ],
+  "root": "/badc/cmip6/data/CMIP6",
+  "schema": "lps-atlas-cmip6-badc-inventory-v1"
+}

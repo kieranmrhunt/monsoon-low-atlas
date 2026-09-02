@@ -16,6 +16,8 @@ import os
 import subprocess
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -42,12 +44,19 @@ COLLECTIONS: Mapping[str, dict[str, Any]] = {
         "granule_product": "inst1_2d_asm_Nx",
         "variables": ("U10M", "V10M", "SLP", "PS"),
     },
+    "precipitation": {
+        "concept_id": "C1276812838-GES_DISC",
+        "short_name": "M2T1NXFLX",
+        "granule_product": "tavg1_2d_flx_Nx",
+        "variables": ("PRECTOT",),
+    },
 }
 VERSION = "5.12.4"
 LATITUDE_SLICE = "150:1:270"  # -15 to 45 degrees north at 0.5 degrees
 LONGITUDE_SLICE = "360:1:480"  # 45 to 120 degrees east at 0.625 degrees
 PRESSURE_SLICE = "6:2:16"  # 850, 800, 750, 700, 600 and 500 hPa
 LEDGER_SCHEMA = "lps-atlas-merra2-opendap-v1"
+CMR_GRANULE_SEARCH = "https://cmr.earthdata.nasa.gov/search/granules.json"
 
 
 def utc_now() -> str:
@@ -93,14 +102,15 @@ def constraint(kind: str) -> str:
             f"/{name}[0:1:7][{PRESSURE_SLICE}][{LATITUDE_SLICE}][{LONGITUDE_SLICE}]"
             for name in COLLECTIONS[kind]["variables"]
         )
-    elif kind == "surface":
+    elif kind in ("surface", "precipitation"):
+        time_slice = "0:3:21" if kind == "surface" else "0:1:23"
         coordinates = (
-            "/time[0:3:21]",
+            f"/time[{time_slice}]",
             f"/lat[{LATITUDE_SLICE}]",
             f"/lon[{LONGITUDE_SLICE}]",
         )
         variables = tuple(
-            f"/{name}[0:3:21][{LATITUDE_SLICE}][{LONGITUDE_SLICE}]"
+            f"/{name}[{time_slice}][{LATITUDE_SLICE}][{LONGITUDE_SLICE}]"
             for name in COLLECTIONS[kind]["variables"]
         )
     else:
@@ -194,7 +204,7 @@ def validate_download(kind: str, day: date, path: Path) -> None:
         raise ValueError(f"MERRA-2 response is unexpectedly small: {path}")
     with xr.open_dataset(path) as dataset:
         require_variables(dataset, COLLECTIONS[kind]["variables"], path)
-        expected_times = 8
+        expected_times = 24 if kind == "precipitation" else 8
         if dataset.sizes.get("time") != expected_times:
             raise ValueError(f"{path} has {dataset.sizes.get('time')} times, expected {expected_times}")
         if dataset.sizes.get("lat") != 121 or dataset.sizes.get("lon") != 121:
@@ -217,6 +227,70 @@ def days_in_month(value: str, *, include_next_midnight: bool = True) -> list[dat
     return output
 
 
+def _cmr_granules(kind: str, **parameters: str | int) -> tuple[list[dict[str, Any]], int]:
+    """Query NASA CMR without exposing Earthdata credentials."""
+
+    query = urllib.parse.urlencode(
+        {
+            "collection_concept_id": COLLECTIONS[kind]["concept_id"],
+            **parameters,
+        }
+    )
+    request = urllib.request.Request(
+        f"{CMR_GRANULE_SEARCH}?{query}",
+        headers={"User-Agent": "monsoon-low-atlas/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        value = json.load(response)
+        hits = int(response.headers.get("CMR-Hits", 0))
+    entries = value.get("feed", {}).get("entry", []) if isinstance(value, dict) else []
+    return [entry for entry in entries if isinstance(entry, dict)], hits
+
+
+def latest_available_day(kind: str) -> date:
+    entries, unused_hits = _cmr_granules(kind, page_size=1, sort_key="-end_date")
+    if not entries or not entries[0].get("time_start"):
+        raise RuntimeError(f"NASA CMR returned no latest {kind} granule")
+    return date.fromisoformat(str(entries[0]["time_start"])[:10])
+
+
+def cmr_month_count(kind: str, year: int, month: int) -> int:
+    start = date(year, month, 1)
+    days = calendar.monthrange(year, month)[1]
+    end = start + timedelta(days=days - 1)
+    unused_entries, hits = _cmr_granules(
+        kind,
+        page_size=0,
+        temporal=f"{start.isoformat()}T00:00:00Z,{end.isoformat()}T23:59:59Z",
+    )
+    return hits
+
+
+def latest_complete_month(*, lookback_months: int = 18) -> str:
+    """Return the newest complete month common to every required collection.
+
+    A following pressure/surface analysis day is also required because the
+    hourly detector contract interpolates the final six-hour interval.
+    """
+
+    latest = min(latest_available_day(kind) for kind in COLLECTIONS)
+    candidate = latest.replace(day=1)
+    if latest.day < calendar.monthrange(latest.year, latest.month)[1]:
+        candidate = (candidate - timedelta(days=1)).replace(day=1)
+    for unused in range(lookback_months):
+        days = calendar.monthrange(candidate.year, candidate.month)[1]
+        end = candidate + timedelta(days=days)
+        complete = all(
+            cmr_month_count(kind, candidate.year, candidate.month) == days
+            for kind in COLLECTIONS
+        )
+        boundary = all(latest_available_day(kind) >= end for kind in ("pressure", "surface"))
+        if complete and boundary:
+            return candidate.strftime("%Y-%m")
+        candidate = (candidate - timedelta(days=1)).replace(day=1)
+    raise RuntimeError("Could not find a complete common MERRA-2 month in the CMR lookback")
+
+
 def output_path(root: Path, kind: str, day: date) -> Path:
     return root / "raw" / kind / f"{day:%Y}" / f"merra2-{kind}-{day:%Y%m%d}.nc4"
 
@@ -226,7 +300,7 @@ def download_days(
     ledger_path: Path,
     days: Iterable[date],
     *,
-    kinds: Iterable[str] = ("pressure", "surface"),
+    kinds: Iterable[str] = tuple(COLLECTIONS),
 ) -> dict[str, int]:
     """Download days without concurrent writes to the shared ledger.
 
@@ -262,7 +336,7 @@ def reconcile_days(
     ledger_path: Path,
     days: Iterable[date],
     *,
-    kinds: Iterable[str] = ("pressure", "surface"),
+    kinds: Iterable[str] = tuple(COLLECTIONS),
 ) -> dict[str, int]:
     """Rebuild ledger records from validated files after a parallel array.
 
@@ -295,6 +369,16 @@ def reconcile_days(
     return {"reconciled": reconciled}
 
 
+def days_from_table(path: Path) -> list[date]:
+    output: list[date] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        fields = line.split("\t")
+        if len(fields) != 2:
+            raise ValueError(f"Malformed day table row {number} in {path}")
+        output.append(date.fromisoformat(fields[1]))
+    return output
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("data/reanalyses/merra2"))
@@ -306,18 +390,28 @@ def parse_args() -> argparse.Namespace:
     month.add_argument("--month", required=True)
     reconcile = subparsers.add_parser("reconcile-month")
     reconcile.add_argument("--month", required=True)
+    reconcile_table = subparsers.add_parser("reconcile-table")
+    reconcile_table.add_argument("--jobs", type=Path, required=True)
+    subparsers.add_parser("latest-complete-month")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     ledger = args.ledger or args.root / "opendap-ledger.json"
+    if args.command == "latest-complete-month":
+        print(latest_complete_month())
+        return
     if args.command == "download-day":
         selected = [datetime.strptime(args.date, "%Y-%m-%d").date()]
     elif args.command == "download-month":
         selected = days_in_month(args.month)
-    else:
+    elif args.command == "reconcile-month":
         selected = days_in_month(args.month)
+        print(json.dumps(reconcile_days(args.root, ledger, selected), sort_keys=True))
+        return
+    elif args.command == "reconcile-table":
+        selected = days_from_table(args.jobs)
         print(json.dumps(reconcile_days(args.root, ledger, selected), sort_keys=True))
         return
     print(json.dumps(download_days(args.root, ledger, selected), sort_keys=True))

@@ -25,8 +25,12 @@
 	const REANALYSIS_SOURCES = Object.freeze({
 		era5: {label: 'ERA5', colour: '#000000'},
 		merra2: {label: 'MERRA-2', colour: '#c51b7d'},
-		imdaa: {label: 'IMDAA', colour: '#008c95'}
+		imdaa: {label: 'IMDAA', colour: '#008c95'},
+		jra55: {label: 'JRA-55', colour: '#e66101'},
+		erainterim: {label: 'ERA-Interim', colour: '#5e3c99'}
 	});
+	const ALTERNATIVE_REANALYSIS_KEYS = Object.freeze(Object.keys(REANALYSIS_SOURCES).filter(source => source !== 'era5'));
+	const isAlternativeReanalysis = source => ALTERNATIVE_REANALYSIS_KEYS.includes(source);
 	const COMPOSITE_PALETTES = Object.freeze({
 		terrain_r: ['#ffffff', '#dfd6d4', '#bfada9', '#9f847e', '#805c54', '#a08566', '#c0ae77', '#e0d788', '#fdff99', '#bdf28c', '#7de57f', '#3dd872', '#00cb6a', '#00abcb', '#0a86ec', '#1f5bc1', '#333399'],
 		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f'],
@@ -461,7 +465,7 @@
 	}
 
 	function requestedReanalysisSources() {
-		if (state.trackSource === 'compare') return ['merra2', 'imdaa'];
+		if (state.trackSource === 'compare') return ALTERNATIVE_REANALYSIS_KEYS;
 		return state.trackSource === 'era5' ? [] : [state.trackSource];
 	}
 
@@ -496,12 +500,12 @@
 	async function initialiseReanalysisAvailability() {
 		try {
 			const manifest = await ensureReanalysisManifest();
-			for (const source of ['merra2', 'imdaa']) {
+			for (const source of ALTERNATIVE_REANALYSIS_KEYS) {
 				const option = $(`#mlaTrackSource option[value="${source}"]`);
 				if (option) option.disabled = !manifest.sources[source] || manifest.sources[source].status !== 'ready';
 			}
 			const compare = $('#mlaTrackSource option[value="compare"]');
-			if (compare) compare.disabled = !['merra2', 'imdaa'].some(source => manifest.sources[source] && manifest.sources[source].status === 'ready');
+			if (compare) compare.disabled = !ALTERNATIVE_REANALYSIS_KEYS.some(source => manifest.sources[source] && manifest.sources[source].status === 'ready');
 			if (state.trackSource !== 'era5') await loadRequestedReanalyses({quiet: true});
 		} catch (error) {
 			for (const option of $$('#mlaTrackSource option:not([value="era5"])')) option.disabled = true;
@@ -1809,7 +1813,7 @@
 		if (overIndex >= 0) state.stateIndex = overIndex;
 		state.search = parameters.get('q') || '';
 		if (['auto', 'none', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
-		if (['era5', 'merra2', 'imdaa', 'compare'].includes(parameters.get('analysis'))) state.trackSource = parameters.get('analysis');
+		if (['era5', ...ALTERNATIVE_REANALYSIS_KEYS, 'compare'].includes(parameters.get('analysis'))) state.trackSource = parameters.get('analysis');
 		if (['single', 'class', 'metric', 'year'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['none', 'selected', 'cohort', 'selected_anomaly', 'cohort_anomaly'].includes(parameters.get('statefill'))) state.stateFill = parameters.get('statefill');
 		state.stateOutlines = parameters.get('states') !== '0';
@@ -2718,7 +2722,7 @@
 		const ibtracsLegend = state.ibtracsOverlay && item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path
 			? `<span class="mla-legend-item"><span class="mla-swatch" style="height:0;background:none;border-top:2px dashed ${css('--mla-peacock', '#08736f')}"></span>matched IBTrACS best track</span>`
 			: '';
-		const analysisSources = state.trackSource === 'compare' ? ['era5', 'merra2', 'imdaa'] : [state.trackSource];
+		const analysisSources = state.trackSource === 'compare' ? ['era5', ...ALTERNATIVE_REANALYSIS_KEYS] : [state.trackSource];
 		const analysisLegend = state.trackSource === 'era5' ? '' : analysisSources.map(source => {
 			if (source !== 'era5' && state.selected != null && !reanalysisTrack(source, state.selected)) return '';
 			const definition = REANALYSIS_SOURCES[source];
@@ -2737,17 +2741,17 @@
 		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection, indexes);
 		else if (layer === 'tracks') {
 			if (!hideSubsetTracks) {
-				if (state.trackSource === 'merra2' || state.trackSource === 'imdaa') alternativeTracks = drawReanalysisTrackLayer(drawing.context, drawing.projection, state.trackSource, indexes);
+				if (isAlternativeReanalysis(state.trackSource)) alternativeTracks = drawReanalysisTrackLayer(drawing.context, drawing.projection, state.trackSource, indexes);
 				else drawTrackLayer(drawing.context, drawing.projection, indexes);
 			}
 		} else if (layer !== 'none') {
-			if (state.trackSource === 'merra2' || state.trackSource === 'imdaa') alternativeTracks = drawReanalysisPointLayer(drawing.context, drawing.projection, state.trackSource, layer, indexes);
+			if (isAlternativeReanalysis(state.trackSource)) alternativeTracks = drawReanalysisPointLayer(drawing.context, drawing.projection, state.trackSource, layer, indexes);
 			else drawPointLayer(drawing.context, drawing.projection, layer, indexes);
 		}
 		const pathLabel = layer === 'none' ? '' : ` · ${fmt(visiblePointCount(indexes))} selected-month positions`;
 		const rainfall = stateRainfallSummary();
 		const rainfallLabel = rainfall ? ` · IMD state ${rainfall.anomaly ? 'fractional climatology anomaly' : 'mean'} across ${fmt(rainfall.systemDays)} system-days` : '';
-		const sourceLabel = state.trackSource === 'merra2' || state.trackSource === 'imdaa' ? ` · ${alternativeTracks} matched ${REANALYSIS_SOURCES[state.trackSource].label} geometries` : state.trackSource === 'compare' ? ' · selected matched analyses compared' : '';
+		const sourceLabel = isAlternativeReanalysis(state.trackSource) ? ` · ${alternativeTracks} matched ${REANALYSIS_SOURCES[state.trackSource].label} geometries` : state.trackSource === 'compare' ? ' · selected matched analyses compared' : '';
 		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'ERA5 unique-track density' : layer === 'none' ? (state.selected == null ? 'no LPS subset layer' : 'selected system only') : layer;
 		$('#mlaMapStatus').textContent = `${fmt(indexes.length)} systems · ${layerLabel}${sourceLabel}${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		renderStateRainfallValues(rainfall);
@@ -2804,7 +2808,7 @@
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
 		for (const trackIndex of timeFocusTrackIndexes(exact)) {
-			if (trackIndex === state.selected && (state.trackSource === 'merra2' || state.trackSource === 'imdaa') && reanalysisTrack(state.trackSource, trackIndex)) continue;
+			if (trackIndex === state.selected && isAlternativeReanalysis(state.trackSource) && reanalysisTrack(state.trackSource, trackIndex)) continue;
 			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
 			if (!range) continue;
 			const points = paths.decoded[trackIndex];
@@ -2833,7 +2837,7 @@
 			context.stroke();
 		}
 		if (state.selected != null) {
-			const sources = state.trackSource === 'compare' ? ['merra2', 'imdaa'] : state.trackSource === 'era5' ? [] : [state.trackSource];
+			const sources = state.trackSource === 'compare' ? ALTERNATIVE_REANALYSIS_KEYS : state.trackSource === 'era5' ? [] : [state.trackSource];
 			const markerTime = exact ? state.focusTimeMs : (state.focusStartMs + state.focusEndMs) / 2;
 			for (const source of sources) {
 				const point = reanalysisPointAtTime(source, state.selected, markerTime);
@@ -2856,7 +2860,7 @@
 				strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 6.4);
 				strokeTrack(drawing.context, drawing.projection, state.selected, state.trackSource === 'compare' ? REANALYSIS_SOURCES.era5.colour : css('--mla-indigo-deep', '#17294f'), 3.6);
 			}
-			const sources = state.trackSource === 'compare' ? ['merra2', 'imdaa'] : state.trackSource === 'era5' ? [] : [state.trackSource];
+			const sources = state.trackSource === 'compare' ? ALTERNATIVE_REANALYSIS_KEYS : state.trackSource === 'era5' ? [] : [state.trackSource];
 			let matched = false;
 			for (const source of sources) {
 				if (!reanalysisTrack(source, state.selected)) continue;
@@ -2949,7 +2953,7 @@
 
 	function nearestReanalysisTrackPoint(clientX, clientY, trackIndex, touch) {
 		if (trackIndex == null || state.trackSource === 'era5') return null;
-		const sources = state.trackSource === 'compare' ? ['merra2', 'imdaa'] : [state.trackSource];
+		const sources = state.trackSource === 'compare' ? ALTERNATIVE_REANALYSIS_KEYS : [state.trackSource];
 		const canvas = $('#mlaMapOverlay');
 		const rectangle = canvas.getBoundingClientRect();
 		const x = clientX - rectangle.left;
@@ -2991,7 +2995,7 @@
 			let bestTrack = -1;
 			let bestDistance = (touch ? 20 : 11) ** 2;
 			for (const trackIndex of mapIndexes) {
-				const usesAlternative = state.trackSource === 'merra2' || state.trackSource === 'imdaa';
+				const usesAlternative = isAlternativeReanalysis(state.trackSource);
 				const alternative = usesAlternative
 					? reanalysisTrack(state.trackSource, trackIndex)
 					: null;
@@ -3009,7 +3013,7 @@
 		const geographical = projection.invert(x, y);
 		const radiusPx = touch ? 18 : 10;
 		const subsetTracksHidden = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
-		const alternativeMode = state.trackSource === 'merra2' || state.trackSource === 'imdaa';
+		const alternativeMode = isAlternativeReanalysis(state.trackSource);
 		return segmentIndex.query({
 			x, y,
 			lat: geographical[0],

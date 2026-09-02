@@ -3,3 +3,9 @@ CRON_TZ=UTC
 
 # Submit the six-hourly Monsoon LPS Atlas forecast refresh after provider lag.
 15 4,10,16,22 * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/bash scripts/submit_forecast_update.sh >> hpc-logs/forecast-cron.log 2>&1
+
+# Advance the IMDAA archive only after its two existing canaries pass.
+25 * * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/flock -n .reanalysis-runs/imdaa-pump.lock /usr/bin/bash scripts/pump_imdaa_backfill.sh >> hpc-logs/imdaa-pump.log 2>&1
+
+# Retry resumable reanalysis submissions while JASMIN's Slurm controller is intermittent.
+5,20,35,50 * * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/flock -n .reanalysis-runs/reanalysis-submit.lock /usr/bin/bash scripts/submit_reanalysis_backfills_if_needed.sh >> hpc-logs/reanalysis-submit.log 2>&1

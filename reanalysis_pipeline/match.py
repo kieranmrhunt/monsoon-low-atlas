@@ -201,7 +201,7 @@ def atomic_gzip_json(path: Path, value: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", choices=("merra2", "imdaa"), required=True)
+    parser.add_argument("--source", choices=("merra2", "imdaa", "jra55", "erainterim"), required=True)
     parser.add_argument("--linked", type=Path, required=True)
     parser.add_argument("--era5", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

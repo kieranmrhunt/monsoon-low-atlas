@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from .merra2 import constraint, granule_name, stream_number
+from .merra2 import COLLECTIONS, constraint, granule_name, stream_number
 
 
 class Merra2RequestTest(unittest.TestCase):
@@ -31,7 +31,12 @@ class Merra2RequestTest(unittest.TestCase):
         for name in ("/U10M[", "/V10M[", "/SLP[", "/PS["):
             self.assertIn(name, value)
 
+    def test_precipitation_constraint_is_hourly(self) -> None:
+        value = constraint("precipitation")
+        self.assertIn("/time[0:1:23]", value)
+        self.assertIn("/PRECTOT[0:1:23]", value)
+        self.assertEqual(COLLECTIONS["precipitation"]["concept_id"], "C1276812838-GES_DISC")
+
 
 if __name__ == "__main__":
     unittest.main()
-
