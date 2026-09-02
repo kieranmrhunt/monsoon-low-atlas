@@ -61,6 +61,8 @@ RETROSPECTIVE_MINIMUM_CONTIGUOUS_PHYSICAL_HOURS = 12
 RETROSPECTIVE_MINIMUM_OBSERVED_SPAN_HOURS = 72
 RETROSPECTIVE_MINIMUM_OBSERVED_POSITIONS = 36
 MINIMUM_RELEASE_DOMAIN_POSITIONS = 3
+FORECAST_COALESCENCE_DISTANCE_KM = 50.0
+FORECAST_COALESCENCE_MINIMUM_HOURS = 18
 
 
 def parameter_sha256() -> str:
@@ -247,6 +249,158 @@ def _longest_true_run(mask: np.ndarray, steps: np.ndarray) -> int:
             current = 0
             previous = None
     return best
+
+
+def _forecast_haversine_km(
+    first_lon: np.ndarray,
+    first_lat: np.ndarray,
+    second_lon: np.ndarray,
+    second_lat: np.ndarray,
+) -> np.ndarray:
+    """Vectorised great-circle separation for forecast-track QA."""
+
+    first_lat_rad = np.radians(np.asarray(first_lat, dtype=float))
+    second_lat_rad = np.radians(np.asarray(second_lat, dtype=float))
+    delta_lat = second_lat_rad - first_lat_rad
+    delta_lon = np.radians(np.asarray(second_lon, dtype=float) - np.asarray(first_lon, dtype=float))
+    value = (
+        np.sin(delta_lat / 2.0) ** 2
+        + np.cos(first_lat_rad) * np.cos(second_lat_rad) * np.sin(delta_lon / 2.0) ** 2
+    )
+    return 12_742.0 * np.arcsin(np.sqrt(np.clip(value, 0.0, 1.0)))
+
+
+def _terminal_coalescence(
+    first: pd.DataFrame,
+    second: pd.DataFrame,
+) -> tuple[pd.Timestamp, int] | None:
+    """Return the start of a persistent, terminally co-located track tail.
+
+    Two features can be physically distinct for much of a forecast and then
+    merge.  Once the one-degree detector alternates the same centre between
+    two linked identities, publishing both tails produces duplicate guidance.
+    A short crossing is deliberately retained; only an hourly, terminal run
+    within 50 km for at least 18 hours is treated as coalescence.
+    """
+
+    first_positions = first[["time", "lon", "lat"]].copy()
+    second_positions = second[["time", "lon", "lat"]].copy()
+    first_positions["time"] = pd.to_datetime(first_positions["time"], utc=True)
+    second_positions["time"] = pd.to_datetime(second_positions["time"], utc=True)
+    common = first_positions.merge(
+        second_positions,
+        on="time",
+        how="inner",
+        suffixes=("_first", "_second"),
+    ).sort_values("time")
+    if common.empty:
+        return None
+    distance = _forecast_haversine_km(
+        common["lon_first"].to_numpy(),
+        common["lat_first"].to_numpy(),
+        common["lon_second"].to_numpy(),
+        common["lat_second"].to_numpy(),
+    )
+    close = distance <= FORECAST_COALESCENCE_DISTANCE_KM
+    if not bool(close[-1]):
+        return None
+    times = pd.DatetimeIndex(common["time"])
+    start_index = len(common) - 1
+    while start_index > 0:
+        step_hours = (times[start_index] - times[start_index - 1]).total_seconds() / 3600.0
+        if not bool(close[start_index - 1]) or not math.isclose(step_hours, 1.0):
+            break
+        start_index -= 1
+    duration_hours = int(round((times[-1] - times[start_index]).total_seconds() / 3600.0)) + 1
+    if duration_hours < FORECAST_COALESCENCE_MINIMUM_HOURS:
+        return None
+    return pd.Timestamp(times[start_index]), duration_hours
+
+
+def merge_persistent_same_member_coalescences(
+    accepted: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """Collapse duplicate tails after two same-member forecast features merge.
+
+    The earlier identity is retained.  Within the merged tail, observed rows
+    outrank interpolated rows so the surviving path follows the actual detected
+    centre instead of preserving alternating interpolation artefacts.
+    """
+
+    if accepted.empty or "track_id" not in accepted:
+        return accepted.copy(), []
+    frame = accepted.copy()
+    original_columns = list(frame.columns)
+    audit: list[dict[str, Any]] = []
+    while True:
+        groups = {
+            track_id: group.sort_values("time").copy()
+            for track_id, group in frame.groupby("track_id", sort=False)
+        }
+        match: tuple[Any, Any, pd.Timestamp, int] | None = None
+        identifiers = list(groups)
+        for first_index, first_id in enumerate(identifiers):
+            for second_id in identifiers[first_index + 1:]:
+                result = _terminal_coalescence(groups[first_id], groups[second_id])
+                if result is not None:
+                    match = (first_id, second_id, result[0], result[1])
+                    break
+            if match is not None:
+                break
+        if match is None:
+            break
+        first_id, second_id, merge_time, close_hours = match
+        first_group, second_group = groups[first_id], groups[second_id]
+
+        def identity_rank(track_id: Any, group: pd.DataFrame) -> tuple[pd.Timestamp, int, str]:
+            observed = group.get("position_source", pd.Series("observed", index=group.index))
+            return (
+                pd.to_datetime(group["time"], utc=True).min(),
+                -int(observed.astype(str).str.lower().eq("observed").sum()),
+                str(track_id),
+            )
+
+        if identity_rank(first_id, first_group) <= identity_rank(second_id, second_group):
+            keeper, terminated = first_id, second_id
+        else:
+            keeper, terminated = second_id, first_id
+        normalized_time = pd.to_datetime(frame["time"], utc=True)
+        tail_mask = frame["track_id"].isin([keeper, terminated]) & normalized_time.ge(merge_time)
+        tail = frame.loc[tail_mask].copy()
+        position_source = tail.get("position_source", pd.Series("observed", index=tail.index))
+        tail["_observed_priority"] = position_source.astype(str).str.lower().eq("observed").astype(int)
+        score_column = next(
+            (name for name in ("score_v53", "score", "max_vort_smoothed") if name in tail),
+            None,
+        )
+        tail["_score_priority"] = (
+            pd.to_numeric(tail[score_column], errors="coerce").fillna(-math.inf)
+            if score_column is not None
+            else 0.0
+        )
+        tail["_keeper_priority"] = tail["track_id"].eq(keeper).astype(int)
+        tail["_normalized_time"] = pd.to_datetime(tail["time"], utc=True)
+        tail = (
+            tail.sort_values(
+                ["_normalized_time", "_observed_priority", "_score_priority", "_keeper_priority"],
+                ascending=[True, False, False, False],
+                kind="stable",
+            )
+            .drop_duplicates("_normalized_time", keep="first")
+        )
+        tail["track_id"] = keeper
+        frame = pd.concat(
+            [frame.loc[~tail_mask, original_columns], tail.loc[:, original_columns]],
+            ignore_index=True,
+        ).sort_values(["track_id", "time"], kind="stable")
+        audit.append({
+            "kept_track_id": str(keeper),
+            "terminated_track_id": str(terminated),
+            "merge_time_utc": merge_time.isoformat().replace("+00:00", "Z"),
+            "close_tail_hours": int(close_hours),
+            "distance_threshold_km": FORECAST_COALESCENCE_DISTANCE_KM,
+        })
+    return frame.reset_index(drop=True), audit
 
 
 def _published_tracks(
@@ -455,5 +609,10 @@ def track_forecast_member(
     if candidates.empty:
         return ForecastTrackingResult([], 0, {"accepted_tracks": 0}, crosscheck)
     linked = link_candidate_dataframe(candidates, parameters)
-    tracks = _published_tracks(linked.accepted, cycle, member, role, int(max(steps)))
-    return ForecastTrackingResult(tracks, len(candidates), dict(linked.summary), crosscheck)
+    accepted, coalescence_audit = merge_persistent_same_member_coalescences(linked.accepted)
+    tracks = _published_tracks(accepted, cycle, member, role, int(max(steps)))
+    linker_summary = dict(linked.summary)
+    linker_summary["forecast_coalesced_track_tails"] = len(coalescence_audit)
+    if coalescence_audit:
+        linker_summary["forecast_coalescence_audit"] = coalescence_audit
+    return ForecastTrackingResult(tracks, len(candidates), linker_summary, crosscheck)

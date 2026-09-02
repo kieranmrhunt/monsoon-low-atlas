@@ -1486,20 +1486,16 @@
 		return {history, points: [...history, ...forecast]};
 	}
 
-	function drawPath(context, map, points, colour, width, alpha, current, distinguishFuture) {
+	function drawPath(context, map, points, colour, width, alpha) {
 		if (!points || points.length < 2) return;
-		for (const phase of distinguishFuture ? ['past', 'future'] : ['all']) {
-			context.beginPath(); let started = false;
-			for (const point of points) {
-				const belongs = phase === 'all' || (phase === 'past' ? Number(point[0]) <= current : Number(point[0]) >= current);
-				if (!belongs) { started = false; continue; }
-				const xy = map.project(Number(point[2]), Number(point[1]));
-				if (!started) { context.moveTo(...xy); started = true; } else context.lineTo(...xy);
-			}
-			context.globalAlpha = alpha;
-			context.strokeStyle = colour; context.lineWidth = phase === 'future' ? Math.max(.65, width * .5) : width; context.lineJoin = 'round'; context.lineCap = 'round';
-			context.setLineDash([]); context.stroke();
-		}
+		context.beginPath();
+		points.forEach((point, index) => {
+			const xy = map.project(Number(point[2]), Number(point[1]));
+			if (!index) context.moveTo(...xy); else context.lineTo(...xy);
+		});
+		context.globalAlpha = alpha;
+		context.strokeStyle = colour; context.lineWidth = width; context.lineJoin = 'round'; context.lineCap = 'round';
+		context.setLineDash([]); context.stroke();
 		context.setLineDash([]); context.globalAlpha = 1;
 	}
 
@@ -1528,12 +1524,20 @@
 				const tracks = tracksForSystem(payload, system);
 				const selected = selectedKeys.has(`${runKey}:${system.id}`);
 				if (state.showMembers && payload.model.kind === 'ensemble') {
-					for (const track of tracks) drawPath(target.context, target.projection, track.points, colour, 1, selected ? .48 : .24, current, true);
+					for (const track of tracks) drawPath(target.context, target.projection, track.points, colour, 1, selected ? .48 : .24);
 				}
 				const mean = meanTrack(payload, system);
 				const stitched = stitchedTrack(payload, system, model.id);
-				if (selected) drawPath(target.context, target.projection, stitched.points, '#fffdf6', payload.model.kind === 'ensemble' ? 6.2 : 6.6, .96, current, true);
-				drawPath(target.context, target.projection, stitched.points, colour, payload.model.kind === 'ensemble' ? 3.1 : 3.5, selected ? 1 : .9, current, true);
+				// Operational-style distinction: previous analyses are a thin solid
+				// history, while every forecast lead retains one thicker solid path.
+				// The valid-time slider moves the marker; it does not restyle a path
+				// as an artificial "past" and "future" forecast segment.
+				if (selected) {
+					drawPath(target.context, target.projection, stitched.history, '#fffdf6', 3.6, .92);
+					drawPath(target.context, target.projection, mean, '#fffdf6', payload.model.kind === 'ensemble' ? 6.2 : 6.6, .96);
+				}
+				drawPath(target.context, target.projection, stitched.history, colour, selected ? 1.8 : 1.25, selected ? .9 : .62);
+				drawPath(target.context, target.projection, mean, colour, payload.model.kind === 'ensemble' ? 3.1 : 3.5, selected ? 1 : .9);
 				if (selected) for (const point of stitched.history) {
 					const xy = target.projection.project(point[2], point[1]);
 					target.context.beginPath(); target.context.arc(xy[0], xy[1], 2.8, 0, Math.PI * 2);

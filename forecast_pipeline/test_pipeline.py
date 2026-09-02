@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 
 from forecast_pipeline import merge_archives, merge_runs, migrate_track_sidecars
 from forecast_pipeline.forecast_core import (
@@ -72,6 +73,7 @@ from forecast_pipeline.v56_tracking import (
     _longest_true_run,
     accumulated_to_hourly_precipitation,
     interpolate_hourly,
+    merge_persistent_same_member_coalescences,
     rolling_24h,
 )
 from forecast_pipeline.versions import model_version
@@ -730,6 +732,40 @@ class ForecastPipelineContractTests(unittest.TestCase):
         mask = np.asarray([True, True, False, True, True, True, True])
         steps = np.asarray([0, 1, 2, 3, 4, 6, 7])
         self.assertEqual(_longest_true_run(mask, steps), 2)
+
+    def test_persistent_same_member_coalescence_publishes_only_one_tail(self) -> None:
+        origin = pd.Timestamp("2026-09-02T00:00:00Z")
+        rows = []
+        for hour in range(41):
+            rows.append({
+                "track_id": "earlier",
+                "time": origin + pd.Timedelta(hours=hour),
+                "lon": 70.0,
+                "lat": 22.0,
+                "position_source": "interpolated" if hour >= 23 else "observed",
+                "score_v53": 5.0,
+            })
+        for hour in range(10, 41):
+            rows.append({
+                "track_id": "later",
+                "time": origin + pd.Timedelta(hours=hour),
+                "lon": 80.0 if hour < 23 else 70.1,
+                "lat": 22.0,
+                "position_source": "observed",
+                "score_v53": 6.0,
+            })
+        merged, audit = merge_persistent_same_member_coalescences(pd.DataFrame(rows))
+        later = merged.loc[merged["track_id"].eq("later")]
+        surviving_tail = merged.loc[
+            merged["track_id"].eq("earlier")
+            & pd.to_datetime(merged["time"], utc=True).ge(origin + pd.Timedelta(hours=23))
+        ]
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(audit[0]["close_tail_hours"], 18)
+        self.assertEqual(pd.to_datetime(later["time"], utc=True).max(), origin + pd.Timedelta(hours=22))
+        self.assertEqual(len(surviving_tail), 18)
+        self.assertTrue(surviving_tail["position_source"].eq("observed").all())
+        self.assertTrue(np.allclose(surviving_tail["lon"], 70.1))
 
     def test_forecast_interpolation_can_begin_after_initialization(self) -> None:
         np.testing.assert_array_equal(_hourly_axis([6, 12]), np.arange(6, 13))
