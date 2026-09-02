@@ -3,3 +3,5 @@ __pycache__/
 hpc-logs/
 .ipynb_checkpoints/
 .forecast-runs/
+.reanalysis-runs/
+data/reanalyses/

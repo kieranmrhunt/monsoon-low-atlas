@@ -22,6 +22,11 @@
 		precipitation: {label: 'trailing 24 h precipitation', keyMin: '0', keyMax: '150 mm'},
 		rh500: {label: '500-hPa relative humidity', keyMin: '0', keyMax: '100%'}
 	});
+	const REANALYSIS_SOURCES = Object.freeze({
+		era5: {label: 'ERA5', colour: '#000000'},
+		merra2: {label: 'MERRA-2', colour: '#c51b7d'},
+		imdaa: {label: 'IMDAA', colour: '#008c95'}
+	});
 	const COMPOSITE_PALETTES = Object.freeze({
 		terrain_r: ['#ffffff', '#dfd6d4', '#bfada9', '#9f847e', '#805c54', '#a08566', '#c0ae77', '#e0d788', '#fdff99', '#bdf28c', '#7de57f', '#3dd872', '#00cb6a', '#00abcb', '#0a86ec', '#1f5bc1', '#333399'],
 		vorticity: ['#053061', '#175290', '#2a71b2', '#3f8ec0', '#6bacd1', '#9bc9e0', '#c2ddec', '#e0ecf3', '#f7f6f6', '#fbe5d8', '#fbccb4', '#f5aa89', '#e48066', '#d05548', '#ba2832', '#930e26', '#67001f'],
@@ -89,11 +94,14 @@
 	let extremeScatterPoints = [];
 	let forecastArchiveIndexPromise = null;
 	let forecastDossierSerial = 0;
+	let reanalysisManifestPromise = null;
 	const compositeCache = new Map();
 	const compositePromises = new Map();
 	const compositeErrors = new Map();
 	const sectionMeanCache = new Map();
 	const forecastOpportunityCache = new Map();
+	const reanalysisAssets = new Map();
+	const reanalysisLoads = new Map();
 
 	const METRICS = {
 		deficit: {label: 'pressure-deficit', title: 'Pressure deficit', pct: 'pct_deficit', raw: 'peak_deficit_x10', series: 'pressure_deficit_x10', divisor: 10, unit: 'hPa', colour: '#aa3d2d', direction: 1, peakMonth: 4},
@@ -178,6 +186,7 @@
 		stateMin: 0,
 		search: '',
 		mapLayer: 'auto',
+		trackSource: 'era5',
 		mapColour: 'single',
 		stateFill: 'none',
 		stateOutlines: true,
@@ -396,6 +405,109 @@
 		const response = await fetch(url, {cache: 'force-cache'});
 		if (!response.ok) throw new Error(`Could not fetch ${label} (${response.status})`);
 		return decodeJsonBytes(new Uint8Array(await response.arrayBuffer()));
+	}
+
+	function reanalysisBase() {
+		ensureAtlasConfig();
+		return String(atlasConfig.reanalysisBase || '').replace(/\/$/, '');
+	}
+
+	async function ensureReanalysisManifest() {
+		if (reanalysisManifestPromise) return reanalysisManifestPromise;
+		const base = reanalysisBase();
+		if (!base) throw new Error('Matched reanalysis tracks are not configured');
+		reanalysisManifestPromise = (async () => {
+			const response = await fetch(`${base}/manifest.json`, {cache: 'no-store'});
+			if (!response.ok) throw new Error(`Could not fetch the reanalysis inventory (${response.status})`);
+			const value = await response.json();
+			if (value.schema !== 'lps-atlas-reanalysis-manifest-v1' || !value.sources) throw new Error('Unsupported reanalysis inventory');
+			return value;
+		})().catch(error => {
+			reanalysisManifestPromise = null;
+			throw error;
+		});
+		return reanalysisManifestPromise;
+	}
+
+	function indexReanalysisAsset(source, asset) {
+		if (asset.schema !== 'lps-atlas-reanalysis-matches-v1' || String(asset.source).toLowerCase() !== source) throw new Error(`The ${REANALYSIS_SOURCES[source].label} match asset is incompatible`);
+		asset.matchByEra5 = new Map((asset.matches || []).map(record => [String(record.era5_track_id), record]));
+		return asset;
+	}
+
+	async function ensureReanalysisAsset(source) {
+		if (reanalysisAssets.has(source)) return reanalysisAssets.get(source);
+		if (reanalysisLoads.has(source)) return reanalysisLoads.get(source);
+		const promise = (async () => {
+			const manifest = await ensureReanalysisManifest();
+			const definition = manifest.sources[source];
+			if (!definition || definition.status !== 'ready' || !definition.matches_url) throw new Error(`${REANALYSIS_SOURCES[source].label} matched tracks are not yet available`);
+			const url = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
+			const asset = indexReanalysisAsset(source, await fetchJsonAsset(url, `${REANALYSIS_SOURCES[source].label} matched tracks`));
+			reanalysisAssets.set(source, asset);
+			return asset;
+		})();
+		reanalysisLoads.set(source, promise);
+		try { return await promise; }
+		finally { reanalysisLoads.delete(source); }
+	}
+
+	function reanalysisTrack(source, trackIndex) {
+		const asset = reanalysisAssets.get(source);
+		if (!asset || trackIndex == null) return null;
+		const match = asset.matchByEra5.get(String(atlasId(trackIndex)));
+		const points = match && asset.tracks ? asset.tracks[String(match.source_track_id)] : null;
+		return points && points.length ? {match, points} : null;
+	}
+
+	function requestedReanalysisSources() {
+		if (state.trackSource === 'compare') return ['merra2', 'imdaa'];
+		return state.trackSource === 'era5' ? [] : [state.trackSource];
+	}
+
+	function updateReanalysisStatus(message, status) {
+		const node = $('#mlaReanalysisStatus');
+		if (!node) return;
+		node.textContent = message || '';
+		node.dataset.state = status || '';
+	}
+
+	async function loadRequestedReanalyses(options) {
+		const sources = requestedReanalysisSources();
+		if (!sources.length) {
+			updateReanalysisStatus('');
+			return;
+		}
+		updateReanalysisStatus(`Loading ${sources.map(source => REANALYSIS_SOURCES[source].label).join(' and ')} matched tracks…`, 'loading');
+		const results = await Promise.allSettled(sources.map(ensureReanalysisAsset));
+		const failures = results.map((result, index) => result.status === 'rejected' ? {source: sources[index], error: result.reason} : null).filter(Boolean);
+		if (failures.length === sources.length) {
+			updateReanalysisStatus(failures.map(item => `${REANALYSIS_SOURCES[item.source].label} unavailable`).join(' · '), 'error');
+			if (!(options && options.quiet)) toast(failures[0].error.message || String(failures[0].error));
+		} else if (state.selected != null) {
+			const available = sources.filter(source => reanalysisTrack(source, state.selected));
+			updateReanalysisStatus(available.length ? `${available.map(source => REANALYSIS_SOURCES[source].label).join(' and ')} match selected` : 'No alternative-analysis match for this system', available.length ? 'ready' : 'error');
+		} else {
+			updateReanalysisStatus('Select a system to compare its matched analyses', 'ready');
+		}
+		mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+	}
+
+	async function initialiseReanalysisAvailability() {
+		try {
+			const manifest = await ensureReanalysisManifest();
+			for (const source of ['merra2', 'imdaa']) {
+				const option = $(`#mlaTrackSource option[value="${source}"]`);
+				if (option) option.disabled = !manifest.sources[source] || manifest.sources[source].status !== 'ready';
+			}
+			const compare = $('#mlaTrackSource option[value="compare"]');
+			if (compare) compare.disabled = !['merra2', 'imdaa'].some(source => manifest.sources[source] && manifest.sources[source].status === 'ready');
+			if (state.trackSource !== 'era5') await loadRequestedReanalyses({quiet: true});
+		} catch (error) {
+			for (const option of $$('#mlaTrackSource option:not([value="era5"])')) option.disabled = true;
+			if (state.trackSource !== 'era5') updateReanalysisStatus('Alternative-analysis inventory unavailable', 'error');
+			console.warn('Matched reanalysis inventory unavailable', error);
+		}
 	}
 
 	async function ensureForecastArchiveIndex() {
@@ -1283,6 +1395,7 @@
 		$('#mlaStateMin').value = state.stateMin;
 		$('#mlaSearch').value = state.search;
 		$('#mlaMapLayer').value = state.mapLayer;
+		$('#mlaTrackSource').value = state.trackSource;
 		$('#mlaMapColour').value = state.mapColour;
 		$('#mlaStateFill').value = state.stateFill;
 		$('#mlaWeatherLayer').value = state.weatherLayer;
@@ -1481,6 +1594,12 @@
 			applyFilters();
 		});
 		$('#mlaMapLayer').addEventListener('change', event => { state.mapLayer = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY); writeUrl('replace'); });
+		$('#mlaTrackSource').addEventListener('change', async event => {
+			state.trackSource = event.target.value;
+			writeUrl('replace');
+			mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+			await loadRequestedReanalyses();
+		});
 		$('#mlaMapColour').addEventListener('change', event => { state.mapColour = event.target.value; mapScheduler.invalidate(MAP_DIRTY.DATA); writeUrl('replace'); });
 		$('#mlaStateFill').addEventListener('change', async event => {
 			state.stateFill = event.target.value;
@@ -1621,6 +1740,7 @@
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
+		if (state.trackSource !== 'era5') parameters.set('analysis', state.trackSource);
 		if (state.mapColour !== 'single') parameters.set('colour', state.mapColour);
 		if (state.stateFill !== 'none') parameters.set('statefill', state.stateFill);
 		if (!state.stateOutlines) parameters.set('states', '0');
@@ -1689,6 +1809,7 @@
 		if (overIndex >= 0) state.stateIndex = overIndex;
 		state.search = parameters.get('q') || '';
 		if (['auto', 'none', 'density', 'tracks', 'genesis', 'lysis'].includes(parameters.get('layer'))) state.mapLayer = parameters.get('layer');
+		if (['era5', 'merra2', 'imdaa', 'compare'].includes(parameters.get('analysis'))) state.trackSource = parameters.get('analysis');
 		if (['single', 'class', 'metric', 'year'].includes(parameters.get('colour'))) state.mapColour = parameters.get('colour');
 		if (['none', 'selected', 'cohort', 'selected_anomaly', 'cohort_anomaly'].includes(parameters.get('statefill'))) state.stateFill = parameters.get('statefill');
 		state.stateOutlines = parameters.get('states') !== '0';
@@ -1749,6 +1870,7 @@
 		suppressUrl = true;
 		readUrl();
 		if (state.stateFill !== 'none') await ensureDetail();
+		if (state.trackSource !== 'era5') await loadRequestedReanalyses({quiet: true});
 		syncControls();
 		applyFilters({noUrl: true});
 		activateTab(state.tab, false);
@@ -2487,6 +2609,58 @@
 		}
 	}
 
+	function reanalysisPointVisible(point) {
+		const time = new Date(Number(point[0]) * HOUR_MS);
+		return Number.isFinite(time.getTime()) && state.months.has(time.getUTCMonth() + 1);
+	}
+
+	function appendReanalysisPath(context, projection, points, step) {
+		let started = false;
+		for (let index = 0; index < points.length; index++) {
+			if (!reanalysisPointVisible(points[index])) { started = false; continue; }
+			if (index !== points.length - 1 && index % step) continue;
+			const projected = projection.project(Number(points[index][2]), Number(points[index][1]));
+			if (!started) context.moveTo(projected[0], projected[1]); else context.lineTo(projected[0], projected[1]);
+			started = true;
+		}
+	}
+
+	function drawReanalysisTrackLayer(context, projection, source, indexes) {
+		const asset = reanalysisAssets.get(source);
+		if (!asset) return 0;
+		let drawn = 0;
+		context.save();
+		context.beginPath();
+		for (const index of indexes) {
+			const value = reanalysisTrack(source, index);
+			if (!value) continue;
+			appendReanalysisPath(context, projection, value.points, state.mapZoom < 1.5 ? 3 : state.mapZoom < 3 ? 2 : 1);
+			drawn++;
+		}
+		context.strokeStyle = rgba(REANALYSIS_SOURCES[source].colour, indexes.length > 1000 ? .34 : .65);
+		context.lineWidth = state.mapZoom > 3 ? 1.6 : 1.15;
+		context.lineCap = 'round';
+		context.lineJoin = 'round';
+		context.stroke();
+		context.restore();
+		return drawn;
+	}
+
+	function drawReanalysisPointLayer(context, projection, source, mode, indexes) {
+		let drawn = 0;
+		const radius = indexes.length > 1000 ? 1.6 : 2.4;
+		for (const index of indexes) {
+			const value = reanalysisTrack(source, index);
+			if (!value) continue;
+			const point = value.points[mode === 'lysis' ? value.points.length - 1 : 0];
+			const projected = projection.project(Number(point[2]), Number(point[1]));
+			context.fillStyle = rgba(REANALYSIS_SOURCES[source].colour, .72);
+			context.beginPath(); context.arc(projected[0], projected[1], radius, 0, Math.PI * 2); context.fill();
+			drawn++;
+		}
+		return drawn;
+	}
+
 	function drawTrackLayer(context, projection, indexes) {
 		const groups = new Map();
 		for (const index of indexes) {
@@ -2544,7 +2718,13 @@
 		const ibtracsLegend = state.ibtracsOverlay && item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path
 			? `<span class="mla-legend-item"><span class="mla-swatch" style="height:0;background:none;border-top:2px dashed ${css('--mla-peacock', '#08736f')}"></span>matched IBTrACS best track</span>`
 			: '';
-		node.innerHTML = rainfallLegend + trackLegend + ibtracsLegend;
+		const analysisSources = state.trackSource === 'compare' ? ['era5', 'merra2', 'imdaa'] : [state.trackSource];
+		const analysisLegend = state.trackSource === 'era5' ? '' : analysisSources.map(source => {
+			if (source !== 'era5' && state.selected != null && !reanalysisTrack(source, state.selected)) return '';
+			const definition = REANALYSIS_SOURCES[source];
+			return `<span class="mla-legend-item"><span class="mla-swatch" style="height:0;background:none;border-top:3px solid ${definition.colour}"></span>${definition.label}${source === 'era5' ? ' catalogue' : ' matched track'}</span>`;
+		}).join('');
+		node.innerHTML = rainfallLegend + trackLegend + analysisLegend + ibtracsLegend;
 	}
 
 	function drawMapData() {
@@ -2553,14 +2733,23 @@
 		const indexes = mapTrackIndexes();
 		const hideSubsetTracks = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
 		let maximum = 0;
+		let alternativeTracks = 0;
 		if (layer === 'density') maximum = drawDensity(drawing.context, drawing.projection, indexes);
-		else if (layer === 'tracks') { if (!hideSubsetTracks) drawTrackLayer(drawing.context, drawing.projection, indexes); }
-		else if (layer !== 'none') drawPointLayer(drawing.context, drawing.projection, layer, indexes);
+		else if (layer === 'tracks') {
+			if (!hideSubsetTracks) {
+				if (state.trackSource === 'merra2' || state.trackSource === 'imdaa') alternativeTracks = drawReanalysisTrackLayer(drawing.context, drawing.projection, state.trackSource, indexes);
+				else drawTrackLayer(drawing.context, drawing.projection, indexes);
+			}
+		} else if (layer !== 'none') {
+			if (state.trackSource === 'merra2' || state.trackSource === 'imdaa') alternativeTracks = drawReanalysisPointLayer(drawing.context, drawing.projection, state.trackSource, layer, indexes);
+			else drawPointLayer(drawing.context, drawing.projection, layer, indexes);
+		}
 		const pathLabel = layer === 'none' ? '' : ` · ${fmt(visiblePointCount(indexes))} selected-month positions`;
 		const rainfall = stateRainfallSummary();
 		const rainfallLabel = rainfall ? ` · IMD state ${rainfall.anomaly ? 'fractional climatology anomaly' : 'mean'} across ${fmt(rainfall.systemDays)} system-days` : '';
-		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'unique-track density' : layer === 'none' ? (state.selected == null ? 'no LPS subset layer' : 'selected system only') : layer;
-		$('#mlaMapStatus').textContent = `${fmt(indexes.length)} systems · ${layerLabel}${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
+		const sourceLabel = state.trackSource === 'merra2' || state.trackSource === 'imdaa' ? ` · ${alternativeTracks} matched ${REANALYSIS_SOURCES[state.trackSource].label} geometries` : state.trackSource === 'compare' ? ' · selected matched analyses compared' : '';
+		const layerLabel = hideSubsetTracks ? 'subset tracks hidden while weather is on' : layer === 'density' ? 'ERA5 unique-track density' : layer === 'none' ? (state.selected == null ? 'no LPS subset layer' : 'selected system only') : layer;
+		$('#mlaMapStatus').textContent = `${fmt(indexes.length)} systems · ${layerLabel}${sourceLabel}${pathLabel}${rainfallLabel} · zoom ${fmt(state.mapZoom, 1)}×`;
 		renderStateRainfallValues(rainfall);
 		mapLegend(layer, maximum);
 	}
@@ -2578,6 +2767,31 @@
 		context.restore();
 	}
 
+	function strokeReanalysisTrack(context, projection, source, trackIndex, colour, width) {
+		const value = reanalysisTrack(source, trackIndex);
+		if (!value) return false;
+		context.save();
+		context.lineCap = 'round';
+		context.lineJoin = 'round';
+		context.beginPath();
+		appendReanalysisPath(context, projection, value.points, 1);
+		context.setLineDash([]);
+		context.strokeStyle = colour;
+		context.lineWidth = width;
+		context.stroke();
+		context.restore();
+		return true;
+	}
+
+	function reanalysisPointAtTime(source, trackIndex, timeMs) {
+		const value = reanalysisTrack(source, trackIndex);
+		if (!value || !Number.isFinite(timeMs)) return null;
+		const targetHour = timeMs / HOUR_MS;
+		let best = null;
+		for (const point of value.points) if (!best || Math.abs(Number(point[0]) - targetHour) < Math.abs(Number(best[0]) - targetHour)) best = point;
+		return best && Math.abs(Number(best[0]) - targetHour) <= 1.01 ? best : null;
+	}
+
 	function timeFocusTrackIndexes(exact) {
 		if (effectiveLayer() === 'none') return state.selected == null ? [] : [state.selected];
 		return exact ? mapTrackIndexes() : state.active;
@@ -2590,6 +2804,7 @@
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
 		for (const trackIndex of timeFocusTrackIndexes(exact)) {
+			if (trackIndex === state.selected && (state.trackSource === 'merra2' || state.trackSource === 'imdaa') && reanalysisTrack(state.trackSource, trackIndex)) continue;
 			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
 			if (!range) continue;
 			const points = paths.decoded[trackIndex];
@@ -2617,6 +2832,18 @@
 			context.lineWidth = 1.8;
 			context.stroke();
 		}
+		if (state.selected != null) {
+			const sources = state.trackSource === 'compare' ? ['merra2', 'imdaa'] : state.trackSource === 'era5' ? [] : [state.trackSource];
+			const markerTime = exact ? state.focusTimeMs : (state.focusStartMs + state.focusEndMs) / 2;
+			for (const source of sources) {
+				const point = reanalysisPointAtTime(source, state.selected, markerTime);
+				if (!point) continue;
+				const marker = projection.project(Number(point[2]), Number(point[1]));
+				context.beginPath(); context.arc(marker[0], marker[1], 6.3, 0, Math.PI * 2);
+				context.fillStyle = REANALYSIS_SOURCES[source].colour; context.fill();
+				context.strokeStyle = css('--mla-card', '#fffaf0'); context.lineWidth = 1.8; context.stroke();
+			}
+		}
 		context.restore();
 	}
 
@@ -2625,8 +2852,22 @@
 		const selectedOnly = effectiveLayer() === 'none';
 		if (!selectedOnly && state.hovered != null && state.hovered !== state.selected && state.activeBit[state.hovered]) strokeTrack(drawing.context, drawing.projection, state.hovered, css('--mla-madder', '#aa3d2d'), 2.5);
 		if (state.selected != null) {
-			strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 6.4);
-			strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-indigo-deep', '#17294f'), 3.6);
+			if (state.trackSource === 'era5' || state.trackSource === 'compare') {
+				strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 6.4);
+				strokeTrack(drawing.context, drawing.projection, state.selected, state.trackSource === 'compare' ? REANALYSIS_SOURCES.era5.colour : css('--mla-indigo-deep', '#17294f'), 3.6);
+			}
+			const sources = state.trackSource === 'compare' ? ['merra2', 'imdaa'] : state.trackSource === 'era5' ? [] : [state.trackSource];
+			let matched = false;
+			for (const source of sources) {
+				if (!reanalysisTrack(source, state.selected)) continue;
+				matched = true;
+				strokeReanalysisTrack(drawing.context, drawing.projection, source, state.selected, css('--mla-card', '#fffaf0'), 6.1);
+				strokeReanalysisTrack(drawing.context, drawing.projection, source, state.selected, REANALYSIS_SOURCES[source].colour, 3.3);
+			}
+			if (!matched && state.trackSource !== 'era5' && state.trackSource !== 'compare') {
+				strokeTrack(drawing.context, drawing.projection, state.selected, css('--mla-card', '#fffaf0'), 5);
+				strokeTrack(drawing.context, drawing.projection, state.selected, '#777777', 2.4);
+			}
 		}
 		const item = state.selected == null ? null : credibleIb(state.selected);
 		if (state.ibtracsOverlay && item && CORE.ibtracs_tracks[item.sid] && CORE.ibtracs_tracks[item.sid].path) {
@@ -2706,6 +2947,33 @@
 		return bestTrack;
 	}
 
+	function nearestReanalysisTrackPoint(clientX, clientY, trackIndex, touch) {
+		if (trackIndex == null || state.trackSource === 'era5') return null;
+		const sources = state.trackSource === 'compare' ? ['merra2', 'imdaa'] : [state.trackSource];
+		const canvas = $('#mlaMapOverlay');
+		const rectangle = canvas.getBoundingClientRect();
+		const x = clientX - rectangle.left;
+		const y = clientY - rectangle.top;
+		const projection = mapProjection(rectangle.width, rectangle.height);
+		const maximumDistance = touch ? 26 : 15;
+		let best = null;
+		let bestDistance = maximumDistance ** 2;
+		for (const source of sources) {
+			const value = reanalysisTrack(source, trackIndex);
+			if (!value) continue;
+			for (const point of value.points) {
+				if (!reanalysisPointVisible(point)) continue;
+				const projected = projection.project(Number(point[2]), Number(point[1]));
+				const distance = (projected[0] - x) ** 2 + (projected[1] - y) ** 2;
+				if (distance < bestDistance) {
+					bestDistance = distance;
+					best = {source, point};
+				}
+			}
+		}
+		return best;
+	}
+
 	function mapHitTest(clientX, clientY, touch) {
 		const focusMarker = timeFocusMarkerHitTest(clientX, clientY, touch);
 		if (focusMarker >= 0) return focusMarker;
@@ -2718,13 +2986,20 @@
 		const mapIndexes = layer === 'none' ? (state.selected == null ? [] : [state.selected]) : mapTrackIndexes();
 		if (!mapIndexes.length) return -1;
 		const mapBits = new Set(mapIndexes);
+		if (state.selected != null && mapBits.has(state.selected) && nearestReanalysisTrackPoint(clientX, clientY, state.selected, touch)) return state.selected;
 		if (layer === 'genesis' || layer === 'lysis') {
 			let bestTrack = -1;
 			let bestDistance = (touch ? 20 : 11) ** 2;
 			for (const trackIndex of mapIndexes) {
-				const row = track(trackIndex);
-				const latitude = Number(row[layer === 'lysis' ? T.end_lat_x1000 : T.gen_lat_x1000]) / 1000;
-				const longitude = Number(row[layer === 'lysis' ? T.end_lon_x1000 : T.gen_lon_x1000]) / 1000;
+				const usesAlternative = state.trackSource === 'merra2' || state.trackSource === 'imdaa';
+				const alternative = usesAlternative
+					? reanalysisTrack(state.trackSource, trackIndex)
+					: null;
+				if (usesAlternative && !alternative) continue;
+				const endpoint = alternative ? alternative.points[layer === 'lysis' ? alternative.points.length - 1 : 0] : null;
+				const row = endpoint ? null : track(trackIndex);
+				const latitude = endpoint ? Number(endpoint[2]) : Number(row[layer === 'lysis' ? T.end_lat_x1000 : T.gen_lat_x1000]) / 1000;
+				const longitude = endpoint ? Number(endpoint[1]) : Number(row[layer === 'lysis' ? T.end_lon_x1000 : T.gen_lon_x1000]) / 1000;
 				const point = projection.project(latitude, longitude);
 				const distance = (point[0] - x) ** 2 + (point[1] - y) ** 2;
 				if (distance < bestDistance) { bestDistance = distance; bestTrack = trackIndex; }
@@ -2734,6 +3009,7 @@
 		const geographical = projection.invert(x, y);
 		const radiusPx = touch ? 18 : 10;
 		const subsetTracksHidden = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
+		const alternativeMode = state.trackSource === 'merra2' || state.trackSource === 'imdaa';
 		return segmentIndex.query({
 			x, y,
 			lat: geographical[0],
@@ -2742,7 +3018,7 @@
 			radiusLon: radiusPx / projection.scale,
 			radiusLat: radiusPx / projection.scale,
 			project: projection.project,
-			active: trackIndex => mapBits.has(trackIndex) && (!subsetTracksHidden || trackIndex === state.selected),
+			active: trackIndex => mapBits.has(trackIndex) && (!alternativeMode || Boolean(reanalysisTrack(state.trackSource, trackIndex))) && (!subsetTracksHidden || trackIndex === state.selected),
 			segmentVisible: (trackIndex, pointIndex) => pointVisible(trackIndex, pointIndex - 1) && pointVisible(trackIndex, pointIndex)
 		});
 	}
@@ -2889,7 +3165,10 @@
 			}
 			const index = mapHitTest(event.clientX, event.clientY, touch);
 			if (index >= 0 && index === state.selected) {
-				const pointIndex = nearestTrackPoint(event.clientX, event.clientY, index, touch);
+				const reanalysisHit = nearestReanalysisTrackPoint(event.clientX, event.clientY, index, touch);
+				const pointIndex = reanalysisHit
+					? pointIndexAtTime(index, Number(reanalysisHit.point[0]) * HOUR_MS)
+					: nearestTrackPoint(event.clientX, event.clientY, index, touch);
 				if (pointIndex >= 0) setTrackPointFocus(index, pointIndex);
 			} else if (index >= 0) selectTrack(index);
 		});
@@ -3116,6 +3395,7 @@
 		renderTopTable();
 		mapScheduler.invalidate((state.stateFill.startsWith('selected') ? MAP_DIRTY.BASE : 0) | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
 		renderLifeCharts();
+		if (state.trackSource !== 'era5') void loadRequestedReanalyses({quiet: true});
 		if (state.selected != null && options && options.fit) requestAnimationFrame(fitSelected);
 		writeUrl('push');
 	}
@@ -4920,7 +5200,7 @@
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
 				search: state.search || null
 			},
-			view: {map_layer: state.mapLayer, map_colour: state.mapColour, state_fill: state.stateFill, state_outlines: state.stateOutlines, matched_ibtracs_overlay: state.ibtracsOverlay, weather_field: state.weatherLayer, show_subset_tracks_with_weather: state.weatherTracks, evolution_metric: state.evolutionMetric, subset_profile_metrics: PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key))},
+			view: {map_layer: state.mapLayer, track_analysis: state.trackSource, map_colour: state.mapColour, state_fill: state.stateFill, state_outlines: state.stateOutlines, matched_ibtracs_overlay: state.ibtracsOverlay, weather_field: state.weatherLayer, show_subset_tracks_with_weather: state.weatherTracks, evolution_metric: state.evolutionMetric, subset_profile_metrics: PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key))},
 			selected_physical_event_id: state.selected == null ? null : atlasId(state.selected),
 			matching_physical_event_ids: state.active.map(atlasId),
 			url: window.location.href,
@@ -5072,6 +5352,7 @@
 		$('#mlaLoading').hidden = true;
 		root.dataset.ready = 'true';
 		void loadVisitCounter();
+		void initialiseReanalysisAvailability();
 		writeUrl('replace');
 		boundaryPromise.then(boundary => {
 			if (!boundary) return;

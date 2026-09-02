@@ -21,6 +21,11 @@
 		'tigge-jma': '#984ea3', 'tigge-kma': '#238b45', 'tigge-mf': '#9a8700',
 		'tigge-ncep': '#e41a1c', 'tigge-ncmrwf': '#ff7f00', 'tigge-ukmo': '#795548'
 	};
+	const ANALYSIS_TRACKS = Object.freeze({
+		era5: {label: 'ERA5', colour: '#000000', detail: 'v5.6 track'},
+		merra2: {label: 'MERRA-2', colour: '#c51b7d', detail: 'matched track'},
+		imdaa: {label: 'IMDAA', colour: '#008c95', detail: 'matched track'}
+	});
 	const OPERATIONAL_MODEL_ORDER = [
 		'gfs', 'gefs', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
 		'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
@@ -35,6 +40,9 @@
 	const storedModels = Array.isArray(storedPreferences.selectedModels)
 		? storedPreferences.selectedModels.filter(value => typeof value === 'string')
 		: null;
+	const storedAnalyses = Array.isArray(storedPreferences.analysisSources)
+		? storedPreferences.analysisSources.filter(value => Object.hasOwn(ANALYSIS_TRACKS, value))
+		: storedPreferences.showEra5 === false ? [] : ['era5'];
 	const state = {
 		mode: storedPreferences.mode === 'archive' ? 'archive' : 'latest', manifest: null, payload: null, geo: null, boundary: null,
 		selectedModels: new Set(storedModels || []), hasModelPreference: storedModels !== null, latestPayloads: new Map(), modelLoads: new Map(),
@@ -45,7 +53,7 @@
 		archiveDate: /^\d{4}-\d{2}-\d{2}$/.test(storedPreferences.archiveDate || '') ? storedPreferences.archiveDate : DEFAULT_ARCHIVE_DATE,
 		archiveHour: ['00', '06', '12', '18'].includes(storedPreferences.archiveHour) ? storedPreferences.archiveHour : '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
-		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: Boolean(storedPreferences.showMembers), showEra5: storedPreferences.showEra5 !== false,
+		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: Boolean(storedPreferences.showMembers), analysisSources: new Set(storedAnalyses),
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0,
@@ -56,6 +64,9 @@
 	const evolutionSeriesCaches = new WeakMap();
 	const analysisCentreCaches = new WeakMap();
 	const analysisHistoryCaches = new WeakMap();
+	let reanalysisManifestPromise = null;
+	const reanalysisAssets = new Map();
+	const reanalysisLoads = new Map();
 
 	function persistPreferences() {
 		try {
@@ -66,7 +77,7 @@
 				archiveDate: state.archiveDate,
 				archiveHour: state.archiveHour,
 				showMembers: state.showMembers,
-				showEra5: state.showEra5
+				analysisSources: [...state.analysisSources]
 			}));
 		} catch (_) {
 			// Browsers with blocked storage still retain the same choices for this page view.
@@ -97,14 +108,200 @@
 		return gunzipJson(await fetch(url, {cache: 'force-cache'}));
 	}
 
+	function reanalysisBase() {
+		return String(config.reanalysisBase || '').replace(/\/$/, '');
+	}
+
+	async function ensureReanalysisManifest() {
+		if (reanalysisManifestPromise) return reanalysisManifestPromise;
+		const base = reanalysisBase();
+		if (!base) throw new Error('Matched reanalysis tracks are not configured');
+		reanalysisManifestPromise = (async () => {
+			const response = await fetch(`${base}/manifest.json`, {cache: 'no-store'});
+			if (!response.ok) throw new Error(`HTTP ${response.status} for the reanalysis inventory`);
+			const value = await response.json();
+			if (value.schema !== 'lps-atlas-reanalysis-manifest-v1' || !value.sources) throw new Error('Unsupported reanalysis inventory');
+			return value;
+		})().catch(error => { reanalysisManifestPromise = null; throw error; });
+		return reanalysisManifestPromise;
+	}
+
+	function indexReanalysisAsset(source, value) {
+		if (value.schema !== 'lps-atlas-reanalysis-matches-v1' || String(value.source).toLowerCase() !== source) throw new Error(`Incompatible ${ANALYSIS_TRACKS[source].label} match asset`);
+		value.matchByEra5 = new Map((value.matches || []).map(record => [String(record.era5_track_id), record]));
+		return value;
+	}
+
+	async function ensureReanalysisAsset(source) {
+		if (reanalysisAssets.has(source)) return reanalysisAssets.get(source);
+		if (reanalysisLoads.has(source)) return reanalysisLoads.get(source);
+		const promise = (async () => {
+			const manifest = await ensureReanalysisManifest();
+			const definition = manifest.sources[source];
+			if (!definition || definition.status !== 'ready' || !definition.matches_url) throw new Error(`${ANALYSIS_TRACKS[source].label} matches are not ready`);
+			const url = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
+			const asset = indexReanalysisAsset(source, await fetchGzipJson(url));
+			reanalysisAssets.set(source, asset);
+			return asset;
+		})();
+		reanalysisLoads.set(source, promise);
+		try { return await promise; }
+		finally { reanalysisLoads.delete(source); }
+	}
+
+	function matchedReanalysisTrack(source, era5TrackId) {
+		const asset = reanalysisAssets.get(source);
+		if (!asset) return null;
+		const match = asset.matchByEra5.get(String(era5TrackId));
+		const points = match && asset.tracks ? asset.tracks[String(match.source_track_id)] : null;
+		return points && points.length ? {match, points} : null;
+	}
+
+	async function initialiseReanalysisTracks() {
+		try {
+			const manifest = await ensureReanalysisManifest();
+			await Promise.allSettled(['merra2', 'imdaa'].filter(source => manifest.sources[source] && manifest.sources[source].status === 'ready').map(ensureReanalysisAsset));
+			if (state.mode === 'archive') populateArchive(false);
+			render();
+		} catch (error) {
+			console.warn('Matched reanalysis tracks unavailable', error);
+		}
+	}
+
+	function firstSustainedTrackCoalescence(first, second) {
+		const secondByStep = new Map((second.points || []).map(point => [Number(point[0]), point]));
+		let runStart = null;
+		let previousStep = null;
+		for (const point of [...(first.points || [])].sort((a, b) => Number(a[0]) - Number(b[0]))) {
+			const step = Number(point[0]);
+			const other = secondByStep.get(step);
+			if (!other) continue;
+			const close = haversineKm(point[1], point[2], other[1], other[2]) <= 75;
+			if (!close) runStart = null;
+			else {
+				if (runStart == null || previousStep == null || step !== previousStep + 1) runStart = step;
+				if (step - runStart + 1 >= 6) return runStart;
+			}
+			previousStep = step;
+		}
+		return null;
+	}
+
+	function forecastTrackRank(track) {
+		const points = track.points || [];
+		const start = points.length ? Math.min(...points.map(point => Number(point[0]))) : Infinity;
+		const observed = points.filter(point => String(point[point.length - 1]).toLowerCase() === 'o').length;
+		return [start, -observed, String(track.id)];
+	}
+
+	function rankBefore(first, second) {
+		for (let index = 0; index < first.length; index++) {
+			if (first[index] === second[index]) continue;
+			return first[index] < second[index];
+		}
+		return true;
+	}
+
+	function preferredCoalescedPoint(candidate, incumbent, keeperId) {
+		if (!incumbent) return true;
+		const candidateObserved = String(candidate.point[candidate.point.length - 1]).toLowerCase() === 'o';
+		const incumbentObserved = String(incumbent.point[incumbent.point.length - 1]).toLowerCase() === 'o';
+		if (candidateObserved !== incumbentObserved) return candidateObserved;
+		const candidateScore = Number(candidate.point[3]);
+		const incumbentScore = Number(incumbent.point[3]);
+		if (Number.isFinite(candidateScore) && Number.isFinite(incumbentScore) && candidateScore !== incumbentScore) return candidateScore > incumbentScore;
+		return candidate.trackId === keeperId && incumbent.trackId !== keeperId;
+	}
+
+	function refreshForecastTrack(track) {
+		track.points = [...(track.points || [])].sort((a, b) => Number(a[0]) - Number(b[0]));
+		if (!track.points.length) return track;
+		track.start_step = Number(track.points[0][0]);
+		track.end_step = Number(track.points[track.points.length - 1][0]);
+		const vorticity = track.points.map(point => Number(point[3])).filter(Number.isFinite);
+		const pressureDeficit = track.points.map(point => Number(point[4])).filter(Number.isFinite);
+		const mslp = track.points.map(point => Number(point[5])).filter(Number.isFinite);
+		const category = track.points.map(point => Number(point[6])).filter(Number.isFinite);
+		if (vorticity.length) track.max_vorticity = Math.max(...vorticity);
+		if (pressureDeficit.length) track.max_pressure_deficit = Math.max(...pressureDeficit);
+		if (mslp.length) track.minimum_mslp = Math.min(...mslp);
+		if (category.length) track.maximum_provisional_category = Math.max(...category);
+		track.observed_support_hours = track.points.filter(point => String(point[point.length - 1]).toLowerCase() === 'o').length;
+		return track;
+	}
+
+	function coalesceLegacyForecastPayload(payload) {
+		if (!payload || !Array.isArray(payload.tracks) || payload._coalescenceChecked) return payload;
+		Object.defineProperty(payload, '_coalescenceChecked', {value: true});
+		let tracks = payload.tracks.map(track => ({...track, points: [...(track.points || [])]}));
+		const audit = [];
+		while (true) {
+			const byMember = new Map();
+			for (const track of tracks) {
+				const member = String(track.member || 'det');
+				if (!byMember.has(member)) byMember.set(member, []);
+				byMember.get(member).push(track);
+			}
+			let match = null;
+			for (const [member, values] of byMember) {
+				for (let firstIndex = 0; firstIndex < values.length && !match; firstIndex++) {
+					for (let secondIndex = firstIndex + 1; secondIndex < values.length; secondIndex++) {
+						const mergeStep = firstSustainedTrackCoalescence(values[firstIndex], values[secondIndex]);
+						if (mergeStep != null) { match = {member, first: values[firstIndex], second: values[secondIndex], mergeStep}; break; }
+					}
+				}
+				if (match) break;
+			}
+			if (!match) break;
+			const firstRank = forecastTrackRank(match.first);
+			const secondRank = forecastTrackRank(match.second);
+			const keeper = rankBefore(firstRank, secondRank) ? match.first : match.second;
+			const terminated = keeper === match.first ? match.second : match.first;
+			const tailByStep = new Map();
+			for (const track of [keeper, terminated]) for (const point of track.points || []) {
+				if (Number(point[0]) < match.mergeStep) continue;
+				const candidate = {point, trackId: track.id};
+				const step = Number(point[0]);
+				if (preferredCoalescedPoint(candidate, tailByStep.get(step), keeper.id)) tailByStep.set(step, candidate);
+			}
+			keeper.points = [
+				...(keeper.points || []).filter(point => Number(point[0]) < match.mergeStep),
+				...[...tailByStep.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value.point)
+			];
+			terminated.points = (terminated.points || []).filter(point => Number(point[0]) < match.mergeStep);
+			refreshForecastTrack(keeper);
+			refreshForecastTrack(terminated);
+			if (!terminated.points.length) tracks = tracks.filter(track => track !== terminated);
+			audit.push({member: match.member, kept: String(keeper.id), terminated: String(terminated.id), mergeStep: match.mergeStep});
+		}
+		payload.tracks = tracks;
+		if (audit.length && Array.isArray(payload.systems)) {
+			const tracksById = new Map(tracks.map(track => [String(track.id), track]));
+			payload.systems = payload.systems.map(system => {
+				const systemTracks = (system.track_ids || []).map(id => tracksById.get(String(id))).filter(Boolean);
+				if (!systemTracks.length) return null;
+				const members = [...new Set(systemTracks.map(track => String(track.member || 'det')))];
+				return {
+					...system,
+					track_ids: systemTracks.map(track => track.id),
+					members,
+					member_count: members.length,
+					start_step: Math.min(...systemTracks.map(track => Number(track.start_step))),
+					end_step: Math.max(...systemTracks.map(track => Number(track.end_step)))
+				};
+			}).filter(Boolean);
+		}
+		return payload;
+	}
+
 	async function fetchEntryPayload(entry, tracksOnly) {
 		const preferred = tracksOnly && entry.tracks_url ? entry.tracks_url : entry.url;
 		try {
-			return await fetchGzipJson(joinUrl(config.forecastBase, preferred));
+			return coalesceLegacyForecastPayload(await fetchGzipJson(joinUrl(config.forecastBase, preferred)));
 		} catch (error) {
 			if (preferred === entry.url) throw error;
 			console.warn(`Track sidecar unavailable for ${preferred}; using full payload`, error);
-			return fetchGzipJson(joinUrl(config.forecastBase, entry.url));
+			return coalesceLegacyForecastPayload(await fetchGzipJson(joinUrl(config.forecastBase, entry.url)));
 		}
 	}
 
@@ -665,12 +862,23 @@
 		}).join('');
 		const available = entries.length;
 		const era5Available = entries.some(entry => entry.verification_status === 'matched' || (entry.verification_labels || []).length);
+		const verificationIds = new Set();
+		for (const entry of entries) {
+			for (const value of entry.verification_track_ids || []) verificationIds.add(String(value));
+			const payload = state.archivePayloads.get(payloadKey(entry.model, entry));
+			for (const track of (payload && payload.verification ? payload.verification.tracks : []) || []) verificationIds.add(String(track.id));
+		}
+		const analysisTiles = Object.entries(ANALYSIS_TRACKS).map(([source, definition]) => {
+			const sourceAvailable = source === 'era5' ? era5Available : [...verificationIds].some(trackId => matchedReanalysisTrack(source, trackId));
+			const title = sourceAvailable ? `Show or hide matched ${definition.label} analysis tracks` : `No matched ${definition.label} track is available at this valid time`;
+			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(definition.detail) : 'No match'}</small></button>`;
+		}).join('');
 		const summary = available
 			? `${available} model–lead pair${available === 1 ? '' : 's'} available · ${selected} selected`
 			: 'No model–lead pairs available';
 		return `<div class="mla-forecast-matrix-layout">
 			<div class="mla-forecast-matrix-toolbar"><span><strong>${esc(formatUtc(target))}</strong><small>${esc(summary)}</small></span><button class="mla-btn mla-btn-small mla-btn-quiet" type="button" data-forecast-archive-clear ${selected ? '' : 'hidden'}>Clear</button></div>
-			<div class="mla-forecast-matrix-intro"><p>Choose any model–lead squares; click a selected square again to remove it.</p><aside class="mla-forecast-analysis-choice"><span class="mla-label">Analysis</span><button class="mla-forecast-era5-tile" id="mlaForecastEra5Tile" type="button" aria-pressed="${state.showEra5 && era5Available}" title="${era5Available ? 'Show or hide matched ERA5 catalogue tracks' : 'No matched ERA5 track is available at this valid time'}" ${era5Available ? '' : 'disabled'}><strong>ERA5</strong><small>${era5Available ? 'v5.6 track' : 'No match'}</small></button></aside></div>
+			<div class="mla-forecast-matrix-intro"><p>Choose any model–lead squares; click a selected square again to remove it.</p><aside class="mla-forecast-analysis-choice"><span class="mla-label">Analysis</span><div class="mla-forecast-analysis-tiles">${analysisTiles}</div></aside></div>
 			<div class="mla-forecast-matrix-groups">${groups || `<p class="mla-forecast-matrix-no-match">${esc(noArchiveMatchMessage())}</p>`}</div>
 		</div>`;
 	}
@@ -949,6 +1157,7 @@
 			state.archiveEntriesCache = null;
 			state.initialised = true;
 			buildModelControls();
+			void initialiseReanalysisTracks();
 			if (state.mode !== 'latest') {
 				await ensureArchiveManifest();
 				populateArchiveTimeControls();
@@ -1506,6 +1715,29 @@
 		return Math.abs(Number(best[0]) - step) <= 1 ? best : null;
 	}
 
+	function pointAtEpoch(points, timeMs) {
+		if (!points || !points.length || !Number.isFinite(timeMs)) return null;
+		const hour = timeMs / 3600000;
+		let best = points[0];
+		for (const point of points) if (Math.abs(Number(point[0]) - hour) < Math.abs(Number(best[0]) - hour)) best = point;
+		return Math.abs(Number(best[0]) - hour) <= 1.01 ? best : null;
+	}
+
+	function drawAnalysisPath(target, points, colour, marker) {
+		if (!points || points.length < 2) return;
+		target.context.beginPath();
+		points.forEach((point, index) => {
+			const xy = target.projection.project(Number(point[2]), Number(point[1]));
+			if (!index) target.context.moveTo(...xy); else target.context.lineTo(...xy);
+		});
+		target.context.setLineDash([]); target.context.strokeStyle = '#fffdf6'; target.context.lineWidth = 5; target.context.globalAlpha = .92; target.context.stroke();
+		target.context.strokeStyle = colour; target.context.lineWidth = 2.5; target.context.globalAlpha = 1; target.context.stroke();
+		if (marker) {
+			const xy = target.projection.project(Number(marker[2]), Number(marker[1]));
+			target.context.beginPath(); target.context.arc(xy[0], xy[1], 4.2, 0, Math.PI * 2); target.context.fillStyle = colour; target.context.fill(); target.context.strokeStyle = '#fffdf6'; target.context.lineWidth = 1.5; target.context.stroke();
+		}
+	}
+
 	function runColour(entry) {
 		if (state.mode !== 'latest') return state.archiveColourIndexes.get(entry.runKey)
 			|| modelTrackColour(entry.model.id, entry.model.colour || entry.payload.model.colour);
@@ -1551,17 +1783,18 @@
 				}
 			}
 		}
-		if (state.mode !== 'latest' && state.showEra5) {
+		if (state.mode !== 'latest' && state.analysisSources.size) {
 			const verificationTracks = new Map();
 			for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!verificationTracks.has(String(track.id))) verificationTracks.set(String(track.id), {entry, track});
 			for (const {entry, track} of verificationTracks.values()) {
-				const current = stepForPayload(entry.payload);
-				target.context.beginPath();
-				track.points.forEach((point, index) => { const xy = target.projection.project(point[2], point[1]); if (!index) target.context.moveTo(...xy); else target.context.lineTo(...xy); });
-				target.context.setLineDash([]); target.context.strokeStyle = '#fffdf6'; target.context.lineWidth = 5; target.context.globalAlpha = .92; target.context.stroke();
-				target.context.strokeStyle = '#000000'; target.context.lineWidth = 2.5; target.context.globalAlpha = 1; target.context.stroke();
-				const marker = pointAt(track.points, current);
-				if (marker) { const xy = target.projection.project(marker[2], marker[1]); target.context.beginPath(); target.context.arc(xy[0], xy[1], 4, 0, Math.PI * 2); target.context.fillStyle = '#000000'; target.context.fill(); target.context.strokeStyle = '#fffdf6'; target.context.lineWidth = 1.5; target.context.stroke(); }
+				const currentStep = stepForPayload(entry.payload);
+				const validTime = currentValidTime();
+				for (const source of ['merra2', 'imdaa']) {
+					if (!state.analysisSources.has(source)) continue;
+					const matched = matchedReanalysisTrack(source, track.id);
+					if (matched) drawAnalysisPath(target, matched.points, ANALYSIS_TRACKS[source].colour, pointAtEpoch(matched.points, validTime));
+				}
+				if (state.analysisSources.has('era5')) drawAnalysisPath(target, track.points, ANALYSIS_TRACKS.era5.colour, pointAt(track.points, currentStep));
 			}
 		}
 		drawAnnotations(target);
@@ -1798,8 +2031,11 @@
 		updateTimeLabel();
 		const entries = displayEntries();
 		const era5TrackIds = new Set();
-		if (state.mode !== 'latest' && state.showEra5) for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
-		const era5Tracks = era5TrackIds.size;
+		if (state.mode !== 'latest') for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
+		const analysisCounts = {};
+		for (const source of state.analysisSources) {
+			analysisCounts[source] = source === 'era5' ? era5TrackIds.size : [...era5TrackIds].filter(trackId => matchedReanalysisTrack(source, trackId)).length;
+		}
 		const mapStack = $('#mlaForecastMapStack');
 		mapStack.dataset.zoom = state.mapZoom.toFixed(3);
 		mapStack.dataset.centerLon = state.mapCenterLon.toFixed(3);
@@ -1807,12 +2043,15 @@
 		const status = entries.length
 			? [`${entries.length} run${entries.length === 1 ? '' : 's'} loaded`, `${systemGroups.length} storm group${systemGroups.length === 1 ? '' : 's'}`]
 			: [];
-		if (state.mode !== 'latest' && era5Tracks) status.push(`${era5Tracks} ERA5 match${era5Tracks === 1 ? '' : 'es'}`);
+		if (state.mode !== 'latest') for (const source of state.analysisSources) if (analysisCounts[source]) status.push(`${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} match${analysisCounts[source] === 1 ? '' : 'es'}`);
 		$('#mlaForecastMapStatus').textContent = status.length ? status.join(' · ') : 'Forecast data not loaded.';
 		const runKey = $('#mlaForecastRunKey');
 		runKey.hidden = entries.length < 2;
 		runKey.innerHTML = entries.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(evolutionRunLabel(item))}</span>`).join('');
-		$('#mlaForecastEra5Key').hidden = !era5Tracks;
+		const analysisKey = $('#mlaForecastAnalysisKey');
+		const visibleAnalyses = [...state.analysisSources].filter(source => analysisCounts[source]);
+		analysisKey.hidden = !visibleAnalyses.length;
+		analysisKey.innerHTML = visibleAnalyses.map(source => `<span><i style="--analysis-colour:${ANALYSIS_TRACKS[source].colour}" aria-hidden="true"></i>${esc(ANALYSIS_TRACKS[source].label)} analysis</span>`).join('');
 	}
 
 	let renderFrame = 0;
@@ -2040,9 +2279,11 @@
 	});
 	$('#mlaForecastArchiveResults').addEventListener('click', event => {
 		if (event.target.closest('[data-forecast-archive-clear]')) { clearArchiveRuns(); return; }
-		if (event.target.closest('#mlaForecastEra5Tile')) {
-			if (event.target.closest('#mlaForecastEra5Tile').disabled) return;
-			state.showEra5 = !state.showEra5;
+		const analysisButton = event.target.closest('[data-forecast-analysis-source]');
+		if (analysisButton) {
+			if (analysisButton.disabled) return;
+			const source = analysisButton.dataset.forecastAnalysisSource;
+			if (state.analysisSources.has(source)) state.analysisSources.delete(source); else state.analysisSources.add(source);
 			persistPreferences();
 			populateArchive(false);
 			render();
