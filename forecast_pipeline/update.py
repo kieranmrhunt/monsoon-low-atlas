@@ -23,6 +23,7 @@ from .forecast_core import (
     iso_z,
     ManifestLock,
     publish_client_manifests,
+    RECENT_WINDOW_HOURS,
     track_sidecar_url,
     utc_now,
 )
@@ -32,7 +33,6 @@ from .sources import DEFAULT_MODELS, MODEL_DEFINITIONS, adapter_for
 LOGGER = logging.getLogger("mla.forecast.update")
 NCEI_ARCHIVE_ROOT = "https://www.ncei.noaa.gov/oa/prod-model"
 NOAA_AWS_ARCHIVE_ROOT = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
-RECENT_WINDOW_HOURS = 72
 
 
 def parse_args() -> argparse.Namespace:

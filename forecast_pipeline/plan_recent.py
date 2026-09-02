@@ -35,11 +35,14 @@ def main() -> None:
                 "cycle_utc": iso_z(cycle),
                 "horizon_hours": available_forecast_steps(model, cycle)[-1],
             })
-    available = {
-        f"{model}:{item.get('cycle')}": manifest_entry_horizon_hours(item)
-        for model, entries in manifest.get("recent", {}).items()
-        for item in entries
-    }
+    available = {}
+    for model, entries in manifest.get("recent", {}).items():
+        for item in entries:
+            key = f"{model}:{item.get('cycle')}"
+            available[key] = max(available.get(key, -1), manifest_entry_horizon_hours(item))
+    for item in manifest.get("archive", []):
+        key = f"{item.get('model')}:{item.get('cycle')}"
+        available[key] = max(available.get(key, -1), manifest_entry_horizon_hours(item))
     pending = [
         item for item in cycles
         if available.get(f"{item['model']}:{item['cycle']}", -1) < int(item["horizon_hours"])
@@ -48,7 +51,7 @@ def main() -> None:
         "schema": "mla-forecast-recent-plan-v1",
         "generated_utc": iso_z(utc_now()),
         "window_hours": args.hours,
-        "selection_policy": f"every six-hourly initialization through the preceding {args.hours} hours, retaining each cycle's complete provider/model lead axis",
+        "selection_policy": f"every six-hourly initialization through the preceding {args.hours} hours, reusing complete operational-archive assets before requesting any missing provider/model lead axis",
         "cycles": cycles,
         "pending_cycles": pending,
     }

@@ -24,6 +24,7 @@ from forecast_pipeline.forecast_core import (
     ManifestLock,
     atomic_write_json,
     candidate_cycles,
+    client_recent_entries,
     compact_weather,
     compact_track_payload,
     manifest_lock_path,
@@ -779,6 +780,43 @@ class ForecastPipelineContractTests(unittest.TestCase):
             self.assertEqual(archive["archive"], manifest["archive"])
             self.assertEqual(archive["tigge_archive"], manifest["tigge_archive"])
             self.assertNotIn("latest", archive)
+
+    def test_latest_projection_reuses_recent_operational_archive_cycles(self) -> None:
+        manifest = {
+            "latest": {"gfs": {
+                "cycle": "2026083000", "cycle_utc": "2026-08-30T00:00:00Z",
+                "valid_end_utc": "2026-09-15T00:00:00Z", "url": "cycles/gfs/2026083000.json.gz",
+            }},
+            "recent": {"gfs": [{
+                "cycle": "2026082912", "cycle_utc": "2026-08-29T12:00:00Z",
+                "valid_end_utc": "2026-09-03T12:00:00Z", "url": "cycles/gfs/2026082912.json.gz",
+                "weather_fields": ["vorticity", "precipitation"],
+            }]},
+            "archive": [{
+                "model": "gfs", "cycle": "2026082912", "cycle_utc": "2026-08-29T12:00:00Z",
+                "valid_end_utc": "2026-09-14T12:00:00Z", "url": "archive/gfs/2026082912.json.gz",
+                "weather_fields": ["vorticity", "precipitation"],
+            }, {
+                "model": "gfs", "cycle": "2026082800", "cycle_utc": "2026-08-28T00:00:00Z",
+                "valid_end_utc": "2026-09-13T00:00:00Z", "url": "archive/gfs/2026082800.json.gz",
+                "weather_fields": ["vorticity", "precipitation"],
+            }, {
+                "model": "gfs", "cycle": "2026082600", "cycle_utc": "2026-08-26T00:00:00Z",
+                "valid_end_utc": "2026-09-11T00:00:00Z", "url": "archive/gfs/2026082600.json.gz",
+            }],
+            "tigge_archive": [{
+                "model": "tigge-ncep", "cycle": "2026082912",
+                "cycle_utc": "2026-08-29T12:00:00Z", "valid_end_utc": "2026-09-03T12:00:00Z",
+                "url": "tigge/tigge-ncep/2026082912.json.gz",
+            }],
+        }
+        projected = client_recent_entries(manifest)
+        self.assertEqual(
+            [item["cycle"] for item in projected["gfs"]],
+            ["2026083000", "2026082912", "2026082800"],
+        )
+        self.assertEqual(projected["gfs"][1]["url"], "archive/gfs/2026082912.json.gz")
+        self.assertNotIn("tigge-ncep", projected)
 
     def test_progressive_publisher_ignores_a_stale_completed_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

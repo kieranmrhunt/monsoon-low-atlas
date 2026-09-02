@@ -42,6 +42,7 @@ MANIFEST_LOCK_NAME = ".manifest-v3-lock"
 MANIFEST_LOCK_STALE_SECONDS = 600.0
 LATEST_CLIENT_MANIFEST = "latest-manifest.json.gz"
 ARCHIVE_CLIENT_MANIFEST = "archive-manifest.json.gz"
+RECENT_WINDOW_HOURS = 72
 
 
 def manifest_lock_path(root: Path) -> Path:
@@ -663,6 +664,7 @@ def publish_client_manifests(root: Path, manifest: dict[str, Any]) -> None:
         "run",
     )
     latest = {key: manifest[key] for key in latest_keys if key in manifest}
+    latest["recent"] = client_recent_entries(manifest)
     latest["client_manifest"] = "latest"
     archive = {
         "schema": manifest.get("schema", "mla-forecast-manifest-v1"),
@@ -677,6 +679,65 @@ def publish_client_manifests(root: Path, manifest: dict[str, Any]) -> None:
             archive[key] = manifest[key]
     atomic_write_json_gz(root / LATEST_CLIENT_MANIFEST, latest)
     atomic_write_json_gz(root / ARCHIVE_CLIENT_MANIFEST, archive)
+
+
+def client_recent_entries(
+    manifest: dict[str, Any],
+    window_hours: int = RECENT_WINDOW_HOURS,
+) -> dict[str, list[dict[str, Any]]]:
+    """Project available operational archive cycles into the Latest window.
+
+    The permanent operational archive already owns the full payload for most
+    recent initializations. Reusing those URLs avoids downloading and storing
+    a duplicate merely to expose another initialization in Latest. A current
+    ``cycles/`` entry wins only when it has a longer published lead axis (or
+    ties), while TIGGE remains archive-only.
+    """
+
+    archive_by_model: dict[str, list[dict[str, Any]]] = {}
+    for entry in manifest.get("archive", []):
+        model = str(entry.get("model", ""))
+        if model:
+            archive_by_model.setdefault(model, []).append(entry)
+    output: dict[str, list[dict[str, Any]]] = {}
+    for model, latest_entry in manifest.get("latest", {}).items():
+        try:
+            newest = datetime.fromisoformat(
+                str(latest_entry["cycle_utc"]).replace("Z", "+00:00")
+            )
+        except (KeyError, TypeError, ValueError):
+            output[model] = list(manifest.get("recent", {}).get(model, []))
+            continue
+        oldest = newest - timedelta(hours=window_hours)
+        selected: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
+        sources = (
+            (0, archive_by_model.get(model, [])),
+            (1, manifest.get("recent", {}).get(model, [])),
+            (2, [latest_entry]),
+        )
+        for source_priority, entries in sources:
+            for entry in entries:
+                try:
+                    cycle_time = datetime.fromisoformat(
+                        str(entry["cycle_utc"]).replace("Z", "+00:00")
+                    )
+                    cycle = str(entry["cycle"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if cycle_time < oldest or cycle_time > newest:
+                    continue
+                score = (
+                    manifest_entry_horizon_hours(entry),
+                    len(entry.get("weather_fields", [])),
+                    source_priority,
+                )
+                if cycle not in selected or score > selected[cycle][0]:
+                    selected[cycle] = (score, entry)
+        output[model] = [
+            value[1]
+            for _, value in sorted(selected.items(), reverse=True)
+        ]
+    return output
 
 
 def grid_metadata() -> dict[str, Any]:
