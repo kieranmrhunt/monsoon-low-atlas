@@ -42,6 +42,24 @@
     "ensemble_weighting": "one model, one vote by default; member-weighted view optional",
     "uncertainty": "show model spread and paired historical-to-scenario changes"
   },
+  "engineering_pilot": {
+    "source_id": "MPI-ESM1-2-HR",
+    "member_id": "r1i1p1f1",
+    "grid_label": "gn",
+    "historical_period": "JJAS 1990",
+    "future_period": "JJAS 2080",
+    "future_experiment": "ssp245",
+    "common_grid_degrees": 1.0,
+    "status": "standardisation, frozen detector, linker and compact publication asset completed",
+    "interpretation": "Engineering canary only; one season per climate is not a climate-change estimate."
+  },
+  "prepublication_gates": [
+    "Run at least the 1981-2010 and 2071-2100 windows for every admitted model/scenario pair.",
+    "Apply source-native final-centre wind, pressure-deficit and closed-isobar intensity classification using a common land mask.",
+    "Quantify 1-degree versus native-grid sensitivity for a representative high-resolution model.",
+    "Validate Gregorian, no-leap and 360-day calendar identity without mapping nonexistent dates into civil time.",
+    "Report historical frequency and intensity biases against ERA5 separately from projected paired changes."
+  ],
   "planned_controls": [
     "experiment/scenario",
     "model",

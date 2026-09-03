@@ -57,6 +57,15 @@ The full-period backfills are resumable Slurm arrays submitted by `scripts/submi
 
 `scripts/inventory_badc_cmip6.py` audits high-frequency CMIP, ScenarioMIP and HighResMIP holdings under `/badc/cmip6/data/CMIP6`. Its model/experiment/member table distinguishes verified fixed-pressure candidates, hybrid-level runs that need vertical interpolation and incomplete holdings; it does not call a model trackable from filenames alone. The accompanying climate-tab contract preserves native calendars, pairs like-for-like historical and scenario members, defaults to one-model-one-vote summaries and requires a month-scale QA pilot before full tracking.
 
+The first end-to-end canary uses MPI-ESM1-2-HR r1i1p1f1 on its shared native grid: historical JJAS 1990 against SSP2-4.5 JJAS 2080. It standardises May--October halos to the 1-degree detector contract, runs the unchanged v5.6 detector over JJAS, then links each period independently:
+
+```bash
+bash scripts/submit_cmip6_pilot.sh
+python -m unittest discover -s cmip6_pipeline -t . -p 'test_*.py'
+```
+
+The pilot deliberately performs no model-specific threshold tuning. Non-Gregorian calendars remain gated until the detector's time identity is separated from civil timestamps; this prevents silent remapping of 360-day model dates.
+
 ## Weather archive and deployment
 
 The atlas remains a static GitHub Pages site. Monthly weather videos live on the public JASMIN GWS and are fetched directly by the browser with CORS. Each video frame is one UTC ERA5 hour; the browser seeks to the frame selected by the track-hour slider.

@@ -4,4 +4,5 @@ hpc-logs/
 .ipynb_checkpoints/
 .forecast-runs/
 .reanalysis-runs/
+.cmip6-runs/
 data/reanalyses/
