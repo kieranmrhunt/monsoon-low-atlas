@@ -12,6 +12,39 @@ from .sources import available_forecast_steps
 from .update import read_manifest
 
 
+TWICE_DAILY_MODELS = frozenset({"graphcast-noaa", "graphcast-ifs-noaa"})
+
+
+def recent_cycle_is_scheduled(model: str, cycle: datetime) -> bool:
+    """Return whether an operational stream publishes the candidate cycle."""
+
+    if model in TWICE_DAILY_MODELS:
+        return cycle.hour in {0, 12}
+    return cycle.hour in {0, 6, 12, 18}
+
+
+def planned_recent_cycles(
+    manifest: dict,
+    hours: int,
+) -> list[dict[str, object]]:
+    """Build the expected rolling cycle inventory for every live model."""
+
+    cycles: list[dict[str, object]] = []
+    for model, latest in sorted(manifest.get("latest", {}).items()):
+        newest = datetime.fromisoformat(str(latest["cycle_utc"]).replace("Z", "+00:00"))
+        for offset in range(0, hours + 1, 6):
+            cycle = newest - timedelta(hours=offset)
+            if not recent_cycle_is_scheduled(model, cycle):
+                continue
+            cycles.append({
+                "model": model,
+                "cycle": cycle.strftime("%Y%m%d%H"),
+                "cycle_utc": iso_z(cycle),
+                "horizon_hours": available_forecast_steps(model, cycle)[-1],
+            })
+    return cycles
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -24,17 +57,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     manifest = read_manifest(args.manifest)
-    cycles = []
-    for model, latest in sorted(manifest.get("latest", {}).items()):
-        newest = datetime.fromisoformat(str(latest["cycle_utc"]).replace("Z", "+00:00"))
-        for offset in range(0, args.hours + 1, 6):
-            cycle = newest - timedelta(hours=offset)
-            cycles.append({
-                "model": model,
-                "cycle": cycle.strftime("%Y%m%d%H"),
-                "cycle_utc": iso_z(cycle),
-                "horizon_hours": available_forecast_steps(model, cycle)[-1],
-            })
+    cycles = planned_recent_cycles(manifest, args.hours)
     available = {}
     for model, entries in manifest.get("recent", {}).items():
         for item in entries:

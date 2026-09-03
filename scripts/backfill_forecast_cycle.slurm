@@ -57,7 +57,13 @@ cd "$ATLAS_ROOT"
   --workers "${LPS_FORECAST_WORKERS:-8}" \
   "${ARGS[@]}"
 
-if [[ -n "$PUBLISH_TARGET" && "$MODE" != "recent" ]]; then
+if [[ -n "$PUBLISH_TARGET" && "$MODE" == "recent" ]]; then
+  "$PYTHON" -m forecast_pipeline.merge_runs \
+    --target "$PUBLISH_TARGET" \
+    --run-root "$OUTPUT" \
+    --partial \
+    --keep-staging
+elif [[ -n "$PUBLISH_TARGET" ]]; then
   "$PYTHON" -m forecast_pipeline.merge_archives \
     --target "$PUBLISH_TARGET" \
     --collection "$MODE" \

@@ -67,6 +67,7 @@ from forecast_pipeline.analysis_history import (
     replace_analysis_entry,
 )
 from forecast_pipeline.archive import archive_manifest_entry, archive_payload
+from forecast_pipeline.plan_recent import planned_recent_cycles
 from forecast_pipeline.update import replace_recent_entry
 from forecast_pipeline.v56_tracking import (
     _hourly_axis,
@@ -143,6 +144,18 @@ class ForecastPipelineContractTests(unittest.TestCase):
             self.assertFalse(old_cycle.exists())
             self.assertTrue(new_cycle.exists())
             self.assertTrue(archived.exists())
+
+    def test_merge_accepts_a_single_model_cycle_staging_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            direct = root / "manifest.json"
+            direct.write_text("{}")
+            nested = root / "another/manifest.json"
+            nested.parent.mkdir()
+            nested.write_text("{}")
+            self.assertEqual(merge_runs.staging_manifest_paths(root), [direct])
+            direct.unlink()
+            self.assertEqual(merge_runs.staging_manifest_paths(root), [nested])
 
     def test_atomic_directory_manifest_lock_is_exclusive_and_releases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -996,6 +1009,33 @@ class ForecastPipelineContractTests(unittest.TestCase):
 
         retained = replace_recent_entry([entry(78), entry(72), entry(66), entry(6)], entry(0))
         self.assertEqual([item["cycle"] for item in retained], [entry(0)["cycle"], entry(6)["cycle"], entry(66)["cycle"], entry(72)["cycle"]])
+
+    def test_recent_plan_covers_72_hours_at_each_models_native_cadence(self) -> None:
+        manifest = {
+            "latest": {
+                "gfs": {
+                    "cycle": "2026090218",
+                    "cycle_utc": "2026-09-02T18:00:00Z",
+                },
+                "graphcast-noaa": {
+                    "cycle": "2026090212",
+                    "cycle_utc": "2026-09-02T12:00:00Z",
+                },
+            },
+        }
+
+        planned = planned_recent_cycles(manifest, 72)
+        by_model = {
+            model: [item["cycle"] for item in planned if item["model"] == model]
+            for model in ("gfs", "graphcast-noaa")
+        }
+        self.assertEqual(len(by_model["gfs"]), 13)
+        self.assertEqual(len(by_model["graphcast-noaa"]), 7)
+        self.assertEqual(by_model["gfs"][-1], "2026083018")
+        self.assertEqual(by_model["graphcast-noaa"][-1], "2026083012")
+        self.assertTrue(
+            all(cycle[-2:] in {"00", "12"} for cycle in by_model["graphcast-noaa"])
+        )
 
     def test_analysis_centres_average_t0_and_keep_six_hour_signature(self) -> None:
         payload = {

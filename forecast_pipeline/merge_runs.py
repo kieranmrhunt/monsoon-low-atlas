@@ -35,6 +35,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def staging_manifest_paths(run_root: Path) -> list[Path]:
+    """Accept either one model-cycle staging root or a complete run root."""
+
+    direct = run_root / "manifest.json"
+    if direct.is_file():
+        return [direct]
+    return sorted(run_root.glob("*/manifest.json"))
+
+
 def read_gzip_json(path: Path) -> dict[str, Any]:
     with gzip.open(path, "rt", encoding="utf-8") as stream:
         return json.load(stream)
@@ -86,7 +95,7 @@ def main() -> None:
     args = parse_args()
     if not args.run_root.is_dir():
         raise FileNotFoundError(args.run_root)
-    source_paths = sorted(args.run_root.glob("*/manifest.json"))
+    source_paths = staging_manifest_paths(args.run_root)
     if not source_paths:
         raise RuntimeError(f"No completed model manifests below {args.run_root}")
 

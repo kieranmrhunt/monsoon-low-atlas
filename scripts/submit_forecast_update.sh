@@ -15,10 +15,11 @@ while IFS= read -r job_name; do
     mla-fc-ifs|mla-fc-ifs_ens|mla-fc-aifs|mla-fc-aifs_ens|\
     mla-fc-operational)
       echo "An operational forecast update is already queued or running; no duplicate submitted."
+      /usr/bin/bash "$ATLAS_ROOT/scripts/submit_forecast_recent_backfill.sh"
       exit 0
       ;;
   esac
-done < <(squeue -h -u "$USER" -o '%j')
+done < <(timeout 30 squeue -h -u "$USER" -o '%j')
 
 cd "$ATLAS_ROOT"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -48,3 +49,4 @@ FINAL_ID="$(sbatch --parsable --job-name=mla-fc-operational \
   --dependency="afterany:$DEPENDENCY" \
   scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT")"
 echo "Submitted model jobs ${JOB_IDS[*]} and finalizer $FINAL_ID"
+/usr/bin/bash "$ATLAS_ROOT/scripts/submit_forecast_recent_backfill.sh"
