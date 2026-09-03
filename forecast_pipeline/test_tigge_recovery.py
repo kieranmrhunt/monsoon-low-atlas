@@ -15,6 +15,7 @@ from forecast_pipeline.recover_tigge_jobs import (
     cycle_from_request,
     inspect_job,
     is_full_cycle_request,
+    normalized_md5,
     recent_successful_jobs,
     staged_cycle_complete,
     write_jobs,
@@ -22,6 +23,10 @@ from forecast_pipeline.recover_tigge_jobs import (
 
 
 class TiggeRecoveryTests(unittest.TestCase):
+    def test_ecds_md5_is_left_padded_when_leading_zero_is_omitted(self) -> None:
+        self.assertEqual(normalized_md5("abc"), "0" * 29 + "abc")
+        self.assertEqual(normalized_md5(""), "")
+
     def test_multi_date_diagnostic_request_is_not_a_cycle(self) -> None:
         self.assertIsNone(
             cycle_from_request(

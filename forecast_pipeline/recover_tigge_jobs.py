@@ -43,6 +43,11 @@ def iso_z(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def normalized_md5(value: Any) -> str:
+    checksum_value = str(value or "").strip().lower()
+    return checksum_value.zfill(32) if checksum_value else ""
+
+
 def credentials(path: Path) -> str:
     config: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -189,7 +194,8 @@ def inspect_job(
     record.update(
         {
             "asset_url": str(asset["href"]),
-            "checksum": str(asset.get("file:checksum", "")),
+            # ECDS serialises a few MD5 values without their leading zero.
+            "checksum": normalized_md5(asset.get("file:checksum", "")),
             "size": int(asset.get("file:size", 0)),
         }
     )
@@ -243,7 +249,7 @@ def cached_result_valid(path: Path, record: dict[str, Any]) -> bool:
     if not path.is_file():
         return False
     expected_size = int(record.get("size", 0))
-    expected_checksum = str(record.get("checksum", ""))
+    expected_checksum = normalized_md5(record.get("checksum", ""))
     if expected_size and path.stat().st_size != expected_size:
         return False
     return not expected_checksum or checksum(path) == expected_checksum
@@ -272,7 +278,7 @@ def download_result(
             if not cached_result_valid(temporary, record):
                 expected_size = int(record.get("size", 0))
                 actual_size = temporary.stat().st_size
-                expected_checksum = str(record.get("checksum", ""))
+                expected_checksum = normalized_md5(record.get("checksum", ""))
                 actual_checksum = checksum(temporary) if expected_checksum else "not requested"
                 raise RuntimeError(
                     "Downloaded ECDS result failed QA "
