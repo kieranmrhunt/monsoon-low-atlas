@@ -40,6 +40,18 @@ for CYCLE in "${CYCLE_VALUES[@]}"; do
 done
 cd "$ATLAS_ROOT"
 CONCURRENCY="${LPS_AIGEFS_CONCURRENCY:-256}"
-ARRAY_ID="$(sbatch --parsable --array="1-$INDEX%$CONCURRENCY" scripts/aigefs_member_shard.slurm "$JOBS" "$RUN_ROOT")"
-FINAL_ID="$(sbatch --parsable --dependency="afterany:$ARRAY_ID" scripts/finalize_aigefs_shards.slurm "$RUN_ROOT" "$CYCLES" "$TARGET")"
-printf 'AIGEFS member array %s (%d shards); finalizer %s\n' "$ARRAY_ID" "$INDEX" "$FINAL_ID"
+PASSES="${LPS_AIGEFS_PASSES:-3}"
+[[ "$PASSES" =~ ^[1-5]$ ]] || { echo "LPS_AIGEFS_PASSES must be an integer from 1 to 5" >&2; exit 2; }
+ARRAY_IDS=()
+PREVIOUS=""
+for PASS in $(seq 1 "$PASSES"); do
+  DEPENDENCY=()
+  if [[ -n "$PREVIOUS" ]]; then
+    DEPENDENCY=(--dependency="afterany:$PREVIOUS")
+  fi
+  ARRAY_ID="$(sbatch --parsable "${DEPENDENCY[@]}" --array="1-$INDEX%$CONCURRENCY" scripts/aigefs_member_shard.slurm "$JOBS" "$RUN_ROOT")"
+  ARRAY_IDS+=("$ARRAY_ID")
+  PREVIOUS="$ARRAY_ID"
+done
+FINAL_ID="$(sbatch --parsable --dependency="afterany:$PREVIOUS" scripts/finalize_aigefs_shards.slurm "$RUN_ROOT" "$CYCLES" "$TARGET")"
+printf 'AIGEFS member arrays %s (%d shards, %d passes); finalizer %s\n' "${ARRAY_IDS[*]}" "$INDEX" "$PASSES" "$FINAL_ID"
