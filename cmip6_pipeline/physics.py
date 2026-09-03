@@ -29,6 +29,7 @@ PARAMETERS = TRACKER_ROOT / "params/lps_v5.4_domain_only.json"
 GAP_VALIDATOR = TRACKER_ROOT / "production/v5.4.2/validate_and_split_physics_gaps.py"
 EVENT_FILTER = TRACKER_ROOT / "production/v5.5/filter_calibrated_events.py"
 SCHEMA = "lps-atlas-cmip6-final-physics-v1"
+GAP_COMPLETENESS_COLUMN = "cmip6_gap_physics_complete"
 EARTH_RADIUS_KM = 6371.0088
 METRIC_RADIUS_KM = 125.0
 BACKGROUND_INNER_KM = 300.0
@@ -77,6 +78,78 @@ def atomic_parquet(path: Path, frame: pd.DataFrame) -> None:
     temporary = path.with_suffix(path.suffix + f".part-{os.getpid()}")
     frame.to_parquet(temporary, index=False, compression="zstd")
     os.replace(temporary, path)
+
+
+def require_complete_gap_blocks(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Reject a whole interpolated bridge when any required field is unavailable.
+
+    Pressure-level variables are legitimately missing below CMIP6 model topography.
+    The upstream gap validator permits a small number of unsupported hours within
+    an otherwise physical bridge, but its release invariant still requires every
+    retained bridge row to have complete final-centre physics. Propagating an
+    incomplete flag across its contiguous bridge makes that invariant explicit:
+    the validator removes the bridge and preserves the observed pieces as separate
+    events rather than publishing an unverifiable interpolation over high terrain.
+    """
+    required = {"track_id", "time", "position_source", "physics_complete_v54rean"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"gap-completeness input lacks {missing}")
+    output = frame.copy()
+    ordered = output.sort_values(["track_id", "time"], kind="mergesort")
+    observed = ordered.position_source.astype(str).str.lower().eq("observed")
+    complete = ordered.physics_complete_v54rean.fillna(False).astype(bool)
+    run_start = ordered.track_id.ne(ordered.track_id.shift()) | observed.ne(observed.shift())
+    run_id = run_start.cumsum()
+    gap = ~observed
+    block_complete = complete.groupby(run_id, sort=False).transform("all")
+    validation_complete = complete.copy()
+    validation_complete.loc[gap] = block_complete.loc[gap]
+    output.loc[ordered.index, GAP_COMPLETENESS_COLUMN] = validation_complete.to_numpy(bool)
+
+    gap_blocks = pd.DataFrame(
+        {
+            "run_id": run_id.loc[gap].to_numpy(),
+            "rows": np.ones(int(gap.sum()), dtype=np.int64),
+            "complete": complete.loc[gap].to_numpy(bool),
+        }
+    )
+    if gap_blocks.empty:
+        block_summary = pd.DataFrame(columns=["rows", "complete"])
+    else:
+        block_summary = gap_blocks.groupby("run_id", sort=False).agg(
+            rows=("rows", "sum"), complete=("complete", "all")
+        )
+    rejected = block_summary.loc[~block_summary.complete.astype(bool)]
+    summary = {
+        "schema": "lps-atlas-cmip6-gap-completeness-v1",
+        "status": "complete",
+        "method": "reject_contiguous_interpolated_bridge_if_any_required_field_is_unavailable",
+        "rows": int(len(output)),
+        "gap_rows": int(gap.sum()),
+        "incomplete_gap_rows": int((gap & ~complete).sum()),
+        "gap_blocks": int(len(block_summary)),
+        "incomplete_gap_blocks_rejected": int(len(rejected)),
+        "gap_rows_in_rejected_blocks": int(rejected.rows.sum()) if len(rejected) else 0,
+    }
+    return output, summary
+
+
+def prepare_gap_validation_input(initial: Path, staging: Path) -> tuple[Path, str, Path]:
+    frame = read_table(initial)
+    prepared, summary = require_complete_gap_blocks(frame)
+    path = staging / "gap-validation-input.parquet"
+    summary_path = staging / "gap-completeness-summary.json"
+    atomic_parquet(path, prepared)
+    summary.update(
+        {
+            "created_utc": utc_now(),
+            "input": {"path": str(initial), "sha256": sha256(initial)},
+            "prepared_input": {"sha256": sha256(path), "temporary": True},
+        }
+    )
+    atomic_json(summary_path, summary)
+    return path, GAP_COMPLETENESS_COLUMN, summary_path
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -556,6 +629,7 @@ def finalize(initial: Path, output_root: Path) -> Path:
     summary_path = output_root / "final-summary.json"
     fingerprint = {
         "input_sha256": sha256(initial),
+        "physics_module_sha256": sha256(Path(__file__).resolve()),
         "gap_validator_sha256": sha256(GAP_VALIDATOR),
         "event_filter_sha256": sha256(EVENT_FILTER),
     }
@@ -566,18 +640,25 @@ def finalize(initial: Path, output_root: Path) -> Path:
     output_root.mkdir(parents=True, exist_ok=True)
     staging = output_root / f"finalize-staging-{os.getpid()}"
     staging.mkdir(parents=True, exist_ok=False)
+    gap_input, gap_completeness_column, gap_completeness_summary = (
+        prepare_gap_validation_input(initial, staging)
+    )
     gap = staging / "physics-gap-validated.parquet"
     gap_audit = staging / "physics-gap-audit.csv"
     gap_summary = staging / "physics-gap-summary.json"
     filtered = staging / "physical-events-unclassified.parquet"
     selection = staging / "physical-event-selection.parquet"
     selection_summary = staging / "physical-event-selection-summary.json"
+    validation_environment = os.environ.copy()
+    validation_environment["PYTHONWARNINGS"] = (
+        "ignore:All-NaN slice encountered:RuntimeWarning"
+    )
     subprocess.run(
         [
             sys.executable,
             str(GAP_VALIDATOR),
             "--input",
-            str(initial),
+            str(gap_input),
             "--output",
             str(gap),
             "--audit",
@@ -600,6 +681,8 @@ def finalize(initial: Path, output_root: Path) -> Path:
             "5",
             "--minimum-pressure-deficit-hpa",
             "4",
+            "--physics-complete-column",
+            gap_completeness_column,
             "--require-extremum-proximity",
             "--maximum-vorticity-distance-km",
             "225",
@@ -607,8 +690,10 @@ def finalize(initial: Path, output_root: Path) -> Path:
             "250",
         ],
         cwd=TRACKER_ROOT,
+        env=validation_environment,
         check=True,
     )
+    gap_input.unlink()
     subprocess.run(
         [
             sys.executable,
@@ -626,6 +711,7 @@ def finalize(initial: Path, output_root: Path) -> Path:
         check=True,
     )
     classified, classification = classify_intensity(pd.read_parquet(filtered))
+    classified.drop(columns=[GAP_COMPLETENESS_COLUMN], errors="ignore", inplace=True)
     atomic_parquet(final, classified)
     for source, name in (
         (gap, "physics-gap-validated.parquet"),
@@ -634,6 +720,7 @@ def finalize(initial: Path, output_root: Path) -> Path:
         (filtered, "physical-events-unclassified.parquet"),
         (selection, "physical-event-selection.parquet"),
         (selection_summary, "physical-event-selection-summary.json"),
+        (gap_completeness_summary, "gap-completeness-summary.json"),
     ):
         os.replace(source, output_root / name)
     atomic_json(

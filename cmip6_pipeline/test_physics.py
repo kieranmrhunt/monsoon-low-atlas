@@ -5,7 +5,13 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from cmip6_pipeline.physics import classify_intensity, count_closed_isobars, persistent_category
+from cmip6_pipeline.physics import (
+    GAP_COMPLETENESS_COLUMN,
+    classify_intensity,
+    count_closed_isobars,
+    persistent_category,
+    require_complete_gap_blocks,
+)
 
 
 class PhysicsTest(unittest.TestCase):
@@ -36,6 +42,44 @@ class PhysicsTest(unittest.TestCase):
         result, summary = classify_intensity(frame)
         self.assertTrue(result.imd_category.eq(2).all())
         self.assertEqual(summary["event_peak_categories"], {"2": 1})
+
+    def test_incomplete_physics_rejects_the_whole_interpolated_bridge(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "track_id": [1] * 5 + [2] * 4,
+                "time": pd.date_range("2000-01-01", periods=9, freq="h"),
+                "position_source": [
+                    "observed",
+                    "interpolated",
+                    "interpolated",
+                    "interpolated",
+                    "observed",
+                    "observed",
+                    "interpolated",
+                    "interpolated",
+                    "observed",
+                ],
+                "physics_complete_v54rean": [
+                    True,
+                    True,
+                    False,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                ],
+            }
+        )
+        result, summary = require_complete_gap_blocks(frame)
+        self.assertEqual(
+            result[GAP_COMPLETENESS_COLUMN].tolist(),
+            [True, False, False, False, True, True, True, True, True],
+        )
+        self.assertEqual(summary["gap_blocks"], 2)
+        self.assertEqual(summary["incomplete_gap_blocks_rejected"], 1)
+        self.assertEqual(summary["gap_rows_in_rejected_blocks"], 3)
 
 
 if __name__ == "__main__":
