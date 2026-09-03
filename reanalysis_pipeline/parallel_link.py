@@ -34,6 +34,7 @@ from .track import LINKER, PARAMETERS
 SCHEMA = "lps-atlas-reanalysis-parallel-link-v1"
 MONTH_PATTERN = re.compile(r"^candidates-(\d{6})\.csv$")
 SOURCE_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
+MAXIMUM_HOURLY_STEP_KM = 150.0
 
 
 def utc_now() -> str:
@@ -336,6 +337,89 @@ def core_frame(row: dict[str, str]) -> tuple[pd.DataFrame, pd.Series]:
     return frame.loc[selected].copy(), timestamps.loc[selected]
 
 
+def _haversine_km(left_lon: float, left_lat: float, right_lon: float, right_lat: float) -> float:
+    values = np.asarray((left_lon, left_lat, right_lon, right_lat), dtype=float)
+    if not np.isfinite(values).all():
+        return float("nan")
+    left_lon_r, left_lat_r, right_lon_r, right_lat_r = np.deg2rad(values)
+    dlon = right_lon_r - left_lon_r
+    dlat = right_lat_r - left_lat_r
+    value = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(left_lat_r) * np.cos(right_lat_r) * np.sin(dlon / 2.0) ** 2
+    )
+    return float(2.0 * 6371.0088 * np.arcsin(np.sqrt(np.clip(value, 0.0, 1.0))))
+
+
+def assign_continuous_track_ids(
+    frame: pd.DataFrame,
+    timestamps: pd.Series,
+    roots: pd.Series,
+    active_ids: dict[str, int],
+    last_positions: dict[str, tuple[pd.Timestamp, float, float]],
+    next_track_id: int,
+    *,
+    block_year: int,
+) -> tuple[pd.Series, int, list[dict[str, Any]]]:
+    """Split a reconciled identity if adjacent core blocks do not join physically.
+
+    Shared halo candidates identify the same local solution across annual link
+    blocks, but two blocks can choose incompatible earlier branches before their
+    first shared observation.  Treating those branches as one event creates a
+    missing hour or an impossible jump at 1 January.  The conservative response
+    is to retain every published centre and start a new event identity at that
+    discontinuity; no centre is interpolated or discarded here.
+    """
+
+    assigned = pd.Series(index=frame.index, dtype="int64")
+    audit: list[dict[str, Any]] = []
+    for root in sorted(set(roots.astype(str))):
+        indexes = roots.index[roots.astype(str).eq(root)]
+        indexes = timestamps.loc[indexes].sort_values(kind="mergesort").index
+        active = int(active_ids[root])
+        previous = last_positions.get(root)
+        for index in indexes:
+            timestamp = pd.Timestamp(timestamps.loc[index])
+            lon = float(frame.at[index, "lon"])
+            lat = float(frame.at[index, "lat"])
+            if previous is not None:
+                previous_time, previous_lon, previous_lat = previous
+                elapsed_hours = float((timestamp - previous_time).total_seconds() / 3600.0)
+                distance_km = _haversine_km(previous_lon, previous_lat, lon, lat)
+                invalid_step = (
+                    elapsed_hours != 1.0
+                    or not np.isfinite(distance_km)
+                    or distance_km > MAXIMUM_HOURLY_STEP_KM
+                )
+                if invalid_step:
+                    old_id = active
+                    active = next_track_id
+                    next_track_id += 1
+                    audit.append(
+                        {
+                            "reconciled_root": root,
+                            "left_track_id": old_id,
+                            "right_track_id": active,
+                            "block_year": int(block_year),
+                            "left_time": previous_time.isoformat(),
+                            "right_time": timestamp.isoformat(),
+                            "elapsed_hours": elapsed_hours,
+                            "distance_km": distance_km if np.isfinite(distance_km) else None,
+                            "reason": (
+                                "non_hourly_boundary"
+                                if elapsed_hours != 1.0
+                                else "excessive_boundary_displacement"
+                            ),
+                        }
+                    )
+            assigned.at[index] = active
+            previous = (timestamp, lon, lat)
+        active_ids[root] = active
+        if previous is not None:
+            last_positions[root] = previous
+    return assigned.astype(np.int64), next_track_id, audit
+
+
 def merge(source: str, output_root: Path, run_root: Path) -> Path:
     source = validate_source_label(source)
     rows = completed_rows(run_root)
@@ -350,6 +434,10 @@ def merge(source: str, output_root: Path, run_root: Path) -> Path:
                 earliest[root] = timestamp
     ordered_roots = sorted(earliest, key=lambda root: (earliest[root], root))
     global_ids = {root: index for index, root in enumerate(ordered_roots)}
+    active_ids = dict(global_ids)
+    last_positions: dict[str, tuple[pd.Timestamp, float, float]] = {}
+    next_track_id = len(global_ids)
+    continuity_splits: list[dict[str, Any]] = []
     output_root = output_root.resolve()
     output = output_root / f"{source}-parallel-linked.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -366,7 +454,17 @@ def merge(source: str, output_root: Path, run_root: Path) -> Path:
         roots = (f"{year}:" + local_ids).map(identities.find)
         frame["parallel_block_year"] = year
         frame["parallel_local_track_id"] = local_ids
-        frame["track_id"] = roots.map(global_ids).astype(np.int64)
+        assigned, next_track_id, split_audit = assign_continuous_track_ids(
+            frame,
+            timestamps,
+            roots,
+            active_ids,
+            last_positions,
+            next_track_id,
+            block_year=year,
+        )
+        frame["track_id"] = assigned
+        continuity_splits.extend(split_audit)
         if columns is None:
             columns = list(frame.columns)
         else:
@@ -392,13 +490,23 @@ def merge(source: str, output_root: Path, run_root: Path) -> Path:
         "completed_utc": utc_now(),
         "source": source,
         "blocks": len(rows),
-        "accepted_tracks": len(global_ids),
+        "accepted_tracks": next_track_id,
         "accepted_output_rows": rows_written,
         "accepted_observed_rows": observed_rows,
         "posterior_rows": interpolated_rows,
         "coverage_start_utc": minimum_time.isoformat().replace("+00:00", "Z") if minimum_time is not None else None,
         "coverage_end_utc": maximum_time.isoformat().replace("+00:00", "Z") if maximum_time is not None else None,
         "reconciliation": reconciliation,
+        "continuity": {
+            "maximum_hourly_step_km": MAXIMUM_HOURLY_STEP_KM,
+            "split_count": len(continuity_splits),
+            "splits": continuity_splits,
+            "method": (
+                "Reconciled identities are split, without adding or removing centres, when "
+                "successive retained core rows are not exactly hourly or move more than the "
+                "final-catalogue displacement limit."
+            ),
+        },
         "linked": {"path": str(output), "bytes": output.stat().st_size, "sha256": sha256(output)},
         "input_manifest": {"path": str(run_root / "input-manifest.json"), "sha256": sha256(run_root / "input-manifest.json")},
         "candidate_months": input_manifest["candidate_months"],

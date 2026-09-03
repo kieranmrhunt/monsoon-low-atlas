@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .parallel_link import merge, prepare, validate_source_label
+from .parallel_link import assign_continuous_track_ids, merge, prepare, validate_source_label
 
 
 class ParallelReanalysisLinkTest(unittest.TestCase):
@@ -44,7 +44,7 @@ class ParallelReanalysisLinkTest(unittest.TestCase):
             shared = [
                 {
                     "candidate_uid": "shared-dec",
-                    "time": "2000-12-31T18:00:00",
+                    "time": "2000-12-31T23:00:00",
                     "track_id": 1,
                     "position_source": "observed",
                     "lon": 80.0,
@@ -86,6 +86,52 @@ class ParallelReanalysisLinkTest(unittest.TestCase):
             summary = json.loads((output_root / "merra2-parallel-link-summary.json").read_text())
             self.assertEqual(summary["accepted_tracks"], 1)
             self.assertEqual(summary["reconciliation"][0]["selected_one_to_one_pairs"], 1)
+
+    def test_reconciled_identity_splits_at_non_hourly_boundary(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "time": ["2000-12-31T23:00:00", "2001-01-01T18:00:00"],
+                "lon": [80.0, 81.0],
+                "lat": [20.0, 20.5],
+            }
+        )
+        times = pd.to_datetime(frame.time, utc=True)
+        roots = pd.Series(["2000:1", "2000:1"], index=frame.index)
+        assigned, next_id, audit = assign_continuous_track_ids(
+            frame,
+            times,
+            roots,
+            {"2000:1": 4},
+            {},
+            5,
+            block_year=2001,
+        )
+        self.assertEqual(assigned.tolist(), [4, 5])
+        self.assertEqual(next_id, 6)
+        self.assertEqual(audit[0]["reason"], "non_hourly_boundary")
+        self.assertEqual(audit[0]["elapsed_hours"], 19.0)
+
+    def test_reconciled_identity_splits_at_excessive_hourly_jump(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "time": ["2000-12-31T23:00:00", "2001-01-01T00:00:00"],
+                "lon": [80.0, 85.0],
+                "lat": [20.0, 20.0],
+            }
+        )
+        times = pd.to_datetime(frame.time, utc=True)
+        roots = pd.Series(["2000:1", "2000:1"], index=frame.index)
+        assigned, _next_id, audit = assign_continuous_track_ids(
+            frame,
+            times,
+            roots,
+            {"2000:1": 2},
+            {},
+            3,
+            block_year=2001,
+        )
+        self.assertEqual(assigned.tolist(), [2, 3])
+        self.assertEqual(audit[0]["reason"], "excessive_boundary_displacement")
 
 
 if __name__ == "__main__":
