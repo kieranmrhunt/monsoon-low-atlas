@@ -60,7 +60,7 @@
 		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: Boolean(storedPreferences.showMembers), analysisSources: new Set(storedAnalyses),
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
-		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0,
+		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0, atlasContextTrack: null,
 		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null
 	};
 	const meanTrackCaches = new WeakMap();
@@ -695,9 +695,42 @@
 		persistPreferences();
 	}
 
+	function applyAtlasArchiveContext(detail) {
+		const time = Number(detail && detail.time);
+		if (!Number.isFinite(time)) return false;
+		const date = new Date(time);
+		const target = Date.UTC(
+			date.getUTCFullYear(),
+			date.getUTCMonth(),
+			date.getUTCDate(),
+			Math.floor(date.getUTCHours() / 6) * 6
+		);
+		setArchiveTarget(target);
+		if (detail.analysis === 'compare') state.analysisSources = new Set(Object.keys(ANALYSIS_TRACKS));
+		else if (Object.hasOwn(ANALYSIS_TRACKS, detail.analysis)) state.analysisSources = new Set(['era5', detail.analysis]);
+		else state.analysisSources.add('era5');
+		state.atlasContextTrack = Array.isArray(detail.era5Track) && detail.era5Track.length
+			? {id: String(detail.system || ''), points: detail.era5Track}
+			: null;
+		if (typeof detail.query === 'string') $('#mlaForecastArchiveSearch').value = detail.query;
+		state.mode = 'archive';
+		state.archiveEntry = null;
+		state.archiveSelected.clear();
+		state.selectedSystem = null;
+		persistPreferences();
+		syncModeControls();
+		return true;
+	}
+
 	function archiveTargetTime() {
 		if (!state.archiveDate) return null;
 		return Date.parse(`${state.archiveDate}T${state.archiveHour || '00'}:00:00Z`);
+	}
+
+	function atlasContextTrackActive(timeMs) {
+		const points = state.atlasContextTrack && state.atlasContextTrack.points;
+		if (!points || !points.length || !Number.isFinite(timeMs)) return false;
+		return timeMs >= Number(points[0][0]) * HOUR_MS && timeMs <= Number(points[points.length - 1][0]) * HOUR_MS;
 	}
 
 	function entryLeadAt(entry, target) {
@@ -913,7 +946,7 @@
 			return `<section class="mla-forecast-matrix-group" style="--model-colour:${esc(modelColour)}"><div class="mla-forecast-matrix-model" title="${esc(version)}"><i aria-hidden="true"></i><span><strong>${esc(model.label)}</strong><small>${esc(version)}</small></span></div><div class="mla-forecast-matrix-cells">${cells}</div></section>`;
 		}).join('');
 		const available = entries.length;
-		const era5Available = entries.some(entry => entry.verification_status === 'matched' || (entry.verification_labels || []).length);
+		const era5Available = atlasContextTrackActive(target) || entries.some(entry => entry.verification_status === 'matched' || (entry.verification_labels || []).length);
 		const verificationIds = new Set();
 		for (const entry of entries) {
 			for (const value of entry.verification_track_ids || []) verificationIds.add(String(value));
@@ -1163,7 +1196,9 @@
 
 	function analysisOnlyTimeline(target) {
 		if (state.mode === 'latest' || !Number.isFinite(target)) return [];
-		const available = ALTERNATIVE_ANALYSIS_KEYS.some(source => state.analysisSources.has(source) && nativeReanalysisAvailable(source, target));
+		const available = (
+			state.analysisSources.has('era5') && atlasContextTrackActive(target)
+		) || ALTERNATIVE_ANALYSIS_KEYS.some(source => state.analysisSources.has(source) && nativeReanalysisAvailable(source, target));
 		if (!available) return [];
 		const day = new Date(target);
 		const midnight = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
@@ -1877,7 +1912,11 @@
 			}
 			const verificationTracks = new Map();
 			for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!verificationTracks.has(String(track.id))) verificationTracks.set(String(track.id), {entry, track});
+			if (state.analysisSources.has('era5') && atlasContextTrackActive(validTime)) {
+				drawAnalysisPath(target, state.atlasContextTrack.points, ANALYSIS_TRACKS.era5.colour, pointAtEpoch(state.atlasContextTrack.points, validTime));
+			}
 			for (const {entry, track} of verificationTracks.values()) {
+				if (state.atlasContextTrack && String(track.id) === state.atlasContextTrack.id) continue;
 				const currentStep = stepForPayload(entry.payload);
 				if (state.analysisSources.has('era5')) drawAnalysisPath(target, track.points, ANALYSIS_TRACKS.era5.colour, pointAt(track.points, currentStep));
 			}
@@ -2119,6 +2158,7 @@
 		const entries = displayEntries();
 		const era5TrackIds = new Set();
 		if (state.mode !== 'latest') for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
+		if (state.mode !== 'latest' && atlasContextTrackActive(currentValidTime() == null ? archiveTargetTime() : currentValidTime())) era5TrackIds.add(state.atlasContextTrack.id);
 		const analysisCounts = {};
 		for (const source of state.analysisSources) {
 			analysisCounts[source] = source === 'era5' ? era5TrackIds.size : nativeReanalysisTracksOnDay(source, currentValidTime() == null ? archiveTargetTime() : currentValidTime()).length;
@@ -2130,9 +2170,14 @@
 		const status = entries.length
 			? [`${entries.length} run${entries.length === 1 ? '' : 's'} loaded`, `${systemGroups.length} storm group${systemGroups.length === 1 ? '' : 's'}`]
 			: [];
-		if (state.mode !== 'latest') for (const source of state.analysisSources) if (analysisCounts[source]) status.push(source === 'era5'
-			? `${analysisCounts[source]} ERA5 match${analysisCounts[source] === 1 ? '' : 'es'}`
-			: `${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} track${analysisCounts[source] === 1 ? '' : 's'}`);
+		if (state.mode !== 'latest') for (const source of state.analysisSources) {
+			if (analysisCounts[source]) status.push(source === 'era5'
+				? `${analysisCounts[source]} ERA5 match${analysisCounts[source] === 1 ? '' : 'es'}`
+				: `${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} track${analysisCounts[source] === 1 ? '' : 's'}`);
+			else if (source !== 'era5' && nativeReanalysisAvailable(source, currentValidTime() == null ? archiveTargetTime() : currentValidTime())) {
+				status.push(`No ${ANALYSIS_TRACKS[source].label} physical track active at this time`);
+			}
+		}
 		$('#mlaForecastMapStatus').textContent = status.length ? status.join(' · ') : 'Forecast data not loaded.';
 		const runKey = $('#mlaForecastRunKey');
 		runKey.hidden = entries.length < 2;
@@ -2388,7 +2433,15 @@
 	});
 	bindForecastMap();
 	bindForecastEvolution();
-	window.addEventListener('mla:forecast-visible', () => initialise());
+	let atlasContextApplied = false;
+	window.addEventListener('mla:forecast-visible', event => {
+		const detail = event.detail || {};
+		const parameters = new URLSearchParams(location.search);
+		if (!atlasContextApplied && parameters.has('system') && String(detail.system || '') === parameters.get('system')) {
+			atlasContextApplied = applyAtlasArchiveContext(detail);
+		}
+		initialise();
+	});
 	window.addEventListener('mla:open-forecast-archive', event => {
 		const detail = event.detail || {};
 		if (/^\d{4}-\d{2}-\d{2}$/.test(detail.date || '')) {

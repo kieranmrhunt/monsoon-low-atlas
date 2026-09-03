@@ -3,8 +3,10 @@
 #SBATCH --partition=standard
 #SBATCH --qos=standard
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
-#SBATCH --time=01:00:00
+# The multi-decadal linked CSVs are several GB and pandas expands them
+# substantially in memory while calculating one-to-one track assignments.
+#SBATCH --mem=112G
+#SBATCH --time=12:00:00
 #SBATCH --job-name=mla-rean-match
 #SBATCH --output=hpc-logs/mla-rean-match-%j.out
 #SBATCH --error=hpc-logs/mla-rean-match-%j.err

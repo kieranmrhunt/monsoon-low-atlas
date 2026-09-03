@@ -436,6 +436,43 @@
 	function indexReanalysisAsset(source, asset) {
 		if (asset.schema !== 'lps-atlas-reanalysis-matches-v1' || String(asset.source).toLowerCase() !== source) throw new Error(`The ${REANALYSIS_SOURCES[source].label} match asset is incompatible`);
 		asset.matchByEra5 = new Map((asset.matches || []).map(record => [String(record.era5_track_id), record]));
+		const atlasIndexById = new Map(CORE.tracks.map((row, index) => [String(row[T.id]), index]));
+		const indexedTracks = [];
+		for (const match of asset.matches || []) {
+			const trackIndex = atlasIndexById.get(String(match.era5_track_id));
+			const points = asset.tracks && asset.tracks[String(match.source_track_id)];
+			if (trackIndex != null && points && points.length > 1) indexedTracks.push({trackIndex, points});
+		}
+		if (indexedTracks.length) {
+			const offsets = new Uint32Array(indexedTracks.length + 1);
+			const total = indexedTracks.reduce((sum, item) => sum + item.points.length, 0);
+			const longitude = new Float32Array(total);
+			const latitude = new Float32Array(total);
+			const breakBefore = new Uint8Array(total);
+			let cursor = 0;
+			let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+			indexedTracks.forEach((item, owner) => {
+				offsets[owner] = cursor;
+				for (const point of item.points) {
+					const lon = Number(point[1]), lat = Number(point[2]);
+					longitude[cursor] = lon;
+					latitude[cursor] = lat;
+					minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+					minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+					cursor++;
+				}
+			});
+			offsets[indexedTracks.length] = cursor;
+			asset.segmentTracks = indexedTracks;
+			asset.segmentIndex = new UniformSegmentIndex({
+				lon: longitude,
+				lat: latitude,
+				offsets,
+				breakBefore,
+				cellSize: 1,
+				bounds: {minLon: minLon - 1, maxLon: maxLon + 1, minLat: minLat - 1, maxLat: maxLat + 1}
+			});
+		}
 		return asset;
 	}
 
@@ -2613,15 +2650,27 @@
 		}
 	}
 
-	function reanalysisPointVisible(point) {
+	function reanalysisPointInEvent(point, trackIndex) {
+		if (trackIndex == null) return true;
+		const timeMs = Number(point[0]) * HOUR_MS;
+		const row = track(trackIndex);
+		return Number.isFinite(timeMs) && timeMs >= Number(row[T.start_ms]) && timeMs <= Number(row[T.end_ms]);
+	}
+
+	function reanalysisEventPoints(value, trackIndex) {
+		return value.points.filter(point => reanalysisPointInEvent(point, trackIndex));
+	}
+
+	function reanalysisPointVisible(point, trackIndex) {
+		if (!reanalysisPointInEvent(point, trackIndex)) return false;
 		const time = new Date(Number(point[0]) * HOUR_MS);
 		return Number.isFinite(time.getTime()) && state.months.has(time.getUTCMonth() + 1);
 	}
 
-	function appendReanalysisPath(context, projection, points, step) {
+	function appendReanalysisPath(context, projection, points, step, trackIndex) {
 		let started = false;
 		for (let index = 0; index < points.length; index++) {
-			if (!reanalysisPointVisible(points[index])) { started = false; continue; }
+			if (!reanalysisPointVisible(points[index], trackIndex)) { started = false; continue; }
 			if (index !== points.length - 1 && index % step) continue;
 			const projected = projection.project(Number(points[index][2]), Number(points[index][1]));
 			if (!started) context.moveTo(projected[0], projected[1]); else context.lineTo(projected[0], projected[1]);
@@ -2638,7 +2687,7 @@
 		for (const index of indexes) {
 			const value = reanalysisTrack(source, index);
 			if (!value) continue;
-			appendReanalysisPath(context, projection, value.points, state.mapZoom < 1.5 ? 3 : state.mapZoom < 3 ? 2 : 1);
+			appendReanalysisPath(context, projection, value.points, state.mapZoom < 1.5 ? 3 : state.mapZoom < 3 ? 2 : 1, index);
 			drawn++;
 		}
 		context.strokeStyle = rgba(REANALYSIS_SOURCES[source].colour, indexes.length > 1000 ? .34 : .65);
@@ -2656,7 +2705,9 @@
 		for (const index of indexes) {
 			const value = reanalysisTrack(source, index);
 			if (!value) continue;
-			const point = value.points[mode === 'lysis' ? value.points.length - 1 : 0];
+			const eventPoints = reanalysisEventPoints(value, index);
+			if (!eventPoints.length) continue;
+			const point = eventPoints[mode === 'lysis' ? eventPoints.length - 1 : 0];
 			const projected = projection.project(Number(point[2]), Number(point[1]));
 			context.fillStyle = rgba(REANALYSIS_SOURCES[source].colour, .72);
 			context.beginPath(); context.arc(projected[0], projected[1], radius, 0, Math.PI * 2); context.fill();
@@ -2778,7 +2829,7 @@
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
 		context.beginPath();
-		appendReanalysisPath(context, projection, value.points, 1);
+		appendReanalysisPath(context, projection, value.points, 1, trackIndex);
 		context.setLineDash([]);
 		context.strokeStyle = colour;
 		context.lineWidth = width;
@@ -2808,7 +2859,6 @@
 		context.lineCap = 'round';
 		context.lineJoin = 'round';
 		for (const trackIndex of timeFocusTrackIndexes(exact)) {
-			if (trackIndex === state.selected && isAlternativeReanalysis(state.trackSource) && reanalysisTrack(state.trackSource, trackIndex)) continue;
 			const range = pointRangeAtTime(trackIndex, state.focusStartMs, state.focusEndMs);
 			if (!range) continue;
 			const points = paths.decoded[trackIndex];
@@ -2966,7 +3016,7 @@
 			const value = reanalysisTrack(source, trackIndex);
 			if (!value) continue;
 			for (const point of value.points) {
-				if (!reanalysisPointVisible(point)) continue;
+				if (!reanalysisPointVisible(point, trackIndex)) continue;
 				const projected = projection.project(Number(point[2]), Number(point[1]));
 				const distance = (projected[0] - x) ** 2 + (projected[1] - y) ** 2;
 				if (distance < bestDistance) {
@@ -2976,6 +3026,28 @@
 			}
 		}
 		return best;
+	}
+
+	function alternativeTrackHitTest(source, mapBits, projection, x, y, radiusPx) {
+		const asset = reanalysisAssets.get(source);
+		if (!asset || !asset.segmentIndex || !asset.segmentTracks) return -1;
+		const geographical = projection.invert(x, y);
+		const owner = asset.segmentIndex.query({
+			x, y,
+			lat: geographical[0],
+			lon: geographical[1],
+			radiusPx,
+			radiusLon: radiusPx / projection.scale,
+			radiusLat: radiusPx / projection.scale,
+			project: projection.project,
+			active: candidate => mapBits.has(asset.segmentTracks[candidate].trackIndex),
+			segmentVisible: (candidate, pointIndex) => {
+				const item = asset.segmentTracks[candidate];
+				return reanalysisPointVisible(item.points[pointIndex - 1], item.trackIndex)
+					&& reanalysisPointVisible(item.points[pointIndex], item.trackIndex);
+			}
+		});
+		return owner < 0 ? -1 : asset.segmentTracks[owner].trackIndex;
 	}
 
 	function mapHitTest(clientX, clientY, touch) {
@@ -3000,7 +3072,8 @@
 					? reanalysisTrack(state.trackSource, trackIndex)
 					: null;
 				if (usesAlternative && !alternative) continue;
-				const endpoint = alternative ? alternative.points[layer === 'lysis' ? alternative.points.length - 1 : 0] : null;
+				const alternativePoints = alternative ? reanalysisEventPoints(alternative, trackIndex) : null;
+				const endpoint = alternativePoints && alternativePoints.length ? alternativePoints[layer === 'lysis' ? alternativePoints.length - 1 : 0] : null;
 				const row = endpoint ? null : track(trackIndex);
 				const latitude = endpoint ? Number(endpoint[2]) : Number(row[layer === 'lysis' ? T.end_lat_x1000 : T.gen_lat_x1000]) / 1000;
 				const longitude = endpoint ? Number(endpoint[1]) : Number(row[layer === 'lysis' ? T.end_lon_x1000 : T.gen_lon_x1000]) / 1000;
@@ -3014,6 +3087,9 @@
 		const radiusPx = touch ? 18 : 10;
 		const subsetTracksHidden = layer === 'tracks' && state.weatherLayer !== 'none' && !state.weatherTracks;
 		const alternativeMode = isAlternativeReanalysis(state.trackSource);
+		if (alternativeMode && layer === 'tracks' && !subsetTracksHidden) {
+			return alternativeTrackHitTest(state.trackSource, mapBits, projection, x, y, radiusPx);
+		}
 		return segmentIndex.query({
 			x, y,
 			lat: geographical[0],
@@ -3022,7 +3098,7 @@
 			radiusLon: radiusPx / projection.scale,
 			radiusLat: radiusPx / projection.scale,
 			project: projection.project,
-			active: trackIndex => mapBits.has(trackIndex) && (!alternativeMode || Boolean(reanalysisTrack(state.trackSource, trackIndex))) && (!subsetTracksHidden || trackIndex === state.selected),
+			active: trackIndex => mapBits.has(trackIndex) && (!subsetTracksHidden || trackIndex === state.selected),
 			segmentVisible: (trackIndex, pointIndex) => pointVisible(trackIndex, pointIndex - 1) && pointVisible(trackIndex, pointIndex)
 		});
 	}
@@ -5295,7 +5371,23 @@
 	function renderCurrentPanel() {
 		if (!CORE) return;
 		if (state.tab === 'explore') renderExplore();
-		else if (state.tab === 'forecast') window.dispatchEvent(new CustomEvent('mla:forecast-visible'));
+		else if (state.tab === 'forecast') {
+			const row = state.selected == null ? null : track(state.selected);
+			const selectedTime = row
+				? Number.isFinite(state.focusTimeMs) ? state.focusTimeMs : Number(row[T.start_ms])
+				: null;
+			window.dispatchEvent(new CustomEvent('mla:forecast-visible', {detail: row ? {
+				system: String(atlasId(state.selected)),
+				time: selectedTime,
+				analysis: state.trackSource,
+				query: `ERA5 v5.6 track ${atlasId(state.selected)}`,
+				era5Track: paths.decoded[state.selected].map((point, pointIndex) => [
+					(Number(row[T.start_ms]) / HOUR_MS) + pointIndex,
+					point[1],
+					point[0]
+				])
+			} : {}}));
+		}
 		else if (state.tab === 'climatology') renderClimatology();
 		else if (state.tab === 'extremes') renderExtremes();
 		else if (state.tab === 'verification') renderVerification();

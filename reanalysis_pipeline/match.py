@@ -15,12 +15,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .selection import REQUIRED_COLUMNS, physical_track_passes
+
 
 MATCH_SCHEMA = "lps-atlas-reanalysis-matches-v1"
 MINIMUM_OVERLAP_HOURS = 12
 MAXIMUM_MEDIAN_DISTANCE_KM = 300.0
 MAXIMUM_P90_DISTANCE_KM = 500.0
 MINIMUM_CLOSE_FRACTION = 0.50
+COVERAGE_RECOVERY_MAXIMUM_MEDIAN_DISTANCE_KM = 150.0
+COVERAGE_RECOVERY_MAXIMUM_P90_DISTANCE_KM = 800.0
+COVERAGE_RECOVERY_MINIMUM_CLOSE_FRACTION = 0.70
+COVERAGE_RECOVERY_MINIMUM_FRACTION = 0.50
+COVERAGE_RECOVERY_MINIMUM_OVERLAP_HOURS = 24
 
 
 def utc_now() -> str:
@@ -56,6 +63,8 @@ def track_pair_metrics(
     alternative: pd.DataFrame,
     era_track: pd.DataFrame,
     era_track_id: Any,
+    *,
+    source_physical_event: bool | None = None,
 ) -> dict[str, Any] | None:
     merged = alternative[["time", "longitude", "latitude"]].merge(
         era_track[["time", "longitude", "latitude"]],
@@ -75,11 +84,21 @@ def track_pair_metrics(
     close_fraction = float(np.mean(distances <= 250.0))
     source_coverage = len(merged) / max(1, len(alternative))
     era_coverage = len(merged) / max(1, len(era_track))
-    eligible = (
+    standard_eligible = (
         median <= MAXIMUM_MEDIAN_DISTANCE_KM
         and p90 <= MAXIMUM_P90_DISTANCE_KM
         and close_fraction >= MINIMUM_CLOSE_FRACTION
     )
+    minimum_coverage = min(source_coverage, era_coverage)
+    coverage_recovery_eligible = (
+        source_physical_event is True
+        and len(merged) >= COVERAGE_RECOVERY_MINIMUM_OVERLAP_HOURS
+        and median <= COVERAGE_RECOVERY_MAXIMUM_MEDIAN_DISTANCE_KM
+        and p90 <= COVERAGE_RECOVERY_MAXIMUM_P90_DISTANCE_KM
+        and close_fraction >= COVERAGE_RECOVERY_MINIMUM_CLOSE_FRACTION
+        and minimum_coverage >= COVERAGE_RECOVERY_MINIMUM_FRACTION
+    )
+    eligible = standard_eligible or coverage_recovery_eligible
     score = (
         median
         + 0.35 * p90
@@ -96,6 +115,14 @@ def track_pair_metrics(
         "era5_coverage_fraction": round(era_coverage, 4),
         "score": round(score, 3),
         "eligible": bool(eligible),
+        "eligibility_basis": (
+            "standard"
+            if standard_eligible
+            else "coverage_recovery"
+            if coverage_recovery_eligible
+            else None
+        ),
+        "source_physical_event": source_physical_event,
     }
 
 
@@ -121,13 +148,25 @@ def match_tracks(alternative: pd.DataFrame, era: pd.DataFrame) -> tuple[list[dic
         for timestamp, track_ids in era.groupby("time", sort=False)["track_id"].unique().items()
     }
     for source_track_id, track in alternative.groupby("track_id", sort=False):
+        physical_status = (
+            physical_track_passes(track)
+            if REQUIRED_COLUMNS.issubset(track.columns)
+            else None
+        )
         possible_ids: set[Any] = set()
         for timestamp in pd.DatetimeIndex(track["time"]).unique():
             possible_ids.update(era_by_time.get(pd.Timestamp(timestamp), ()))
         metrics = [
             value
             for era_track_id in sorted(possible_ids, key=era_order.__getitem__)
-            if (value := track_pair_metrics(track, era_groups[era_track_id], era_track_id)) is not None
+            if (
+                value := track_pair_metrics(
+                    track,
+                    era_groups[era_track_id],
+                    era_track_id,
+                    source_physical_event=physical_status,
+                )
+            ) is not None
         ]
         metrics.sort(key=lambda item: (not item["eligible"], item["score"], -item["overlap_hours"]))
         eligible = [item for item in metrics if item["eligible"]]
@@ -158,7 +197,16 @@ def match_tracks(alternative: pd.DataFrame, era: pd.DataFrame) -> tuple[list[dic
         grouped.setdefault(record["era5_track_id"], []).append(record)
     selected: list[dict[str, Any]] = []
     for records in grouped.values():
-        records.sort(key=lambda item: (item["score"], -item["overlap_hours"]))
+        # A physically selected, well-covered source identity is more useful
+        # than a very short fragment that happens to sit almost exactly on the
+        # ERA5 centre.  Spatial score breaks ties only after those properties.
+        records.sort(key=lambda item: (
+            item.get("source_physical_event") is not True,
+            -min(item["source_coverage_fraction"], item["era5_coverage_fraction"]),
+            -item["era5_coverage_fraction"],
+            -item["overlap_hours"],
+            item["score"],
+        ))
         selected.append(records[0])
         for record in records[1:]:
             rejected.append({**record, "reason": "weaker_source_track_for_same_era5_event"})
@@ -204,6 +252,18 @@ def build_asset(source: str, linked_path: Path, era_path: Path) -> dict[str, Any
             "maximum_p90_distance_km": MAXIMUM_P90_DISTANCE_KM,
             "minimum_within_250km_fraction": MINIMUM_CLOSE_FRACTION,
             "ambiguity_margin": 60.0,
+            "assignment_priority": (
+                "physically selected source event, then bidirectional temporal coverage, "
+                "then spatial score"
+            ),
+            "coverage_recovery": {
+                "physical_source_event_required": True,
+                "minimum_overlap_hours": COVERAGE_RECOVERY_MINIMUM_OVERLAP_HOURS,
+                "maximum_median_distance_km": COVERAGE_RECOVERY_MAXIMUM_MEDIAN_DISTANCE_KM,
+                "maximum_p90_distance_km": COVERAGE_RECOVERY_MAXIMUM_P90_DISTANCE_KM,
+                "minimum_within_250km_fraction": COVERAGE_RECOVERY_MINIMUM_CLOSE_FRACTION,
+                "minimum_bidirectional_coverage_fraction": COVERAGE_RECOVERY_MINIMUM_FRACTION,
+            },
         },
         "matches": sorted(selected, key=lambda item: (str(item["era5_track_id"]), item["score"])),
         "tracks": tracks,
