@@ -94,6 +94,7 @@
 	}
 
 	function pairLabel(pair) {
+		if (pair.label) return pair.label;
 		const future = pair.future.run;
 		return `${pair.source_label} · ${future.experiment_id.toUpperCase()} · ${pair.member_id}`;
 	}
@@ -120,7 +121,10 @@
 		if (historical.schema !== 'lps-atlas-cmip6-climate-summary-v2' || future.schema !== historical.schema) {
 			throw new Error('Climate run assets use an unsupported schema.');
 		}
-		if (change.schema !== 'lps-atlas-cmip6-paired-change-v2') {
+		const expectedChangeSchema = pair.kind === 'multi-model'
+			? 'lps-atlas-cmip6-multimodel-change-v1'
+			: 'lps-atlas-cmip6-paired-change-v2';
+		if (change.schema !== expectedChangeSchema) {
 			throw new Error('Climate change asset uses an unsupported schema.');
 		}
 		return {pair, historical, future, change};
@@ -470,12 +474,20 @@
 	function renderStats() {
 		const metric = METRICS[state.metric];
 		const change = current.change.seasonal_changes[state.season][state.metric];
-		const cards = [
+		let cards = [
 			['Historical mean', valueText(change.historical, metric), current.historical.run.period_label],
 			['Future mean', valueText(change.future, metric), current.future.run.period_label],
 			['Paired change', Number.isFinite(change.percent_change) ? `${change.percent_change > 0 ? '+' : ''}${change.percent_change.toFixed(1)}%` : '—', valueText(change.absolute_change, metric, true)],
 			['90% bootstrap interval', `${valueText(change.ci05, metric, true)} to ${valueText(change.ci95, metric, true)}`, 'annual resampling']
 		];
+		if (current.pair.kind === 'multi-model') {
+			cards = [
+				['Historical mean', valueText(change.historical, metric), 'one model, one vote'],
+				['Future mean', valueText(change.future, metric), 'one model, one vote'],
+				['Mean paired change', Number.isFinite(change.percent_change) ? `${change.percent_change > 0 ? '+' : ''}${change.percent_change.toFixed(1)}%` : '—', valueText(change.absolute_change, metric, true)],
+				['Across-model 90% range', `${valueText(change.model_spread05, metric, true)} to ${valueText(change.model_spread95, metric, true)}`, `${change.model_count} models`]
+			];
+		}
 		const container = $('#mlaClimateStats');
 		container.replaceChildren(...cards.map(([label, value, note]) => {
 			const card = document.createElement('section');
@@ -495,7 +507,9 @@
 		if (!current || panel.hidden) return;
 		const metric = METRICS[state.metric];
 		$('#mlaClimateAnnualHeading').textContent = `Annual ${metric.label.toLowerCase()}`;
-		$('#mlaClimateScope').textContent = `${current.pair.source_label} · single model`;
+		$('#mlaClimateScope').textContent = current.pair.kind === 'multi-model'
+			? `${current.change.model_count} models · equal weight`
+			: `${current.pair.source_label} · single model`;
 		$('#mlaClimateHistoricalMapHeading').textContent = current.historical.run.period_label;
 		$('#mlaClimateFutureMapHeading').textContent = current.future.run.period_label;
 		renderStats();

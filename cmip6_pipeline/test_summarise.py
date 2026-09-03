@@ -10,9 +10,11 @@ import numpy as np
 import pandas as pd
 
 from cmip6_pipeline.summarise import (
+    ENSEMBLE_SCHEMA,
     INDEX_SCHEMA,
     SCHEMA,
     annual_summary,
+    assemble_ensemble,
     bootstrap_change,
     event_summary,
     publish_pair,
@@ -134,6 +136,115 @@ class SummariseTest(unittest.TestCase):
             with gzip.open(index_path, "rt", encoding="utf-8") as stream:
                 index = json.load(stream)
             self.assertEqual(index["status"], "engineering-canary")
+
+    def test_ensemble_index_uses_one_vote_per_source_model(self) -> None:
+        def catalogue(year: int, track_id: int, wind: float) -> pd.DataFrame:
+            return pd.DataFrame(
+                {
+                    "track_id": [track_id, track_id],
+                    "time": pd.date_range(f"{year}-07-01", periods=2, freq="h"),
+                    "lon": [80.0, 81.0],
+                    "lat": [20.0, 20.0],
+                    "event_peak_imd_category": [2, 2],
+                    "p95_anomaly_wind_125km_ms": [wind, wind + 1.0],
+                    "pressure_deficit_hpa": [4.0, 5.0],
+                    "max_vort_smoothed": [8.0, 9.0],
+                    "precip_24hr": [20.0, 24.0],
+                    "intensity_method": ["test", "test"],
+                }
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            public_manifests = []
+            for model_index, model in enumerate(("ModelA", "ModelB"), start=1):
+                run_manifests = []
+                for role, year, experiment, start_year, end_year in (
+                    ("historical", 2000, "historical", 1981, 2010),
+                    ("future", 2080, "ssp245", 2071, 2100),
+                ):
+                    source = root / f"{model}-{role}.parquet"
+                    catalogue(year, model_index, 9.0 + model_index + (role == "future")).to_parquet(
+                        source, index=False
+                    )
+                    qa_report = root / f"{model}-{role}-qa.json"
+                    qa_report.write_text(
+                        json.dumps(
+                            {
+                                "schema": "lps-atlas-cmip6-catalogue-qa-v1",
+                                "status": "passed",
+                                "catalogue": {"sha256": sha256(source)},
+                                "checks": {"duplicate_track_times": 0},
+                                "historical_screen": (
+                                    {"screening_status": "passes-basic-historical-screen"}
+                                    if role == "historical" else None
+                                ),
+                            }
+                        )
+                    )
+                    output = root / model / role
+                    summarise_run(
+                        source,
+                        output,
+                        source_label=model,
+                        experiment_id=experiment,
+                        member_id="r1i1p1f1",
+                        period_label=f"{start_year}–{end_year}",
+                        start_year=start_year,
+                        end_year=end_year,
+                        qa_report=qa_report,
+                    )
+                    run_manifests.append(output / "manifest.json")
+                paired = root / model / "paired"
+                summarise_pair(run_manifests[0], run_manifests[1], paired)
+                public = root / model / "public"
+                publish_pair(run_manifests[0], run_manifests[1], paired / "manifest.json", public)
+                public_manifests.append(public / "manifest.json")
+
+            combined = root / "combined"
+            index_path = assemble_ensemble(public_manifests, combined)
+            with gzip.open(index_path, "rt", encoding="utf-8") as stream:
+                index = json.load(stream)
+            self.assertEqual(index["status"], "multi-model-awaiting-review")
+            self.assertEqual(index["ensemble"]["model_count"], 2)
+            ensemble = next(pair for pair in index["pairs"] if pair.get("kind") == "multi-model")
+            self.assertEqual(ensemble["source_label"], "Multi-model mean")
+            with gzip.open(combined / ensemble["change"]["url"], "rt", encoding="utf-8") as stream:
+                change = json.load(stream)
+            self.assertEqual(change["schema"], ENSEMBLE_SCHEMA)
+            self.assertEqual(change["seasonal_changes"]["jjas"]["systems"]["model_count"], 2)
+            self.assertAlmostEqual(
+                change["seasonal_changes"]["jjas"]["mean_peak_wind_ms"]["absolute_change"],
+                1.0,
+            )
+            with self.assertRaisesRegex(ValueError, "review file"):
+                assemble_ensemble(
+                    public_manifests,
+                    root / "unreviewed",
+                    status="validated-production-window",
+                )
+            review = root / "review.json"
+            review.write_text(
+                json.dumps(
+                    {
+                        "schema": "lps-atlas-cmip6-ensemble-review-v1",
+                        "status": "approved",
+                        "included_pair_ids": index["ensemble"]["included_pair_ids"],
+                        "approved_by": "Test Reviewer",
+                        "approved_utc": "2026-01-01T00:00:00Z",
+                    }
+                )
+            )
+            approved_path = assemble_ensemble(
+                public_manifests,
+                root / "approved",
+                status="validated-production-window",
+                review_file=review,
+            )
+            with gzip.open(approved_path, "rt", encoding="utf-8") as stream:
+                approved = json.load(stream)
+            self.assertEqual(approved["status"], "validated-production-window")
+            self.assertEqual(approved["review"]["approved_by"], "Test Reviewer")
 
 
 if __name__ == "__main__":
