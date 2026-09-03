@@ -9,6 +9,7 @@ from cmip6_pipeline.physics import (
     GAP_COMPLETENESS_COLUMN,
     classify_intensity,
     count_closed_isobars,
+    drop_unobserved_track_fragments,
     persistent_category,
     require_complete_gap_blocks,
 )
@@ -80,6 +81,24 @@ class PhysicsTest(unittest.TestCase):
         self.assertEqual(summary["gap_blocks"], 2)
         self.assertEqual(summary["incomplete_gap_blocks_rejected"], 1)
         self.assertEqual(summary["gap_rows_in_rejected_blocks"], 3)
+
+    def test_continuity_split_drops_observation_free_fragment(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "track_id": [1, 1, 2, 2, 3],
+                "position_source": [
+                    "observed",
+                    "interpolated",
+                    "interpolated",
+                    "interpolated",
+                    "observed",
+                ],
+            }
+        )
+        result, summary = drop_unobserved_track_fragments(frame)
+        self.assertEqual(result.track_id.tolist(), [1, 1, 3])
+        self.assertEqual(summary["unobserved_fragments_removed"], 1)
+        self.assertEqual(summary["unobserved_rows_removed"], 2)
 
 
 if __name__ == "__main__":

@@ -135,8 +135,32 @@ def require_complete_gap_blocks(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict
     return output, summary
 
 
+def drop_unobserved_track_fragments(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Remove fragments made solely of posterior positions after a hard split.
+
+    The physical-event filter requires at least one actual detection per event.
+    A continuity split can isolate one or more interpolated rows around an
+    impossible linker jump; those rows are neither a detected event nor a safe
+    bridge, so retaining them would manufacture an observation-free system.
+    """
+
+    required = {"track_id", "position_source"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"observed-fragment input lacks {missing}")
+    observed = frame.position_source.astype(str).str.lower().eq("observed")
+    supported = observed.groupby(frame.track_id, sort=False).transform("any")
+    removed = frame.loc[~supported]
+    output = frame.loc[supported].copy()
+    return output, {
+        "unobserved_fragments_removed": int(removed.track_id.nunique()),
+        "unobserved_rows_removed": int(len(removed)),
+    }
+
+
 def prepare_gap_validation_input(initial: Path, staging: Path) -> tuple[Path, str, Path]:
     frame = read_table(initial)
+    frame, fragment_summary = drop_unobserved_track_fragments(frame)
     prepared, summary = require_complete_gap_blocks(frame)
     path = staging / "gap-validation-input.parquet"
     summary_path = staging / "gap-completeness-summary.json"
@@ -146,6 +170,7 @@ def prepare_gap_validation_input(initial: Path, staging: Path) -> tuple[Path, st
             "created_utc": utc_now(),
             "input": {"path": str(initial), "sha256": sha256(initial)},
             "prepared_input": {"sha256": sha256(path), "temporary": True},
+            **fragment_summary,
         }
     )
     atomic_json(summary_path, summary)
