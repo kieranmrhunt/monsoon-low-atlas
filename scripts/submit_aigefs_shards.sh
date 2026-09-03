@@ -5,15 +5,18 @@ ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 CYCLES="${1:-recent}"
+FORCE="${2:-false}"
 
-while IFS= read -r job_name; do
-  case "$job_name" in
-    mla-aigefs-mem|mla-aigefs-final)
-      echo "An AIGEFS member-parallel update is already queued or running; no duplicate submitted."
-      exit 0
-      ;;
-  esac
-done < <(timeout 30 squeue -h -u "$USER" -o '%j')
+if [[ "$FORCE" != "true" ]]; then
+  while IFS= read -r job_name; do
+    case "$job_name" in
+      mla-aigefs-mem|mla-aigefs-final)
+        echo "An AIGEFS member-parallel update is already queued or running; no duplicate submitted."
+        exit 0
+        ;;
+    esac
+  done < <(timeout 30 squeue -h -u "$USER" -o '%j')
+fi
 
 if [[ "$CYCLES" == "recent" ]]; then
   CYCLES="$(cd "$ATLAS_ROOT" && "$PYTHON" -m forecast_pipeline.aigefs_shards plan --manifest "$TARGET/manifest.json")"
