@@ -43,6 +43,7 @@ MANIFEST_LOCK_STALE_SECONDS = 600.0
 LATEST_CLIENT_MANIFEST = "latest-manifest.json.gz"
 ARCHIVE_CLIENT_MANIFEST = "archive-manifest.json.gz"
 RECENT_WINDOW_HOURS = 72
+MAX_PUBLISHED_TRACK_SPEED_KMH = 200.0
 
 
 def manifest_lock_path(root: Path) -> Path:
@@ -772,12 +773,27 @@ def validate_cycle_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if len(track_ids) != len(set(track_ids)):
         errors.append("forecast track IDs are not unique")
     for track in payload.get("tracks", []):
-        track_steps = [int(point[0]) for point in track.get("points", [])]
+        track_points = track.get("points", [])
+        track_steps = [int(point[0]) for point in track_points]
         if track_steps != sorted(set(track_steps)):
             errors.append(f"{track.get('id')}: point steps are not unique and increasing")
-        for point in track.get("points", []):
+        for point in track_points:
             if not (DOMAIN[0] <= float(point[1]) <= DOMAIN[2] and DOMAIN[1] <= float(point[2]) <= DOMAIN[3]):
                 errors.append(f"{track.get('id')}: point outside published domain")
+                break
+        for previous, current in zip(track_points, track_points[1:]):
+            elapsed = int(current[0]) - int(previous[0])
+            if elapsed <= 0:
+                continue
+            speed = haversine_km(
+                (float(previous[2]), float(previous[1])),
+                (float(current[2]), float(current[1])),
+            ) / elapsed
+            if speed > MAX_PUBLISHED_TRACK_SPEED_KMH:
+                errors.append(
+                    f"{track.get('id')}: implausible {speed:.1f} km h-1 jump "
+                    f"between +{int(previous[0])} and +{int(current[0])} h"
+                )
                 break
     weather = payload.get("weather")
     if weather:

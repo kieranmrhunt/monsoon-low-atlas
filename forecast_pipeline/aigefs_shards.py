@@ -20,8 +20,10 @@ from .forecast_core import (
     atomic_write_json,
     atomic_write_json_gz,
     compact_track_payload,
+    haversine_km,
     iso_z,
     manifest_entry_horizon_hours,
+    MAX_PUBLISHED_TRACK_SPEED_KMH,
     parse_cycle,
     track_sidecar_url,
     utc_now,
@@ -86,12 +88,46 @@ def combined_payload(cycle_text: str, member_paths: list[Path]) -> dict[str, Any
     results = [read_member(path, cycle_text) for path in member_paths]
     by_member = {result["member"]: result for result in results}
     results = [by_member[key] for key in sorted(by_member, key=lambda value: int(value[1:]))]
+    geometry_rejections: list[str] = []
+    retained = []
+    for result in results:
+        maximum_speed = 0.0
+        for track in result["tracks"]:
+            for previous, current in zip(track.get("points", []), track.get("points", [])[1:]):
+                elapsed = int(current[0]) - int(previous[0])
+                if elapsed <= 0:
+                    continue
+                maximum_speed = max(
+                    maximum_speed,
+                    haversine_km(
+                        (float(previous[2]), float(previous[1])),
+                        (float(current[2]), float(current[1])),
+                    ) / elapsed,
+                )
+        if maximum_speed > MAX_PUBLISHED_TRACK_SPEED_KMH:
+            geometry_rejections.append(
+                f"{result['member']} ({maximum_speed:.1f} km h-1 maximum track jump)"
+            )
+        else:
+            retained.append(result)
+    results = retained
     if len(results) < 22:
-        raise RuntimeError(f"only {len(results)}/31 AIGEFS members completed; 22 are required")
+        reason = (
+            f"; rejected track geometry: {', '.join(geometry_rejections)}"
+            if geometry_rejections else ""
+        )
+        raise RuntimeError(
+            f"only {len(results)}/31 AIGEFS members completed cleanly; 22 are required{reason}"
+        )
     steps = results[0]["steps"]
     if any(result["steps"] != steps for result in results):
         raise ValueError("AIGEFS member lead axes differ")
     warnings = [f"{31 - len(results)} of 31 AIGEFS members were unavailable"] if len(results) < 31 else []
+    if geometry_rejections:
+        warnings.append(
+            "members excluded by the published-track motion QA: "
+            + "; ".join(geometry_rejections)
+        )
     reconstructed = {
         result["member"]: result["source_gap_steps"]
         for result in results if result["source_gap_steps"]

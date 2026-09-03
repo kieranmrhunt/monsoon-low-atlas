@@ -101,8 +101,11 @@ class ForecastPipelineContractTests(unittest.TestCase):
     def test_parallel_aigefs_members_combine_with_ensemble_mean(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for number in range(1, 23):
-                tracks = json.dumps([{"id": f"p{number:02d}"}]).encode("utf-8")
+            for number in range(1, 24):
+                track = {"id": f"p{number:02d}"}
+                if number == 23:
+                    track["points"] = [[0, 80.0, 20.0], [1, 92.0, 30.0]]
+                tracks = json.dumps([track]).encode("utf-8")
                 qa = json.dumps({"member": f"p{number:02d}"}).encode("utf-8")
                 np.savez_compressed(
                     root / f"p{number:02d}.npz",
@@ -124,6 +127,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
             self.assertEqual(arguments[3], [f"p{number:02d}" for number in range(1, 23)])
             np.testing.assert_allclose(arguments[4], 11.5)
             np.testing.assert_allclose(arguments[5], 23.0)
+            self.assertIn("p23", arguments[6][1])
             self.assertEqual(build.call_args.kwargs["expected_members"], 31)
             self.assertIn("member-parallel", payload["source"]["retrieval"])
 
@@ -856,6 +860,21 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("unique and increasing" in item for item in result["errors"]))
 
+    def test_payload_validator_rejects_implausible_track_jumps(self) -> None:
+        payload = {
+            "steps": [0, 6],
+            "members": {"available": 1, "expected": 1},
+            "tracks": [{"id": "jump", "points": [[0, 80, 20], [1, 92, 30]]}],
+            "systems": [],
+            "weather": {
+                "vorticity": {"shape": [2, len(GRID_LATS), len(GRID_LONS)]},
+                "precipitation": {"shape": [2, len(GRID_LATS), len(GRID_LONS)]},
+            },
+        }
+        result = validate_cycle_payload(payload)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("implausible" in item for item in result["errors"]))
+
     def test_physical_support_run_breaks_across_false_or_missing_hours(self) -> None:
         mask = np.asarray([True, True, False, True, True, True, True])
         steps = np.asarray([0, 1, 2, 3, 4, 6, 7])
@@ -890,6 +909,7 @@ class ForecastPipelineContractTests(unittest.TestCase):
         ]
         self.assertEqual(len(audit), 1)
         self.assertEqual(audit[0]["qualifying_close_run_hours"], 6)
+        self.assertEqual(audit[0]["continuation_source_track_id"], "later")
         self.assertEqual(pd.to_datetime(later["time"], utc=True).max(), origin + pd.Timedelta(hours=22))
         self.assertEqual(len(surviving_tail), 18)
         self.assertTrue(surviving_tail["position_source"].eq("observed").all())
@@ -922,8 +942,14 @@ class ForecastPipelineContractTests(unittest.TestCase):
         merged, audit = merge_persistent_same_member_coalescences(pd.DataFrame(rows))
         self.assertEqual(len(audit), 1)
         self.assertEqual(audit[0]["merge_time_utc"], "2026-09-02T10:00:00Z")
+        self.assertEqual(audit[0]["continuation_source_track_id"], "first")
         second_times = pd.to_datetime(merged.loc[merged["track_id"].eq("second"), "time"], utc=True)
         self.assertEqual(second_times.max(), origin + pd.Timedelta(hours=9))
+        surviving = merged.loc[
+            merged["track_id"].eq("first")
+            & pd.to_datetime(merged["time"], utc=True).ge(origin + pd.Timedelta(hours=16))
+        ]
+        self.assertTrue(np.allclose(surviving["lon"], 70.0))
 
     def test_forecast_interpolation_can_begin_after_initialization(self) -> None:
         np.testing.assert_array_equal(_hourly_axis([6, 12]), np.arange(6, 13))

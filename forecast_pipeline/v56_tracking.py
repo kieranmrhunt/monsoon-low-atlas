@@ -330,9 +330,10 @@ def merge_persistent_same_member_coalescences(
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """Collapse duplicate paths after same-member forecast features merge.
 
-    The earlier identity is retained.  Within the merged tail, observed rows
-    outrank interpolated rows so the surviving path follows the actual detected
-    centre instead of preserving alternating interpolation artefacts.
+    The earlier identity is retained. One continuation branch is selected over
+    the qualifying close encounter and then followed consistently. Selecting
+    the strongest row independently at every later hour can make a track jump
+    between two lobes if those features subsequently diverge.
     """
 
     if accepted.empty or "track_id" not in accepted:
@@ -374,13 +375,33 @@ def merge_persistent_same_member_coalescences(
             keeper, terminated = second_id, first_id
         normalized_time = pd.to_datetime(frame["time"], utc=True)
         tail_mask = frame["track_id"].isin([keeper, terminated]) & normalized_time.ge(merge_time)
-        tail = frame.loc[tail_mask].copy()
-        position_source = tail.get("position_source", pd.Series("observed", index=tail.index))
-        tail["_observed_priority"] = position_source.astype(str).str.lower().eq("observed").astype(int)
+        close_end = merge_time + pd.Timedelta(hours=max(0, close_hours - 1))
         score_column = next(
-            (name for name in ("score_v53", "score", "max_vort_smoothed") if name in tail),
+            (name for name in ("score_v53", "score", "max_vort_smoothed") if name in frame),
             None,
         )
+
+        def continuation_rank(track_id: Any, group: pd.DataFrame) -> tuple[int, float, int, str]:
+            times = pd.to_datetime(group["time"], utc=True)
+            encounter = group.loc[times.between(merge_time, close_end)]
+            observed = encounter.get(
+                "position_source", pd.Series("observed", index=encounter.index)
+            ).astype(str).str.lower().eq("observed").sum()
+            score = (
+                pd.to_numeric(encounter[score_column], errors="coerce").median()
+                if score_column is not None and not encounter.empty
+                else -math.inf
+            )
+            return (-int(observed), -_finite(score, -math.inf), int(track_id != keeper), str(track_id))
+
+        continuation = min(
+            (keeper, terminated),
+            key=lambda track_id: continuation_rank(track_id, groups[track_id]),
+        )
+        continuation_mask = frame["track_id"].eq(continuation) & normalized_time.ge(merge_time)
+        tail = frame.loc[continuation_mask].copy()
+        position_source = tail.get("position_source", pd.Series("observed", index=tail.index))
+        tail["_observed_priority"] = position_source.astype(str).str.lower().eq("observed").astype(int)
         tail["_score_priority"] = (
             pd.to_numeric(tail[score_column], errors="coerce").fillna(-math.inf)
             if score_column is not None
@@ -404,6 +425,7 @@ def merge_persistent_same_member_coalescences(
         audit.append({
             "kept_track_id": str(keeper),
             "terminated_track_id": str(terminated),
+            "continuation_source_track_id": str(continuation),
             "merge_time_utc": merge_time.isoformat().replace("+00:00", "Z"),
             "qualifying_close_run_hours": int(close_hours),
             "distance_threshold_km": FORECAST_COALESCENCE_DISTANCE_KM,
