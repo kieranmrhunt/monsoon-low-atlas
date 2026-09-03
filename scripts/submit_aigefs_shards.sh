@@ -40,7 +40,7 @@ for CYCLE in "${CYCLE_VALUES[@]}"; do
 done
 cd "$ATLAS_ROOT"
 CONCURRENCY="${LPS_AIGEFS_CONCURRENCY:-256}"
-PASSES="${LPS_AIGEFS_PASSES:-3}"
+PASSES="${LPS_AIGEFS_PASSES:-4}"
 [[ "$PASSES" =~ ^[1-5]$ ]] || { echo "LPS_AIGEFS_PASSES must be an integer from 1 to 5" >&2; exit 2; }
 ARRAY_IDS=()
 PREVIOUS=""
