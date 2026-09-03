@@ -64,6 +64,12 @@ def utc_now() -> str:
 
 
 def stream_number(day: date) -> int:
+    # NASA used the supplementary 401 production stream for the four-month
+    # observing-system interruption in 2021.  The surrounding dates returned
+    # to stream 400; this is a filename distinction, not a product-version
+    # change.  CMR titles confirm the same switch in every required collection.
+    if date(2021, 6, 1) <= day <= date(2021, 9, 30):
+        return 401
     if day.year <= 1991:
         return 100
     if day.year <= 2000:

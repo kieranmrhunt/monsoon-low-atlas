@@ -12,11 +12,19 @@ class Merra2RequestTest(unittest.TestCase):
         self.assertEqual(stream_number(date(1992, 1, 1)), 200)
         self.assertEqual(stream_number(date(2001, 1, 1)), 300)
         self.assertEqual(stream_number(date(2011, 1, 1)), 400)
+        self.assertEqual(stream_number(date(2021, 5, 31)), 400)
+        self.assertEqual(stream_number(date(2021, 6, 1)), 401)
+        self.assertEqual(stream_number(date(2021, 9, 30)), 401)
+        self.assertEqual(stream_number(date(2021, 10, 1)), 400)
 
     def test_granule_name(self) -> None:
         self.assertEqual(
             granule_name("pressure", date(2016, 7, 1)),
             "M2I3NPASM.5.12.4:MERRA2_400.inst3_3d_asm_Np.20160701.nc4",
+        )
+        self.assertEqual(
+            granule_name("pressure", date(2021, 6, 1)),
+            "M2I3NPASM.5.12.4:MERRA2_401.inst3_3d_asm_Np.20210601.nc4",
         )
 
     def test_pressure_constraint_contains_required_fields(self) -> None:
