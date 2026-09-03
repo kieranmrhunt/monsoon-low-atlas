@@ -38,6 +38,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def archive_entry_improves(
+    existing: dict | None,
+    candidate: dict,
+    target_exists: bool,
+) -> bool:
+    """Prefer longer coverage or a same-length weather-enriched payload."""
+
+    if existing is None or not target_exists:
+        return True
+    existing_horizon = manifest_entry_horizon_hours(existing)
+    candidate_horizon = manifest_entry_horizon_hours(candidate)
+    if candidate_horizon > existing_horizon:
+        return True
+    existing_weather = set(existing.get("weather_fields", []))
+    candidate_weather = set(candidate.get("weather_fields", []))
+    return (
+        candidate_horizon >= existing_horizon
+        and candidate_weather > existing_weather
+    )
+
+
 def main() -> None:
     args = parse_args()
     sources = list(args.sources)
@@ -88,12 +109,11 @@ def main() -> None:
                     raise ValueError(f"{source_root / relative} does not certify its complete valid-time axis")
                 entry_key = (str(entry.get("model", "")), str(entry.get("cycle", "")))
                 existing = existing_entries.get(entry_key)
-                already_complete = (
-                    existing is not None
-                    and manifest_entry_horizon_hours(existing) >= manifest_entry_horizon_hours(entry)
+                target_exists = bool(
+                    existing
                     and (args.target / str(existing.get("url", ""))).exists()
                 )
-                if not already_complete:
+                if archive_entry_improves(existing, entry, target_exists):
                     atomic_write_json_gz(args.target / relative, payload)
                     tracks_relative = str(entry.get("tracks_url", ""))
                     if tracks_relative and tracks_relative != relative:
@@ -137,6 +157,7 @@ def main() -> None:
         complete = True
         if args.plan:
             plan = json.loads(args.plan.read_text(encoding="utf-8"))
+            required_weather = set(plan.get("required_weather_fields", []))
             planned = {
                 f"{item['model']}:{item['cycle']}": (
                     int(item.get("horizon_hours", 0)),
@@ -145,20 +166,24 @@ def main() -> None:
                 for item in plan["cycles"]
             }
             available = {}
+            available_weather = {}
             for item in manifest.get(collection_key, []):
                 cycle_time = datetime.fromisoformat(str(item["cycle_utc"]).replace("Z", "+00:00"))
                 valid_start = datetime.fromisoformat(
                     str(item.get("valid_start_utc", item["cycle_utc"])).replace("Z", "+00:00")
                 )
-                available[f"{item.get('model')}:{item.get('cycle')}"] = (
+                key = f"{item.get('model')}:{item.get('cycle')}"
+                available[key] = (
                     manifest_entry_horizon_hours(item),
                     int(round((valid_start - cycle_time).total_seconds() / 3600)),
                 )
+                available_weather[key] = set(item.get("weather_fields", []))
             complete_keys = {
                 key
                 for key, (horizon, first_step) in planned.items()
                 if available.get(key, (-1, 999))[0] >= horizon
                 and available.get(key, (-1, 999))[1] <= first_step
+                and required_weather.issubset(available_weather.get(key, set()))
             }
             missing = sorted(set(planned) - complete_keys)
             complete = not missing

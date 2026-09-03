@@ -63,14 +63,17 @@ def target_state(
     collection_key: str,
     manifest_key: str,
     expected_plan: tuple[str, int],
+    required_weather_fields: set[str] | None = None,
 ) -> tuple[dict[tuple[str, str], int], str]:
     path = target / "manifest.json"
     if not path.exists():
         return {}, ""
     manifest = read_manifest(path)
+    required_weather = required_weather_fields or set()
     available = {
         archive_key(entry): manifest_entry_horizon_hours(entry)
         for entry in manifest.get(collection_key, [])
+        if required_weather.issubset(set(entry.get("weather_fields", [])))
     }
     progress = manifest.get(manifest_key, {})
     identity = (
@@ -106,9 +109,11 @@ def update_progress(
             (str(item.get("model", "")), str(item.get("cycle", ""))): int(item.get("horizon_hours", 0))
             for item in plan.get("cycles", [])
         }
+        required_weather = set(plan.get("required_weather_fields", []))
         available = {
             archive_key(entry): manifest_entry_horizon_hours(entry)
             for entry in manifest.get(collection_key, [])
+            if required_weather.issubset(set(entry.get("weather_fields", [])))
         }
         complete_keys = {
             key
@@ -149,6 +154,7 @@ def main() -> int:
         raise ValueError("--poll-seconds must be positive")
     collection_key = "tigge_archive" if args.collection == "tigge" else "archive"
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    required_weather = set(plan.get("required_weather_fields", []))
     expected_plan = (str(plan.get("generated_utc", "")), len(plan.get("cycles", [])))
     if not expected_plan[0] or not expected_plan[1]:
         raise ValueError(f"Backfill plan identity is incomplete in {args.plan}")
@@ -157,7 +163,11 @@ def main() -> int:
     while True:
         sources = completed_sources(args.run_root, collection_key)
         available, status = target_state(
-            args.target, collection_key, args.manifest_key, expected_plan
+            args.target,
+            collection_key,
+            args.manifest_key,
+            expected_plan,
+            required_weather,
         )
         pending = sorted(
             key
@@ -170,7 +180,11 @@ def main() -> int:
             publish(args.target, args.collection, roots)
             update_progress(args.target, collection_key, args.manifest_key, plan)
             available, status = target_state(
-                args.target, collection_key, args.manifest_key, expected_plan
+                args.target,
+                collection_key,
+                args.manifest_key,
+                expected_plan,
+                required_weather,
             )
             LOGGER.info("Public collection now contains %d cycle(s)", len(available))
 

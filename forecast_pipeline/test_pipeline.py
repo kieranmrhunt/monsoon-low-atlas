@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from forecast_pipeline import merge_archives, merge_runs, migrate_track_sidecars
+from forecast_pipeline.plan_archive_weather import weather_backfill_cycles
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
     GRID_LONS,
@@ -201,6 +202,42 @@ class ForecastPipelineContractTests(unittest.TestCase):
                 ):
                     merge_archives.main()
             self.assertFalse((target / "manifest.json").exists())
+
+    def test_same_horizon_weather_payload_replaces_track_only_archive(self) -> None:
+        existing = {
+            "cycle_utc": "2021-07-01T00:00:00Z",
+            "valid_end_utc": "2021-07-17T00:00:00Z",
+            "weather_fields": [],
+        }
+        enriched = {
+            **existing,
+            "weather_fields": ["precipitation", "vorticity"],
+        }
+        self.assertTrue(merge_archives.archive_entry_improves(existing, enriched, True))
+        self.assertFalse(merge_archives.archive_entry_improves(enriched, existing, True))
+
+    def test_archive_weather_plan_selects_only_missing_supported_fields(self) -> None:
+        manifest = {
+            "archive": [
+                {
+                    "model": "gfs", "cycle": "2021070100",
+                    "cycle_utc": "2021-07-01T00:00:00Z",
+                    "valid_start_utc": "2021-07-01T00:00:00Z",
+                    "valid_end_utc": "2021-07-17T00:00:00Z",
+                    "weather_fields": [],
+                },
+                {
+                    "model": "ifs", "cycle": "2021070100",
+                    "cycle_utc": "2021-07-01T00:00:00Z",
+                    "valid_start_utc": "2021-07-01T00:00:00Z",
+                    "valid_end_utc": "2021-07-11T00:00:00Z",
+                    "weather_fields": ["precipitation", "vorticity"],
+                },
+            ],
+        }
+        planned = weather_backfill_cycles(manifest, {"gfs", "ifs"})
+        self.assertEqual([(item["model"], item["cycle"]) for item in planned], [("gfs", "2021070100")])
+        self.assertEqual(planned[0]["horizon_hours"], 384)
 
     def test_candidate_cycles_are_six_hourly_and_descending(self) -> None:
         now = datetime(2026, 8, 30, 13, 47, tzinfo=UTC)
