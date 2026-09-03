@@ -247,6 +247,7 @@ def summarise_run(
     period_label: str,
     start_year: int | None = None,
     end_year: int | None = None,
+    qa_report: Path | None = None,
 ) -> Path:
     frame = pd.read_parquet(catalogue)
     frame["time"] = pd.to_datetime(frame.time, errors="raise")
@@ -269,6 +270,22 @@ def summarise_run(
     annual_path = output_dir / "annual.parquet"
     atomic_parquet(event_path, events)
     atomic_parquet(annual_path, annual)
+    qa: dict[str, Any] | None = None
+    if qa_report is not None:
+        qa_payload = json.loads(qa_report.read_text(encoding="utf-8"))
+        if qa_payload.get("schema") != "lps-atlas-cmip6-catalogue-qa-v1":
+            raise ValueError(f"unsupported CMIP6 QA schema in {qa_report}")
+        if qa_payload.get("status") != "passed":
+            raise ValueError(f"CMIP6 catalogue QA did not pass: {qa_report}")
+        if qa_payload.get("catalogue", {}).get("sha256") != sha256(catalogue):
+            raise ValueError(f"CMIP6 QA report does not describe {catalogue}")
+        qa = {
+            "schema": qa_payload["schema"],
+            "status": qa_payload["status"],
+            "report_sha256": sha256(qa_report),
+            "checks": qa_payload.get("checks", {}),
+            "historical_screen": qa_payload.get("historical_screen"),
+        }
     payload = {
         "schema": SCHEMA,
         "run": {
@@ -287,6 +304,7 @@ def summarise_run(
             "catalogue_sha256": sha256(catalogue),
             "intensity_method": sorted(frame.intensity_method.astype(str).unique().tolist()),
         },
+        "qa": qa,
     }
     unhashed = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
     digest = hashlib.sha256(unhashed).hexdigest()
@@ -477,11 +495,13 @@ def publish_pair(
         "historical": {
             "run": historical_run,
             "coverage": historical_payload["coverage"],
+            "qa": historical_payload.get("qa"),
             **copied["historical"],
         },
         "future": {
             "run": future_run,
             "coverage": future_payload["coverage"],
+            "qa": future_payload.get("qa"),
             **copied["future"],
         },
         "change": copied["change"],
@@ -513,12 +533,14 @@ def publish_pair(
     index = {
         "schema": INDEX_SCHEMA,
         "generated_utc": utc_now(),
-        "status": "validated-production-window" if production_ready else "engineering-canary",
+        "status": "production-window-awaiting-review" if production_ready else "engineering-canary",
         "pairs": pairs,
         "defaults": {"pair": pair_id, "season": "jjas", "metric": "systems"},
         "interpretation": (
             "Each entry is a single-model paired change; multi-model projection statements "
-            "require an ensemble of entries."
+            "require an ensemble of entries. Production-length bundles remain unavailable to "
+            "the browser until their historical-performance screen is reviewed and a combined "
+            "one-model-one-vote bundle is approved."
         ),
     }
     raw = json.dumps(index, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -553,10 +575,12 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--period-label", required=True)
     run.add_argument("--start-year", type=int)
     run.add_argument("--end-year", type=int)
+    run.add_argument("--qa-report", type=Path)
     planned = subparsers.add_parser("run-from-plan")
     planned.add_argument("--catalogue", type=Path, required=True)
     planned.add_argument("--period-plan", type=Path, required=True)
     planned.add_argument("--output-dir", type=Path, required=True)
+    planned.add_argument("--qa-report", type=Path)
     pair = subparsers.add_parser("pair")
     pair.add_argument("--historical-manifest", type=Path, required=True)
     pair.add_argument("--future-manifest", type=Path, required=True)
@@ -581,6 +605,7 @@ def main() -> None:
             period_label=args.period_label,
             start_year=args.start_year,
             end_year=args.end_year,
+            qa_report=args.qa_report,
         )
     elif args.command == "run-from-plan":
         plan = json.loads(args.period_plan.read_text(encoding="utf-8"))
@@ -594,6 +619,7 @@ def main() -> None:
             period_label=f"{plan['core_start'][:4]}–{plan['core_end'][:4]}",
             start_year=int(plan["core_start"][:4]),
             end_year=int(plan["core_end"][:4]),
+            qa_report=args.qa_report,
         )
     elif args.command == "pair":
         path = summarise_pair(args.historical_manifest, args.future_manifest, args.output_dir)

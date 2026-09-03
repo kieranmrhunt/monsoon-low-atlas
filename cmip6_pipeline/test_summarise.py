@@ -19,6 +19,7 @@ from cmip6_pipeline.summarise import (
     summarise_pair,
     summarise_run,
 )
+from reanalysis_pipeline.common import sha256
 
 
 class SummariseTest(unittest.TestCase):
@@ -92,6 +93,17 @@ class SummariseTest(unittest.TestCase):
             ):
                 source = root / f"{role}.parquet"
                 catalogue(year, track_id).to_parquet(source, index=False)
+                qa_report = root / f"{role}-qa.json"
+                qa_report.write_text(
+                    json.dumps(
+                        {
+                            "schema": "lps-atlas-cmip6-catalogue-qa-v1",
+                            "status": "passed",
+                            "catalogue": {"sha256": sha256(source)},
+                            "checks": {"duplicate_track_times": 0},
+                        }
+                    )
+                )
                 output = root / role
                 summarise_run(
                     source,
@@ -100,6 +112,7 @@ class SummariseTest(unittest.TestCase):
                     experiment_id=experiment,
                     member_id="r1i1p1f1",
                     period_label=str(year),
+                    qa_report=qa_report,
                 )
                 manifest = output / "manifest.json"
                 manifests.append(manifest)
@@ -109,6 +122,7 @@ class SummariseTest(unittest.TestCase):
                     payload = json.load(stream)
                 self.assertNotIn(str(root), json.dumps(payload["provenance"]))
                 self.assertIn("jjas", payload["seasonal"])
+                self.assertEqual(payload["qa"]["status"], "passed")
             paired = root / "paired"
             summarise_pair(manifests[0], manifests[1], paired)
             public = root / "public"

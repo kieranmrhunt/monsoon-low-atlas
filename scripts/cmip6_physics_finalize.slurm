@@ -19,7 +19,11 @@ cd "$ATLAS_ROOT"
 MERGED="$($PYTHON -m cmip6_pipeline.physics merge --manifest "$MANIFEST" --output-root "$OUTPUT_ROOT" | tail -1)"
 FINAL="$($PYTHON -m cmip6_pipeline.physics finalize --input "$MERGED" --output-root "$OUTPUT_ROOT" | tail -1)"
 if [[ -n "$PERIOD_PLAN" ]]; then
+  QA_REPORT="$OUTPUT_ROOT/qa-summary.json"
+  "$PYTHON" -m cmip6_pipeline.qa \
+    --catalogue "$FINAL" --period-plan "$PERIOD_PLAN" --output "$QA_REPORT"
   exec "$PYTHON" -m cmip6_pipeline.summarise run-from-plan \
-    --catalogue "$FINAL" --period-plan "$PERIOD_PLAN" --output-dir "$OUTPUT_ROOT/summary"
+    --catalogue "$FINAL" --period-plan "$PERIOD_PLAN" --output-dir "$OUTPUT_ROOT/summary" \
+    --qa-report "$QA_REPORT"
 fi
 printf '%s\n' "$FINAL"

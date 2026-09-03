@@ -247,12 +247,36 @@ def mpi_lr_paired_periods(*, canary: bool = False) -> list[PeriodPlan]:
     ]
 
 
+def mri_paired_periods(*, canary: bool = False) -> list[PeriodPlan]:
+    historical_start, historical_end = ("199006", "199009") if canary else ("198101", "201012")
+    # MRI-ESM2-0 pressure-level output ends at 18 UTC 31 December 2100,
+    # so 2101-01-01 00 UTC is unavailable for the required interpolation
+    # boundary. Use the immediately preceding complete 30-year window.
+    future_start, future_end = ("208006", "208009") if canary else ("207001", "209912")
+    return [
+        PeriodPlan(
+            RunSpec("CMIP", "MRI", "MRI-ESM2-0", "historical", "r1i1p1f1", "gn"),
+            historical_start,
+            historical_end,
+            "full",
+        ),
+        PeriodPlan(
+            RunSpec("ScenarioMIP", "MRI", "MRI-ESM2-0", "ssp245", "r1i1p1f1", "gn"),
+            future_start,
+            future_end,
+            "full",
+        ),
+    ]
+
+
 PRESETS = {
     "mpi-paired": mpi_paired_periods,
     "miroc6-paired": miroc6_paired_periods,
     "miroc6-canary": lambda: miroc6_paired_periods(canary=True),
     "mpi-lr-paired": mpi_lr_paired_periods,
     "mpi-lr-canary": lambda: mpi_lr_paired_periods(canary=True),
+    "mri-paired": mri_paired_periods,
+    "mri-canary": lambda: mri_paired_periods(canary=True),
 }
 
 
