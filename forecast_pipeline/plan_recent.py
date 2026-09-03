@@ -51,13 +51,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=Path, required=True)
     parser.add_argument("--hours", type=int, default=72)
+    parser.add_argument("--exclude-model", action="append", default=[])
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     manifest = read_manifest(args.manifest)
-    cycles = planned_recent_cycles(manifest, args.hours)
+    excluded = set(args.exclude_model)
+    cycles = [
+        item for item in planned_recent_cycles(manifest, args.hours)
+        if item["model"] not in excluded
+    ]
     available = {}
     for model, entries in manifest.get("recent", {}).items():
         for item in entries:
@@ -74,6 +79,7 @@ def main() -> None:
         "schema": "mla-forecast-recent-plan-v1",
         "generated_utc": iso_z(utc_now()),
         "window_hours": args.hours,
+        "excluded_models": sorted(excluded),
         "selection_policy": f"every six-hourly initialization through the preceding {args.hours} hours, reusing complete operational-archive assets before requesting any missing provider/model lead axis",
         "cycles": cycles,
         "pending_cycles": pending,

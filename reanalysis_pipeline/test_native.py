@@ -27,6 +27,7 @@ class NativeReanalysisArchiveTest(unittest.TestCase):
             "candidate_quality": 7.0,
             "centre_score": 7.0,
             "max_vort_smoothed": 8.0,
+            "precip_24hr": 21.5,
             "pressure_deficit_hpa": 4.0,
             "heat_low_score": 0.2,
         }
@@ -58,10 +59,12 @@ class NativeReanalysisArchiveTest(unittest.TestCase):
             with gzip.open(root / "native" / "201608.json.gz", "rt", encoding="utf-8") as stream:
                 august = json.load(stream)
             self.assertEqual(july["schema"], NATIVE_MONTH_SCHEMA)
+            self.assertEqual(july["point_fields"][-2:], ["max_vort_smoothed_x1e5_s-1", "precip_24hr_mm"])
             self.assertEqual(set(july["tracks"]), {"1"})
             self.assertEqual(set(august["tracks"]), {"1", "2"})
             self.assertEqual(july["tracks"]["1"], august["tracks"]["1"])
-            self.assertEqual(july["tracks"]["1"][-1][-1], "i")
+            self.assertEqual(july["tracks"]["1"][-1][3], "i")
+            self.assertEqual(july["tracks"]["1"][-1][4:], [8.0, 21.5])
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ def track_columns(path: Path) -> tuple[list[str], str, str]:
     if missing:
         raise ValueError(f"{path} lacks physical-selection columns {missing}")
     selected = ["track_id", "time", longitude, latitude, *sorted(REQUIRED_COLUMNS - {"track_id", "time"})]
-    for optional in ("position_source", "reject_reason"):
+    for optional in ("position_source", "reject_reason", "precip_24hr"):
         if optional in columns:
             selected.append(optional)
     return selected, longitude, latitude
@@ -78,9 +78,24 @@ def compact_group(group: pd.DataFrame, longitude: str, latitude: str) -> tuple[l
         positions = group["position_source"].astype(str).str.lower().to_numpy()[order]
     else:
         positions = np.full(len(group), "observed", dtype=object)
+    vorticity = pd.to_numeric(group["max_vort_smoothed"], errors="coerce").to_numpy(dtype=float)[order]
+    precipitation = (
+        pd.to_numeric(group["precip_24hr"], errors="coerce").to_numpy(dtype=float)[order]
+        if "precip_24hr" in group
+        else np.full(len(group), np.nan, dtype=float)
+    )
     points = [
-        [int(hour), round(float(x), 3), round(float(y), 3), "o" if source == "observed" else "i"]
-        for hour, x, y, source in zip(epoch_hours, lon_values, lat_values, positions, strict=True)
+        [
+            int(hour),
+            round(float(x), 3),
+            round(float(y), 3),
+            "o" if source == "observed" else "i",
+            round(float(vort), 3) if np.isfinite(vort) else None,
+            round(float(rain), 3) if np.isfinite(rain) else None,
+        ]
+        for hour, x, y, source, vort, rain in zip(
+            epoch_hours, lon_values, lat_values, positions, vorticity, precipitation, strict=True
+        )
     ]
     months = set(times.dt.strftime("%Y%m"))
     return points, months
@@ -165,6 +180,10 @@ def build_native_archive(source: str, linked_path: Path, output: Path, *, chunks
             "source": source,
             "month": month,
             "generated_utc": generated,
+            "point_fields": [
+                "epoch_hour", "longitude", "latitude", "position_source",
+                "max_vort_smoothed_x1e5_s-1", "precip_24hr_mm",
+            ],
             "tracks": tracks,
         })
         records[month] = {
@@ -186,6 +205,10 @@ def build_native_archive(source: str, linked_path: Path, output: Path, *, chunks
         "rejected_linker_track_count": linker_track_count - track_count,
         "point_count": point_count,
         "month_count": len(months),
+        "point_fields": [
+            "epoch_hour", "longitude", "latitude", "position_source",
+            "max_vort_smoothed_x1e5_s-1", "precip_24hr_mm",
+        ],
         "months": records,
         "selection": {
             "schema": SELECTION_SCHEMA,

@@ -17,7 +17,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from forecast_pipeline import merge_archives, merge_runs, migrate_track_sidecars
+from forecast_pipeline import aigefs_shards, merge_archives, merge_runs, migrate_track_sidecars
 from forecast_pipeline.plan_archive_weather import weather_backfill_cycles
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
@@ -97,6 +97,53 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+
+    def test_parallel_aigefs_members_combine_with_ensemble_mean(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for number in range(1, 23):
+                tracks = json.dumps([{"id": f"p{number:02d}"}]).encode("utf-8")
+                qa = json.dumps({"member": f"p{number:02d}"}).encode("utf-8")
+                np.savez_compressed(
+                    root / f"p{number:02d}.npz",
+                    cycle=np.asarray("2026090100"),
+                    member=np.asarray(f"p{number:02d}"),
+                    steps=np.asarray([0, 6], dtype=np.int16),
+                    vorticity=np.full((2, 2, 2), number, dtype=np.float32),
+                    precipitation=np.full((2, 2, 2), number * 2, dtype=np.float32),
+                    tracks=np.frombuffer(tracks, dtype=np.uint8),
+                    tracking_qa=np.frombuffer(qa, dtype=np.uint8),
+                    source_gap_steps=np.asarray([], dtype=np.int16),
+                )
+            with patch.object(NcepAdapter, "_payload", return_value={"source": {}}) as build:
+                payload = aigefs_shards.combined_payload(
+                    "2026090100", sorted(root.glob("p*.npz"))
+                )
+            arguments = build.call_args.args
+            self.assertEqual(arguments[1], [0, 6])
+            self.assertEqual(arguments[3], [f"p{number:02d}" for number in range(1, 23)])
+            np.testing.assert_allclose(arguments[4], 11.5)
+            np.testing.assert_allclose(arguments[5], 23.0)
+            self.assertEqual(build.call_args.kwargs["expected_members"], 31)
+            self.assertIn("member-parallel", payload["source"]["retrieval"])
+
+        newest = datetime(2026, 9, 3, 0, tzinfo=UTC)
+        missing = aigefs_shards.missing_recent_cycles({
+            "recent": {"aigefs": [{
+                "cycle": "2026090218", "cycle_utc": "2026-09-02T18:00:00Z",
+                "valid_end_utc": "2026-09-18T18:00:00Z",
+            }]},
+            "archive": [{
+                "model": "aigefs", "cycle": "2026090206",
+                "cycle_utc": "2026-09-02T06:00:00Z",
+                "valid_end_utc": "2026-09-18T06:00:00Z",
+            }],
+        }, newest)
+        self.assertEqual(missing[0], "2026090300")
+        self.assertNotIn("2026090218", missing)
+        self.assertNotIn("2026090206", missing)
+        self.assertEqual(len(missing), 11)
+
     def test_badc_cycle_audit_rejects_mislabelled_grib_header(self) -> None:
         cycle = datetime(2026, 7, 7, 12, tzinfo=UTC)
         with tempfile.TemporaryDirectory() as directory:

@@ -24,7 +24,8 @@ cd "$ATLAS_ROOT"
 "$PYTHON" -m forecast_pipeline.plan_recent \
   --manifest "$OUTPUT/manifest.json" \
   --output "$PLAN" \
-  --jobs "$JOBS"
+  --jobs "$JOBS" \
+  --exclude-model aigefs
 
 COUNT="$(wc -l < "$JOBS")"
 if [[ "$COUNT" == "0" ]]; then

@@ -53,7 +53,7 @@
 		fullPayloads: new Map(), fullLoads: new Map(), fullFailures: new Set(), archiveEntriesCache: null,
 		archiveColourIndexes: new Map(), archiveManifestLoaded: false, archiveManifestLoad: null,
 		systemGroupsCache: null, systemGroupsCacheKey: '',
-		selectedSystem: null, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
+		selectedSystem: null, isolateSystem: false, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
 		archiveDate: /^\d{4}-\d{2}-\d{2}$/.test(storedPreferences.archiveDate || '') ? storedPreferences.archiveDate : DEFAULT_ARCHIVE_DATE,
 		archiveHour: ['00', '06', '12', '18'].includes(storedPreferences.archiveHour) ? storedPreferences.archiveHour : '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
@@ -61,7 +61,8 @@
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0, atlasContextTrack: null,
-		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null
+		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null,
+		requestedArchiveRuns: null, requestedSystem: null, requestedValidTime: null
 	};
 	const meanTrackCaches = new WeakMap();
 	const systemTimelineCaches = new WeakMap();
@@ -70,6 +71,7 @@
 	const analysisHistoryCaches = new WeakMap();
 	let reanalysisManifestPromise = null;
 	let reanalysisManifest = null;
+	let era5AnalysisSeriesPromise = null;
 	const nativeReanalysisAssets = new Map();
 	const nativeReanalysisLoads = new Map();
 
@@ -87,6 +89,44 @@
 		} catch (_) {
 			// Browsers with blocked storage still retain the same choices for this page view.
 		}
+	}
+
+	const FORECAST_URL_PARAMETERS = Object.freeze([
+		'fmode', 'fdate', 'fhour', 'fquery', 'fruns', 'fanalysis', 'fmodels', 'finit',
+		'fsystem', 'ffocus', 'fmembers', 'fvalid', 'fweather', 'fweather_run', 'fzoom', 'fcentre'
+	]);
+
+	function writeForecastUrl() {
+		if (!state.initialised || panel.hidden) return;
+		const url = new URL(window.location.href);
+		for (const name of FORECAST_URL_PARAMETERS) url.searchParams.delete(name);
+		url.searchParams.set('tab', 'forecast');
+		url.searchParams.set('fmode', state.mode);
+		url.searchParams.set('fmodels', [...state.selectedModels].sort().join(',') || 'none');
+		url.searchParams.set('fanalysis', [...state.analysisSources].sort().join(',') || 'none');
+		if (state.mode === 'latest') {
+			if (state.initialization !== 'latest') url.searchParams.set('finit', state.initialization);
+		} else {
+			if (state.archiveDate) url.searchParams.set('fdate', state.archiveDate);
+			url.searchParams.set('fhour', state.archiveHour);
+			const query = $('#mlaForecastArchiveSearch').value.trim();
+			if (query) url.searchParams.set('fquery', query);
+			const selectedRuns = state.archiveSelected.size ? state.archiveSelected : state.requestedArchiveRuns;
+			if (selectedRuns && selectedRuns.size) url.searchParams.set('fruns', [...selectedRuns].sort().join(','));
+		}
+		const selectedSystem = state.selectedSystem || state.requestedSystem;
+		if (selectedSystem) url.searchParams.set('fsystem', `${selectedSystem.runKey}~${selectedSystem.systemId}`);
+		url.searchParams.set('ffocus', state.isolateSystem ? '1' : '0');
+		url.searchParams.set('fmembers', state.showMembers ? '1' : '0');
+		const valid = currentValidTime();
+		if (Number.isFinite(valid)) url.searchParams.set('fvalid', new Date(valid).toISOString().slice(0, 13));
+		url.searchParams.set('fweather', state.weather);
+		if (state.weatherModel) url.searchParams.set('fweather_run', state.weatherModel);
+		if (Math.abs(state.mapZoom - DEFAULT_MAP.zoom) > .01) url.searchParams.set('fzoom', state.mapZoom.toFixed(2));
+		if (Math.abs(state.mapCenterLon - DEFAULT_MAP.longitude) > .01 || Math.abs(state.mapCenterLat - DEFAULT_MAP.latitude) > .01) {
+			url.searchParams.set('fcentre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
+		}
+		history.replaceState(null, '', url);
 	}
 
 	function esc(value) {
@@ -111,6 +151,15 @@
 
 	async function fetchGzipJson(url, cache = 'force-cache') {
 		return gunzipJson(await fetch(url, {cache}));
+	}
+
+	async function ensureEra5AnalysisSeries() {
+		if (!config.analysisSeries) return null;
+		if (!era5AnalysisSeriesPromise) era5AnalysisSeriesPromise = fetchGzipJson(config.analysisSeries).then(value => {
+			if (value.schema !== 'mla-forecast-era5-analysis-series-v1' || !value.tracks) throw new Error('Unsupported ERA5 analysis-series asset');
+			return value;
+		}).catch(error => { era5AnalysisSeriesPromise = null; throw error; });
+		return era5AnalysisSeriesPromise;
 	}
 
 	function reanalysisBase() {
@@ -1107,6 +1156,10 @@
 		state.loading = false;
 		const failures = results.filter(result => result.status === 'rejected');
 		const loaded = latestEntries().filter(item => item.payload);
+		if (state.requestedSystem && loaded.some(item => item.runKey === state.requestedSystem.runKey && (item.payload.systems || []).some(system => system.id === state.requestedSystem.systemId))) {
+			state.selectedSystem = state.requestedSystem;
+		}
+		state.requestedSystem = null;
 		if (state.selectedSystem && !loaded.some(item => item.runKey === state.selectedSystem.runKey && (item.payload.systems || []).some(system => system.id === state.selectedSystem.systemId))) state.selectedSystem = null;
 		populateWeatherModels();
 		configureTimeline(true);
@@ -1170,6 +1223,59 @@
 		render();
 	}
 
+	async function restoreArchiveSelection() {
+		const requested = state.requestedArchiveRuns;
+		if (!requested || !requested.size) {
+			state.requestedArchiveRuns = null;
+			populateArchive(true);
+			return;
+		}
+		const available = new Map(filteredArchive().map(entry => [payloadKey(entry.model, entry), entry]));
+		const entries = [...requested].map(key => available.get(key)).filter(Boolean);
+		if (!entries.length) {
+			state.requestedArchiveRuns = null;
+			state.requestedSystem = null;
+			populateArchive(true);
+			return;
+		}
+		await Promise.allSettled(entries.map(loadArchive));
+		state.requestedArchiveRuns = null;
+		if (state.requestedSystem && displayEntries().some(item => item.runKey === state.requestedSystem.runKey && (item.payload.systems || []).some(system => system.id === state.requestedSystem.systemId))) {
+			state.selectedSystem = state.requestedSystem;
+		}
+		state.requestedSystem = null;
+		configureTimeline(true, archiveTargetTime());
+		await render();
+	}
+
+	async function resetArchive() {
+		state.archiveDate = DEFAULT_ARCHIVE_DATE;
+		state.archiveHour = '00';
+		state.archiveMonth = DEFAULT_ARCHIVE_DATE.slice(0, 7);
+		state.archiveEntry = null;
+		state.archiveSelected.clear();
+		state.payload = null;
+		state.selectedSystem = null;
+		state.requestedArchiveRuns = null;
+		state.requestedSystem = null;
+		state.requestedValidTime = null;
+		state.isolateSystem = false;
+		state.analysisSources = new Set(['era5']);
+		state.weather = 'none';
+		state.weatherModel = '';
+		state.leadIndex = 0;
+		state.mapZoom = DEFAULT_MAP.zoom;
+		state.mapCenterLon = DEFAULT_MAP.longitude;
+		state.mapCenterLat = DEFAULT_MAP.latitude;
+		$('#mlaForecastArchiveSearch').value = '';
+		$('#mlaForecastArchiveDate').value = state.archiveDate;
+		$('#mlaForecastArchiveHour').value = state.archiveHour;
+		persistPreferences();
+		populateWeatherModels();
+		populateArchiveTimeControls();
+		populateArchive(true);
+	}
+
 	function modelDefinition(id) {
 		const model = (state.manifest.models || []).find(item => item.id === id);
 		if (model) return {...model, colour: modelTrackColour(id, model.colour)};
@@ -1207,7 +1313,9 @@
 
 	function configureTimeline(preserve, preferredTime) {
 		const slider = $('#mlaForecastLead');
-		const previous = Number.isFinite(preferredTime) ? preferredTime : preserve ? currentValidTime() : null;
+		const previous = Number.isFinite(state.requestedValidTime)
+			? state.requestedValidTime
+			: Number.isFinite(preferredTime) ? preferredTime : preserve ? currentValidTime() : null;
 		const times = new Set();
 		for (const {payload} of displayEntries()) for (const value of payload.valid_times || []) {
 			const stamp = new Date(value).getTime();
@@ -1219,6 +1327,7 @@
 			let nearest = 0;
 			for (let index = 1; index < state.timelineTimes.length; index++) if (Math.abs(state.timelineTimes[index] - previous) < Math.abs(state.timelineTimes[nearest] - previous)) nearest = index;
 			state.leadIndex = nearest;
+			if (Number.isFinite(state.requestedValidTime)) state.requestedValidTime = null;
 		} else if (state.timelineTimes.length) {
 			const sharedStart = Math.max(...displayEntries().map(item => new Date(item.payload.cycle_utc).getTime()).filter(Number.isFinite));
 			const firstShared = state.timelineTimes.findIndex(value => value >= sharedStart);
@@ -1282,7 +1391,7 @@
 				populateArchiveTimeControls();
 				renderAvailability();
 				state.loading = false;
-				populateArchive(true);
+				await restoreArchiveSelection();
 			} else {
 				state.loading = false;
 				loadSelectedModels();
@@ -1306,6 +1415,7 @@
 		$('#mlaForecastArchiveWeatherField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveWeatherSourceField').hidden = mode !== 'archive';
 		$('#mlaForecastArchiveMembersLabel').hidden = mode !== 'archive';
+		$('#mlaForecastArchiveReset').hidden = mode !== 'archive';
 	}
 
 	function setMode(mode) {
@@ -1394,7 +1504,7 @@
 		state.mapZoom = DEFAULT_MAP.zoom;
 		state.mapCenterLon = DEFAULT_MAP.longitude;
 		state.mapCenterLat = DEFAULT_MAP.latitude;
-		$('#mlaForecastMapStack').dataset.zoom = '1.000';
+		$('#mlaForecastMapStack').dataset.zoom = DEFAULT_MAP.zoom.toFixed(3);
 		scheduleRender();
 	}
 
@@ -1689,11 +1799,30 @@
 			? values.find(candidate => candidate.items.some(item => item.runKey === state.selectedSystem.runKey && item.system.id === state.selectedSystem.systemId))
 			: null;
 		if (!group) {
+			if (state.isolateSystem) state.isolateSystem = false;
 			group = values[0] || null;
 			const anchor = group && (group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0]);
 			state.selectedSystem = anchor ? {runKey: anchor.runKey, systemId: anchor.system.id} : null;
 		}
 		return group;
+	}
+
+	function closestAnalysisTrack(items, group, markerForItem) {
+		if (!group || !items.length) return [];
+		const reference = groupReference(group);
+		if (!Number.isFinite(reference.longitude) || !Number.isFinite(reference.latitude)) return items.slice(0, 1);
+		const ranked = items.map(item => {
+			const marker = markerForItem(item);
+			return {
+				item,
+				distance: marker ? haversineKm(reference.longitude, reference.latitude, Number(marker[1]), Number(marker[2])) : Infinity
+			};
+		}).filter(value => Number.isFinite(value.distance)).sort((a, b) => a.distance - b.distance);
+		return ranked.length && ranked[0].distance <= 900 ? [ranked[0].item] : [];
+	}
+
+	function analysisTracksForDisplay(items, group, markerForItem) {
+		return state.isolateSystem ? closestAnalysisTrack(items, group, markerForItem) : items;
 	}
 
 	function groupReference(group) {
@@ -1863,15 +1992,33 @@
 		return modelTrackColour(entry.model.id, entry.model.colour || entry.payload.model.colour);
 	}
 
+	function era5AnalysisTracks(validTime) {
+		const tracks = new Map();
+		for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!tracks.has(String(track.id))) tracks.set(String(track.id), {
+			id: String(track.id),
+			points: track.points,
+			marker: pointAt(track.points, stepForPayload(entry.payload))
+		});
+		if (atlasContextTrackActive(validTime) && !tracks.has(state.atlasContextTrack.id)) tracks.set(state.atlasContextTrack.id, {
+			id: state.atlasContextTrack.id,
+			points: state.atlasContextTrack.points,
+			marker: pointAtEpoch(state.atlasContextTrack.points, validTime)
+		});
+		return [...tracks.values()];
+	}
+
 	function drawTracks(systemGroups) {
 		const target = canvasContext('#mlaForecastTracks');
 		const selectedGroup = selectedForecastGroup(systemGroups);
 		const selectedKeys = new Set(selectedGroup ? selectedGroup.items.map(systemItemKey) : []);
+		const visibleSystemKeys = state.isolateSystem ? selectedKeys : null;
+		const analysisCounts = Object.fromEntries([...state.analysisSources].map(source => [source, 0]));
 		for (const entry of displayEntries()) {
 			const {model, payload, runKey} = entry;
 			const current = stepForPayload(payload);
 			const colour = runColour(entry);
 			for (const system of payload.systems || []) {
+				if (visibleSystemKeys && !visibleSystemKeys.has(`${runKey}:${system.id}`)) continue;
 				const tracks = tracksForSystem(payload, system);
 				const selected = selectedKeys.has(`${runKey}:${system.id}`);
 				if (state.showMembers && payload.model.kind === 'ensemble') {
@@ -1906,22 +2053,24 @@
 			const validTime = currentValidTime() == null ? archiveTargetTime() : currentValidTime();
 			for (const source of ALTERNATIVE_ANALYSIS_KEYS) {
 				if (!state.analysisSources.has(source)) continue;
-				for (const track of nativeReanalysisTracksOnDay(source, validTime)) {
+				const sourceTracks = analysisTracksForDisplay(
+					nativeReanalysisTracksOnDay(source, validTime),
+					selectedGroup,
+					track => pointAtEpoch(track.points, validTime)
+				);
+				for (const track of sourceTracks) {
 					drawAnalysisPath(target, track.points, ANALYSIS_TRACKS[source].colour, pointAtEpoch(track.points, validTime));
+					analysisCounts[source]++;
 				}
 			}
-			const verificationTracks = new Map();
-			for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!verificationTracks.has(String(track.id))) verificationTracks.set(String(track.id), {entry, track});
-			if (state.analysisSources.has('era5') && atlasContextTrackActive(validTime)) {
-				drawAnalysisPath(target, state.atlasContextTrack.points, ANALYSIS_TRACKS.era5.colour, pointAtEpoch(state.atlasContextTrack.points, validTime));
-			}
-			for (const {entry, track} of verificationTracks.values()) {
-				if (state.atlasContextTrack && String(track.id) === state.atlasContextTrack.id) continue;
-				const currentStep = stepForPayload(entry.payload);
-				if (state.analysisSources.has('era5')) drawAnalysisPath(target, track.points, ANALYSIS_TRACKS.era5.colour, pointAt(track.points, currentStep));
+			const era5Tracks = era5AnalysisTracks(validTime);
+			if (state.analysisSources.has('era5')) for (const item of analysisTracksForDisplay(era5Tracks, selectedGroup, value => value.marker)) {
+				drawAnalysisPath(target, item.points, ANALYSIS_TRACKS.era5.colour, item.marker);
+				analysisCounts.era5++;
 			}
 		}
 		drawAnnotations(target);
+		return analysisCounts;
 	}
 
 	function evolutionCanvasContext() {
@@ -2002,6 +2151,46 @@
 		catch (error) { cache.delete(item.system.id); throw error; }
 	}
 
+	function nativeAnalysisEvolutionSeries(track) {
+		return {
+			vorticity: (track.points || []).map(point => ({time: Number(point[0]) * HOUR_MS, value: point[4] == null ? NaN : Number(point[4])})).filter(point => Number.isFinite(point.time) && Number.isFinite(point.value)),
+			precipitation: (track.points || []).map(point => ({time: Number(point[0]) * HOUR_MS, value: point[5] == null ? NaN : Number(point[5])})).filter(point => Number.isFinite(point.time) && Number.isFinite(point.value)),
+			members: []
+		};
+	}
+
+	async function era5AnalysisEvolutionSeries(trackId) {
+		const asset = await ensureEra5AnalysisSeries();
+		const points = asset && asset.tracks[String(trackId)];
+		if (!points) return {vorticity: [], precipitation: [], members: []};
+		return {
+			vorticity: points.map(point => ({time: Number(point[0]) * HOUR_MS, value: point[1] == null ? NaN : Number(point[1]) / 10})).filter(point => Number.isFinite(point.time) && Number.isFinite(point.value)),
+			precipitation: points.map(point => ({time: Number(point[0]) * HOUR_MS, value: point[2] == null ? NaN : Number(point[2]) / 10})).filter(point => Number.isFinite(point.time) && Number.isFinite(point.value)),
+			members: []
+		};
+	}
+
+	async function selectedAnalysisEvolutionSeries(group) {
+		if (state.mode === 'latest' || !group) return [];
+		const target = currentValidTime() == null ? archiveTargetTime() : currentValidTime();
+		const output = [];
+		for (const source of state.analysisSources) {
+			let selected = [];
+			if (source === 'era5') selected = closestAnalysisTrack(era5AnalysisTracks(target), group, track => track.marker);
+			else selected = closestAnalysisTrack(nativeReanalysisTracksOnDay(source, target), group, track => pointAtEpoch(track.points, target));
+			if (!selected.length) continue;
+			try {
+				const values = source === 'era5'
+					? await era5AnalysisEvolutionSeries(selected[0].id)
+					: nativeAnalysisEvolutionSeries(selected[0]);
+				output.push({source, values, colour: ANALYSIS_TRACKS[source].colour, label: `${ANALYSIS_TRACKS[source].label} analysis`});
+			} catch (error) {
+				console.warn(`${ANALYSIS_TRACKS[source].label} timeline diagnostics unavailable`, error);
+			}
+		}
+		return output;
+	}
+
 	function chartNumber(value, digits) {
 		return Number(value).toLocaleString('en-GB', {maximumFractionDigits: digits, minimumFractionDigits: digits});
 	}
@@ -2023,12 +2212,15 @@
 			: item.model.label;
 	}
 
-	function updateEvolutionControls(groups, group) {
+	function updateEvolutionControls(groups, group, analysisSeries) {
 		const select = $('#mlaForecastEvolutionSystem');
 		select.innerHTML = groups.map(candidate => `<option value="${esc(candidate.key)}">${esc(groupLabel(candidate))}</option>`).join('');
 		select.value = group.key;
 		select.disabled = groups.length < 2;
-		$('#mlaForecastEvolutionLegend').innerHTML = group.items.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(chartRunLabel(item, group))}</span>`).join('');
+		$('#mlaForecastEvolutionLegend').innerHTML = [
+			...group.items.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(chartRunLabel(item, group))}</span>`),
+			...(analysisSeries || []).map(item => `<span><i style="--run-colour:${esc(item.colour)}" aria-hidden="true"></i>${esc(item.label)}</span>`)
+		].join('');
 	}
 
 	function drawEvolutionLine(context, points, x, y, colour, dash, markers, width, alpha) {
@@ -2064,11 +2256,13 @@
 		const group = selectedForecastGroup(systemGroups);
 		section.hidden = !group;
 		if (!group) return;
-		updateEvolutionControls(systemGroups, group);
 		const {canvas, context, width, height} = evolutionCanvasContext();
-		const series = (await Promise.all(group.items.map(async item => ({item, values: await forecastEvolutionSeries(item)}))))
+		const forecastSeries = (await Promise.all(group.items.map(async item => ({item, values: await forecastEvolutionSeries(item)}))))
 			.filter(item => item.values.vorticity.length || item.values.precipitation.length);
+		const analysisSeries = await selectedAnalysisEvolutionSeries(group);
 		if (renderSerial !== state.renderSerial) return;
+		updateEvolutionControls(systemGroups, group, analysisSeries);
+		const series = [...forecastSeries, ...analysisSeries];
 		if (!series.length) return;
 		const dark = getComputedStyle(root).getPropertyValue('--mla-ink').trim() || '#28211a';
 		const muted = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63';
@@ -2079,7 +2273,7 @@
 		const panelHeight = Math.max(58, (height - top - bottom - gap) / 2);
 		const vortTop = top, rainTop = top + panelHeight + gap;
 		const memberVorticity = state.showMembers
-			? series.flatMap(item => item.item.payload.model.kind === 'ensemble' ? item.values.members.flatMap(member => member.vorticity) : [])
+			? forecastSeries.flatMap(item => item.item.payload.model.kind === 'ensemble' ? item.values.members.flatMap(member => member.vorticity) : [])
 			: [];
 		const times = [...series.flatMap(item => [...item.values.vorticity, ...item.values.precipitation]), ...memberVorticity].map(point => point.time).filter(Number.isFinite);
 		const first = Math.min(...times), last = Math.max(...times), span = Math.max(3600000, last - first);
@@ -2108,14 +2302,15 @@
 			context.fillText(`${String(date.getUTCHours()).padStart(2, '0')}Z`, xx, rainTop + panelHeight + 23);
 		}
 		const dashPatterns = [[], [8, 3], [2, 3], [11, 3, 2, 3], [5, 3]];
-		if (state.showMembers) series.forEach(record => {
+		if (state.showMembers) forecastSeries.forEach(record => {
 			if (record.item.payload.model.kind !== 'ensemble') return;
 			const colour = runColour(record.item);
 			const alpha = clamp(.62 / Math.sqrt(Math.max(1, record.values.members.length)), .075, .22);
 			for (const member of record.values.members) drawEvolutionLine(context, member.vorticity, x, yVort, colour, [], false, .85, alpha);
 		});
 		series.forEach((record, index) => {
-			const colour = runColour(record.item), dash = dashPatterns[index % dashPatterns.length];
+			const colour = record.item ? runColour(record.item) : record.colour;
+			const dash = record.item ? dashPatterns[index % dashPatterns.length] : [];
 			drawEvolutionLine(context, record.values.vorticity, x, yVort, colour, dash, false, 2.7, 1);
 			drawEvolutionLine(context, record.values.precipitation, x, yRain, colour, dash, true, 2.2, .96);
 		});
@@ -2133,11 +2328,12 @@
 		canvas._forecastTimeline = {left, right: width - right, first, last};
 		const status = $('#mlaForecastEvolutionStatus');
 		const rainAvailable = group.items.filter(item => weatherFields(item).has('precipitation')).length;
-		const rainLoaded = series.filter(record => record.values.precipitation.length).length;
+		const rainLoaded = forecastSeries.filter(record => record.values.precipitation.length).length;
 		const rainLoading = group.items.filter(item => state.fullLoads.has(item.runKey)).length;
-		const ensembleMembers = state.showMembers ? series.reduce((sum, record) => sum + (record.item.payload.model.kind === 'ensemble' ? record.values.members.length : 0), 0) : 0;
-		status.textContent = `Bold: ${group.items.length} model/run mean${group.items.length === 1 ? '' : 's'}`
+		const ensembleMembers = state.showMembers ? forecastSeries.reduce((sum, record) => sum + (record.item.payload.model.kind === 'ensemble' ? record.values.members.length : 0), 0) : 0;
+		status.textContent = `${group.items.length} model/run mean${group.items.length === 1 ? '' : 's'}`
 			+ (ensembleMembers ? ` · thin: ${ensembleMembers} ensemble members` : '')
+			+ (analysisSeries.length ? ` · ${analysisSeries.map(item => item.label).join(', ')}` : '')
 			+ (rainLoading ? ` · loading mean precipitation for ${rainLoading}` : rainAvailable ? ` · mean precipitation ${rainLoaded}/${rainAvailable}` : ' · precipitation unavailable');
 		requestEvolutionWeather(group);
 	}
@@ -2151,18 +2347,11 @@
 		await ensureArchiveNativeReanalyses();
 		if (serial !== state.renderSerial) return;
 		const systemGroups = forecastSystemGroups();
-		drawTracks(systemGroups);
+		const analysisCounts = drawTracks(systemGroups);
 		await drawForecastEvolution(systemGroups, serial);
 		if (serial !== state.renderSerial) return;
 		updateTimeLabel();
 		const entries = displayEntries();
-		const era5TrackIds = new Set();
-		if (state.mode !== 'latest') for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
-		if (state.mode !== 'latest' && atlasContextTrackActive(currentValidTime() == null ? archiveTargetTime() : currentValidTime())) era5TrackIds.add(state.atlasContextTrack.id);
-		const analysisCounts = {};
-		for (const source of state.analysisSources) {
-			analysisCounts[source] = source === 'era5' ? era5TrackIds.size : nativeReanalysisTracksOnDay(source, currentValidTime() == null ? archiveTargetTime() : currentValidTime()).length;
-		}
 		const mapStack = $('#mlaForecastMapStack');
 		mapStack.dataset.zoom = state.mapZoom.toFixed(3);
 		mapStack.dataset.centerLon = state.mapCenterLon.toFixed(3);
@@ -2170,6 +2359,7 @@
 		const status = entries.length
 			? [`${entries.length} run${entries.length === 1 ? '' : 's'} loaded`, `${systemGroups.length} storm group${systemGroups.length === 1 ? '' : 's'}`]
 			: [];
+		if (state.isolateSystem) status.unshift('Focused system');
 		if (state.mode !== 'latest') for (const source of state.analysisSources) {
 			if (analysisCounts[source]) status.push(source === 'era5'
 				? `${analysisCounts[source]} ERA5 match${analysisCounts[source] === 1 ? '' : 'es'}`
@@ -2179,6 +2369,7 @@
 			}
 		}
 		$('#mlaForecastMapStatus').textContent = status.length ? status.join(' · ') : 'Forecast data not loaded.';
+		$('#mlaForecastShowAllTracks').hidden = !state.isolateSystem;
 		const runKey = $('#mlaForecastRunKey');
 		runKey.hidden = entries.length < 2;
 		runKey.innerHTML = entries.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(evolutionRunLabel(item))}</span>`).join('');
@@ -2186,6 +2377,7 @@
 		const visibleAnalyses = [...state.analysisSources].filter(source => analysisCounts[source]);
 		analysisKey.hidden = !visibleAnalyses.length;
 		analysisKey.innerHTML = visibleAnalyses.map(source => `<span><i style="--analysis-colour:${ANALYSIS_TRACKS[source].colour}" aria-hidden="true"></i>${esc(ANALYSIS_TRACKS[source].label)} analysis</span>`).join('');
+		writeForecastUrl();
 	}
 
 	let renderFrame = 0;
@@ -2204,19 +2396,34 @@
 		const rectangle = canvas.getBoundingClientRect();
 		const map = projection(rectangle.width, rectangle.height);
 		let best = null;
+		const focusedGroup = state.isolateSystem ? selectedForecastGroup() : null;
+		const permitted = focusedGroup ? new Set(focusedGroup.items.map(systemItemKey)) : null;
+		const pointSegmentDistanceSquared = (px, py, x1, y1, x2, y2) => {
+			const dx = x2 - x1, dy = y2 - y1;
+			const lengthSquared = dx * dx + dy * dy;
+			if (!lengthSquared) return (px - x1) ** 2 + (py - y1) ** 2;
+			const fraction = clamp(((px - x1) * dx + (py - y1) * dy) / lengthSquared, 0, 1);
+			return (px - (x1 + fraction * dx)) ** 2 + (py - (y1 + fraction * dy)) ** 2;
+		};
+		const clickX = event.clientX - rectangle.left, clickY = event.clientY - rectangle.top;
 		for (const entry of displayEntries()) {
 			const {model, payload, runKey} = entry;
-			const current = stepForPayload(payload);
 			for (const system of payload.systems || []) {
-				const point = pointAt(meanTrack(payload, system), current);
-				if (!point) continue;
-				const xy = map.project(point[2], point[1]);
-				const distance = Math.hypot(event.clientX - rectangle.left - xy[0], event.clientY - rectangle.top - xy[1]);
+				if (permitted && !permitted.has(`${runKey}:${system.id}`)) continue;
+				const points = meanTrack(payload, system).map(point => map.project(point[2], point[1]));
+				if (!points.length) continue;
+				let distanceSquared = Math.min(...points.map(point => (clickX - point[0]) ** 2 + (clickY - point[1]) ** 2));
+				for (let index = 1; index < points.length; index++) distanceSquared = Math.min(
+					distanceSquared,
+					pointSegmentDistanceSquared(clickX, clickY, points[index - 1][0], points[index - 1][1], points[index][0], points[index][1])
+				);
+				const distance = Math.sqrt(distanceSquared);
 				if (!best || distance < best.distance) best = {model, runKey, system, distance};
 			}
 		}
 		if (best && best.distance <= (event.pointerType === 'touch' ? 25 : 18)) {
 			state.selectedSystem = {runKey: best.runKey, systemId: best.system.id};
+			state.isolateSystem = true;
 			render();
 		}
 	}
@@ -2321,10 +2528,12 @@
 		$('#mlaForecastZoomIn').addEventListener('click', () => setMapZoom(state.mapZoom * 1.35));
 		$('#mlaForecastZoomOut').addEventListener('click', () => setMapZoom(state.mapZoom / 1.35));
 		$('#mlaForecastZoomReset').addEventListener('click', resetMapView);
+		$('#mlaForecastShowAllTracks').addEventListener('click', () => { state.isolateSystem = false; render(); });
 	}
 
 	$('#mlaForecastModeLatest').addEventListener('click', () => setMode('latest'));
 	$('#mlaForecastModeArchive').addEventListener('click', () => setMode('archive'));
+	$('#mlaForecastArchiveReset').addEventListener('click', resetArchive);
 	$('#mlaForecastRetry').addEventListener('click', () => initialise(true));
 	$('#mlaForecastModelChecks').addEventListener('change', event => {
 		const input = event.target.closest('input[type="checkbox"]');
@@ -2355,7 +2564,10 @@
 	$('#mlaForecastEvolutionSystem').addEventListener('change', event => {
 		const group = forecastSystemGroups().find(candidate => candidate.key === event.target.value);
 		const anchor = group && (group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0]);
-		if (anchor) state.selectedSystem = {runKey: anchor.runKey, systemId: anchor.system.id};
+		if (anchor) {
+			state.selectedSystem = {runKey: anchor.runKey, systemId: anchor.system.id};
+			state.isolateSystem = true;
+		}
 		render();
 	});
 	$('#mlaForecastLead').addEventListener('input', event => { state.leadIndex = Number(event.target.value); scheduleRender(); });
@@ -2437,7 +2649,7 @@
 	window.addEventListener('mla:forecast-visible', event => {
 		const detail = event.detail || {};
 		const parameters = new URLSearchParams(location.search);
-		if (!atlasContextApplied && parameters.has('system') && String(detail.system || '') === parameters.get('system')) {
+		if (!atlasContextApplied && !parameters.has('fmode') && parameters.has('system') && String(detail.system || '') === parameters.get('system')) {
 			atlasContextApplied = applyAtlasArchiveContext(detail);
 		}
 		initialise();
@@ -2463,8 +2675,38 @@
 	window.addEventListener('resize', () => { clearTimeout(state.resizeTimer); state.resizeTimer = setTimeout(resizeAndRender, 120); });
 
 	const parameters = new URLSearchParams(location.search);
+	const hasForecastState = parameters.has('fmode');
 	if (['archive', 'tigge'].includes(parameters.get('fmode'))) state.mode = 'archive';
 	else if (parameters.get('fmode') === 'latest') state.mode = 'latest';
+	if (hasForecastState) {
+		const models = parameters.get('fmodels');
+		if (models != null) {
+			state.selectedModels = new Set(models === 'none' ? [] : models.split(',').filter(model => OPERATIONAL_MODEL_ORDER.includes(model)));
+			state.hasModelPreference = true;
+		}
+		const analyses = parameters.get('fanalysis');
+		if (analyses != null) state.analysisSources = new Set(analyses === 'none' ? [] : analyses.split(',').filter(source => Object.hasOwn(ANALYSIS_TRACKS, source)));
+		state.initialization = /^\d{10}$/.test(parameters.get('finit') || '') ? parameters.get('finit') : 'latest';
+		state.showMembers = parameters.get('fmembers') === '1';
+		state.isolateSystem = parameters.get('ffocus') === '1';
+		state.weather = ['none', 'vorticity', 'precipitation'].includes(parameters.get('fweather')) ? parameters.get('fweather') : 'none';
+		state.weatherModel = parameters.get('fweather_run') || '';
+		const runs = parameters.get('fruns');
+		state.requestedArchiveRuns = runs ? new Set(runs.split(',').filter(Boolean)) : null;
+		const selected = parameters.get('fsystem') || '';
+		const separator = selected.lastIndexOf('~');
+		if (separator > 0 && separator < selected.length - 1) state.requestedSystem = {runKey: selected.slice(0, separator), systemId: selected.slice(separator + 1)};
+		const requestedValid = Date.parse(`${parameters.get('fvalid') || ''}:00:00Z`);
+		if (Number.isFinite(requestedValid)) state.requestedValidTime = requestedValid;
+		const zoom = Number(parameters.get('fzoom'));
+		if (parameters.has('fzoom') && Number.isFinite(zoom)) state.mapZoom = clamp(zoom, 1, 14);
+		const centre = (parameters.get('fcentre') || '').split(',').map(Number);
+		if (centre.length === 2 && centre.every(Number.isFinite)) {
+			state.mapCenterLon = clamp(centre[0], DOMAIN.west, DOMAIN.east);
+			state.mapCenterLat = clamp(centre[1], DOMAIN.south, DOMAIN.north);
+		}
+		$('#mlaForecastArchiveSearch').value = parameters.get('fquery') || '';
+	}
 	const requestedArchiveDate = parameters.get('fdate');
 	if (/^\d{4}-\d{2}-\d{2}$/.test(requestedArchiveDate || '')) {
 		state.archiveDate = requestedArchiveDate;

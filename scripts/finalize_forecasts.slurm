@@ -15,6 +15,7 @@ ATLAS_ROOT="${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is required}"
 RUN_ROOT="${1:?run staging root is required}"
 OUTPUT="${2:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
 MODE="${3:-full}"
+IGNORED_MODELS="${4:-}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 cd "$ATLAS_ROOT"
 ARGS=(--target "$OUTPUT" --run-root "$RUN_ROOT")
@@ -23,5 +24,8 @@ if [[ "$MODE" == "partial" ]]; then
 elif [[ "$MODE" != "full" ]]; then
   echo "Unknown finalization mode: $MODE (expected full or partial)" >&2
   exit 2
+fi
+if [[ -n "$IGNORED_MODELS" ]]; then
+  ARGS+=(--ignore-missing-models "$IGNORED_MODELS")
 fi
 exec "$PYTHON" -m forecast_pipeline.merge_runs "${ARGS[@]}"

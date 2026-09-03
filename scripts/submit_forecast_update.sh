@@ -10,12 +10,13 @@ mkdir -p "$ATLAS_ROOT/hpc-logs"
 # six-hourly live update.
 while IFS= read -r job_name; do
   case "$job_name" in
-    mla-fc-gfs|mla-fc-gefs|mla-fc-aigfs|mla-fc-aigefs|\
+    mla-fc-gfs|mla-fc-gefs|mla-fc-aigfs|\
     mla-fc-graphcast_noaa|mla-fc-graphcast_ifs_noaa|mla-fc-mogreps_g|\
     mla-fc-ifs|mla-fc-ifs_ens|mla-fc-aifs|mla-fc-aifs_ens|\
     mla-fc-operational)
       echo "An operational forecast update is already queued or running; no duplicate submitted."
       /usr/bin/bash "$ATLAS_ROOT/scripts/submit_forecast_recent_backfill.sh"
+      /usr/bin/bash "$ATLAS_ROOT/scripts/submit_aigefs_shards.sh" recent
       exit 0
       ;;
   esac
@@ -27,7 +28,7 @@ RUN_ROOT="$ATLAS_ROOT/.forecast-runs/$RUN_ID"
 OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
 mkdir -p "$RUN_ROOT"
 
-MODELS=(gfs gefs aigfs aigefs graphcast-noaa graphcast-ifs-noaa mogreps-g ifs ifs-ens aifs aifs-ens)
+MODELS=(gfs gefs aigfs graphcast-noaa graphcast-ifs-noaa mogreps-g ifs ifs-ens aifs aifs-ens)
 JOB_IDS=()
 ECMWF_PREVIOUS=""
 for model in "${MODELS[@]}"; do
@@ -47,6 +48,7 @@ done
 DEPENDENCY="$(IFS=:; echo "${JOB_IDS[*]}")"
 FINAL_ID="$(sbatch --parsable --job-name=mla-fc-operational \
   --dependency="afterany:$DEPENDENCY" \
-  scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT")"
+  scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT" full aigefs)"
 echo "Submitted model jobs ${JOB_IDS[*]} and finalizer $FINAL_ID"
 /usr/bin/bash "$ATLAS_ROOT/scripts/submit_forecast_recent_backfill.sh"
+/usr/bin/bash "$ATLAS_ROOT/scripts/submit_aigefs_shards.sh" recent

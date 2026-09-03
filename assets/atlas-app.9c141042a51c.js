@@ -99,6 +99,7 @@
 	let forecastArchiveIndexPromise = null;
 	let forecastDossierSerial = 0;
 	let reanalysisManifestPromise = null;
+	let reanalysisManifest = null;
 	const compositeCache = new Map();
 	const compositePromises = new Map();
 	const compositeErrors = new Map();
@@ -425,6 +426,7 @@
 			if (!response.ok) throw new Error(`Could not fetch the reanalysis inventory (${response.status})`);
 			const value = await response.json();
 			if (value.schema !== 'lps-atlas-reanalysis-manifest-v1' || !value.sources) throw new Error('Unsupported reanalysis inventory');
+			reanalysisManifest = value;
 			return value;
 		})().catch(error => {
 			reanalysisManifestPromise = null;
@@ -501,6 +503,35 @@
 		return points && points.length ? {match, points} : null;
 	}
 
+	function syncReanalysisOptions() {
+		let eligibleAlternatives = 0;
+		for (const source of ALTERNATIVE_REANALYSIS_KEYS) {
+			const option = $(`#mlaTrackSource option[value="${source}"]`);
+			if (!option) continue;
+			const definition = reanalysisManifest && reanalysisManifest.sources[source];
+			const ready = Boolean(definition && definition.status === 'ready');
+			const eligible = ready && (state.selected == null || Boolean(reanalysisTrack(source, state.selected)));
+			option.disabled = !eligible;
+			option.hidden = !eligible;
+			if (eligible) eligibleAlternatives++;
+		}
+		const compare = $('#mlaTrackSource option[value="compare"]');
+		if (compare) {
+			compare.disabled = !eligibleAlternatives;
+			compare.hidden = !eligibleAlternatives;
+		}
+		if (state.selected != null && state.trackSource !== 'era5') {
+			const selectedOption = $(`#mlaTrackSource option[value="${state.trackSource}"]`);
+			if (!selectedOption || selectedOption.disabled) {
+				state.trackSource = 'era5';
+				$('#mlaTrackSource').value = 'era5';
+				updateReanalysisStatus('');
+				mapScheduler.invalidate(MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+				writeUrl('replace');
+			}
+		}
+	}
+
 	function requestedReanalysisSources() {
 		if (state.trackSource === 'compare') return ALTERNATIVE_REANALYSIS_KEYS;
 		return state.trackSource === 'era5' ? [] : [state.trackSource];
@@ -537,15 +568,12 @@
 	async function initialiseReanalysisAvailability() {
 		try {
 			const manifest = await ensureReanalysisManifest();
-			for (const source of ALTERNATIVE_REANALYSIS_KEYS) {
-				const option = $(`#mlaTrackSource option[value="${source}"]`);
-				if (option) option.disabled = !manifest.sources[source] || manifest.sources[source].status !== 'ready';
-			}
-			const compare = $('#mlaTrackSource option[value="compare"]');
-			if (compare) compare.disabled = !ALTERNATIVE_REANALYSIS_KEYS.some(source => manifest.sources[source] && manifest.sources[source].status === 'ready');
+			const ready = ALTERNATIVE_REANALYSIS_KEYS.filter(source => manifest.sources[source] && manifest.sources[source].status === 'ready');
+			await Promise.allSettled(ready.map(ensureReanalysisAsset));
+			syncReanalysisOptions();
 			if (state.trackSource !== 'era5') await loadRequestedReanalyses({quiet: true});
 		} catch (error) {
-			for (const option of $$('#mlaTrackSource option:not([value="era5"])')) option.disabled = true;
+			for (const option of $$('#mlaTrackSource option:not([value="era5"])')) { option.disabled = true; option.hidden = true; }
 			if (state.trackSource !== 'era5') updateReanalysisStatus('Alternative-analysis inventory unavailable', 'error');
 			console.warn('Matched reanalysis inventory unavailable', error);
 		}
@@ -3465,6 +3493,7 @@
 		const next = Number.isInteger(index) ? index : null;
 		if (state.focusSource === 'point' && state.selected !== next && !(options && options.keepTimeFocus)) clearTimeFocus();
 		state.selected = next;
+		if (reanalysisManifest) syncReanalysisOptions();
 		if (state.selected != null && Number.isFinite(state.focusTimeMs)) state.focusPointIndex = pointIndexAtTime(state.selected, state.focusTimeMs);
 		state.hovered = null;
 		rainfallMapCache = null;

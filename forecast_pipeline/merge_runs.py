@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--keep-staging", action="store_true")
     parser.add_argument("--partial", action="store_true", help="merge a cycle backfill without marking unsubmitted models failed")
+    parser.add_argument(
+        "--ignore-missing-models",
+        default="",
+        help="comma-separated models intentionally published by a separate updater",
+    )
     parser.add_argument("--plan", type=Path, help="audit a recent-cycle backfill plan after merging")
     return parser.parse_args()
 
@@ -168,7 +173,15 @@ def main() -> None:
                     manifest.setdefault("archive", []), enriched_entry
                 )
 
-        missing_models = [] if args.partial else sorted(set(DEFAULT_MODELS) - staged_models)
+        ignored_models = {value.strip() for value in args.ignore_missing_models.split(",") if value.strip()}
+        unknown_ignored = ignored_models - set(DEFAULT_MODELS)
+        if unknown_ignored:
+            raise ValueError(f"Unknown ignored forecast models: {sorted(unknown_ignored)}")
+        missing_models = (
+            []
+            if args.partial
+            else sorted(set(DEFAULT_MODELS) - staged_models - ignored_models)
+        )
         for model in missing_models:
             attempted.append(model)
             manifest.setdefault("attempts", {})[model] = {
