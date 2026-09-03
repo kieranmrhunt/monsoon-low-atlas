@@ -28,11 +28,12 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 from .common import sha256
-from .track import LINKER, PARAMETERS, SOURCES
+from .track import LINKER, PARAMETERS
 
 
 SCHEMA = "lps-atlas-reanalysis-parallel-link-v1"
 MONTH_PATTERN = re.compile(r"^candidates-(\d{6})\.csv$")
+SOURCE_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
 
 
 def utc_now() -> str:
@@ -86,6 +87,16 @@ def candidate_inventory(output_root: Path) -> dict[str, Path]:
     return inventory
 
 
+def validate_source_label(source: str) -> str:
+    """Return a filesystem-safe source label usable by any frozen-v5.6 run."""
+
+    if not SOURCE_LABEL_PATTERN.fullmatch(source):
+        raise ValueError(
+            "source must be 1--192 characters and contain only letters, numbers, '.', '_' or '-'"
+        )
+    return source
+
+
 def block_months(inventory: dict[str, Path], core_year: int) -> list[str]:
     selected = [
         month
@@ -98,8 +109,7 @@ def block_months(inventory: dict[str, Path], core_year: int) -> list[str]:
 
 
 def prepare(source: str, output_root: Path, run_root: Path, *, force: bool = False) -> Path:
-    if source not in SOURCES:
-        raise ValueError(f"unsupported source {source}")
+    source = validate_source_label(source)
     output_root = output_root.resolve()
     run_root = run_root.resolve()
     inventory = candidate_inventory(output_root)
@@ -327,6 +337,7 @@ def core_frame(row: dict[str, str]) -> tuple[pd.DataFrame, pd.Series]:
 
 
 def merge(source: str, output_root: Path, run_root: Path) -> Path:
+    source = validate_source_label(source)
     rows = completed_rows(run_root)
     identities, reconciliation = reconcile_blocks(rows)
     earliest: dict[str, pd.Timestamp] = {}
@@ -402,7 +413,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     prepare_parser = subparsers.add_parser("prepare")
-    prepare_parser.add_argument("--source", choices=SOURCES, required=True)
+    prepare_parser.add_argument("--source", required=True)
     prepare_parser.add_argument("--output-root", type=Path, required=True)
     prepare_parser.add_argument("--run-root", type=Path, required=True)
     prepare_parser.add_argument("--force", action="store_true")
@@ -411,7 +422,7 @@ def parse_args() -> argparse.Namespace:
     worker_parser.add_argument("--task-id", type=int, required=True)
     worker_parser.add_argument("--force", action="store_true")
     merge_parser = subparsers.add_parser("merge")
-    merge_parser.add_argument("--source", choices=SOURCES, required=True)
+    merge_parser.add_argument("--source", required=True)
     merge_parser.add_argument("--output-root", type=Path, required=True)
     merge_parser.add_argument("--run-root", type=Path, required=True)
     return parser.parse_args()

@@ -1763,18 +1763,20 @@
 			button.tabIndex = selected ? 0 : -1;
 		});
 		$$('[data-panel]').forEach(panel => { panel.hidden = panel.dataset.panel !== name; });
-		$('#mlaFilterDock').hidden = name === 'data' || name === 'forecast';
+		$('#mlaFilterDock').hidden = name === 'data' || name === 'forecast' || name === 'climate-change';
 		renderCurrentPanel();
 		if (push) writeUrl('push');
 	}
 
 	function bindTabs() {
-		const tabs = $$('[role="tab"]');
-		tabs.forEach((button, index) => {
+		const allTabs = $$('[role="tab"]');
+		allTabs.forEach(button => {
 			button.addEventListener('click', () => activateTab(button.dataset.tab, true));
 			button.addEventListener('keydown', event => {
 				if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
 				event.preventDefault();
+				const tabs = allTabs.filter(candidate => !candidate.hidden);
+				const index = tabs.indexOf(button);
 				let target = index;
 				if (event.key === 'ArrowLeft') target = (index - 1 + tabs.length) % tabs.length;
 				if (event.key === 'ArrowRight') target = (index + 1) % tabs.length;
@@ -1832,6 +1834,10 @@
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('zoom', state.mapZoom.toFixed(2));
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
+		const existing = new URLSearchParams(window.location.search);
+		for (const key of ['cmpair', 'cmseason', 'cmmetric']) {
+			if (existing.has(key)) parameters.set(key, existing.get(key));
+		}
 		return parameters;
 	}
 
@@ -1845,6 +1851,7 @@
 	function readUrl() {
 		const parameters = new URLSearchParams(window.location.search);
 		const validTabs = new Set(['explore', 'forecast', 'climatology', 'extremes', 'data']);
+		if (ensureAtlasConfig().climateChangeBase) validTabs.add('climate-change');
 		if (validTabs.has(parameters.get('tab'))) state.tab = parameters.get('tab');
 		const years = parameters.get('years');
 		if (years && /^\d{4}-\d{4}$/.test(years)) {
@@ -5418,6 +5425,9 @@
 			} : {}}));
 		}
 		else if (state.tab === 'climatology') renderClimatology();
+		else if (state.tab === 'climate-change') {
+			window.dispatchEvent(new CustomEvent('mla:climate-visible', {detail: {geo: CORE.geo}}));
+		}
 		else if (state.tab === 'extremes') renderExtremes();
 		else if (state.tab === 'verification') renderVerification();
 		else if (state.tab === 'data') renderData();

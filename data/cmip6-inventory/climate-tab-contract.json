@@ -28,6 +28,8 @@
     "Run a month-scale field and timestep QA pilot before a model is admitted.",
     "Use one frozen detector/linker version across historical and scenario segments.",
     "Join historical and scenario segments only for the same model, member and compatible grid.",
+    "Use a common one-degree analysis grid and a fixed ERA5 land mask and orography so geography does not vary by model.",
+    "Bilinearly sample common-grid 10-m wind onto a 0.25-degree calculation mesh before the frozen 125-km P95 circulation-wind operator; record that this stabilises the percentile but adds no source information.",
     "Store raw detector diagnostics so resolution sensitivity can be audited.",
     "Do not tune thresholds to force agreement with ERA5 counts; report model biases separately."
   ],
@@ -50,12 +52,21 @@
     "future_period": "JJAS 2080",
     "future_experiment": "ssp245",
     "common_grid_degrees": 1.0,
-    "status": "standardisation, frozen detector, linker and compact publication asset completed",
+    "status": "standardisation, frozen detector/linker, final-centre physics, classification and compact seasonal publication asset completed",
     "interpretation": "Engineering canary only; one season per climate is not a climate-change estimate."
+  },
+  "first_production_pair": {
+    "source_id": "MPI-ESM1-2-HR",
+    "member_id": "r1i1p1f1",
+    "historical": "1981-2010, all months",
+    "future": "2071-2100, all months, SSP2-4.5",
+    "common_grid_degrees": 1.0,
+    "status": "running",
+    "publication_gate": "The browser tab remains hidden until both complete windows, their paired summary and the staging bundle pass."
   },
   "prepublication_gates": [
     "Run at least the 1981-2010 and 2071-2100 windows for every admitted model/scenario pair.",
-    "Apply source-native final-centre wind, pressure-deficit and closed-isobar intensity classification using a common land mask.",
+    "Apply common-grid final-centre wind, pressure-deficit and actual closed-isobar intensity classification using a common land mask.",
     "Quantify 1-degree versus native-grid sensitivity for a representative high-resolution model.",
     "Validate Gregorian, no-leap and 360-day calendar identity without mapping nonexistent dates into civil time.",
     "Report historical frequency and intensity biases against ERA5 separately from projected paired changes."

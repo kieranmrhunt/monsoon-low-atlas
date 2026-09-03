@@ -1,0 +1,575 @@
+(function () {
+	'use strict';
+
+	const root = document.getElementById('monsoon-low-atlas');
+	const tab = document.getElementById('mlaTabClimateChange');
+	const panel = document.getElementById('mlaPanelClimateChange');
+	const configNode = document.getElementById('mla-data-config');
+	if (!root || !tab || !panel || !configNode) return;
+
+	let config;
+	try {
+		config = JSON.parse(configNode.textContent);
+	} catch (_) {
+		return;
+	}
+	if (!config.climateChangeBase) return;
+	tab.hidden = false;
+
+	const $ = selector => panel.querySelector(selector);
+	const FONT = '"effra", Effra, Arial, sans-serif';
+	const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+	const CLASSES = ['L', 'D', 'DD', 'CS', 'SCS', 'VSCS+'];
+	const HISTORICAL_COLOUR = '#243665';
+	const FUTURE_COLOUR = '#c6473b';
+	const METRICS = {
+		systems: {label: 'Systems', unit: 'yr⁻¹', digits: 1, zero: true},
+		depressions_or_stronger: {label: 'Depressions or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
+		deep_depressions_or_stronger: {label: 'Deep depressions or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
+		cyclonic_storms_or_stronger: {label: 'Cyclonic storms or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
+		system_days: {label: 'System-days', unit: 'days yr⁻¹', digits: 1, zero: true},
+		mean_duration_hours: {label: 'Mean duration', unit: 'h', digits: 0},
+		mean_peak_wind_ms: {label: 'Mean peak circulation wind', unit: 'm s⁻¹', digits: 1},
+		mean_peak_pressure_deficit_hpa: {label: 'Mean peak pressure deficit', unit: 'hPa', digits: 1},
+		mean_peak_24h_precipitation_mm: {label: 'Mean peak 24 h precipitation', unit: 'mm', digits: 1}
+	};
+	const VALID_SEASONS = new Set(['all', 'jjas', 'mam', 'ond', 'djf']);
+	const state = {pair: '', season: 'jjas', metric: 'systems'};
+	const cache = new Map();
+	let index = null;
+	let current = null;
+	let geography = null;
+	let loadingPromise = null;
+	let pairSerial = 0;
+
+	function readState() {
+		try {
+			const stored = JSON.parse(localStorage.getItem('mla-climate-state-v1') || '{}');
+			if (typeof stored.pair === 'string') state.pair = stored.pair;
+			if (VALID_SEASONS.has(stored.season)) state.season = stored.season;
+			if (Object.hasOwn(METRICS, stored.metric)) state.metric = stored.metric;
+		} catch (_) {
+			// Private browsing can disable storage without disabling the atlas.
+		}
+		const parameters = new URLSearchParams(window.location.search);
+		if (parameters.has('cmpair')) state.pair = parameters.get('cmpair');
+		if (VALID_SEASONS.has(parameters.get('cmseason'))) state.season = parameters.get('cmseason');
+		if (Object.hasOwn(METRICS, parameters.get('cmmetric'))) state.metric = parameters.get('cmmetric');
+	}
+
+	function writeState() {
+		try {
+			localStorage.setItem('mla-climate-state-v1', JSON.stringify(state));
+		} catch (_) {
+			// URL state remains available when local storage is unavailable.
+		}
+		const url = new URL(window.location.href);
+		url.searchParams.set('cmpair', state.pair);
+		url.searchParams.set('cmseason', state.season);
+		url.searchParams.set('cmmetric', state.metric);
+		history.replaceState(null, '', url);
+	}
+
+	function baseUrl() {
+		const value = String(config.climateChangeBase).replace(/\/?$/, '/');
+		return new URL(value, window.location.href);
+	}
+
+	function assetUrl(path) {
+		return new URL(path, baseUrl()).toString();
+	}
+
+	async function decodeJson(response) {
+		if (!response.ok) throw new Error(`Climate asset returned ${response.status}`);
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return JSON.parse(new TextDecoder().decode(bytes));
+		if (!('DecompressionStream' in window)) throw new Error('A current browser is required to open compressed climate assets.');
+		const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+		return new Response(stream).json();
+	}
+
+	async function fetchJson(url, cacheMode = 'force-cache') {
+		if (!cache.has(url)) cache.set(url, fetch(url, {cache: cacheMode}).then(decodeJson));
+		return cache.get(url);
+	}
+
+	function pairLabel(pair) {
+		const future = pair.future.run;
+		return `${pair.source_label} · ${future.experiment_id.toUpperCase()} · ${pair.member_id}`;
+	}
+
+	async function loadIndex() {
+		const manifestUrl = assetUrl('manifest.json');
+		const manifest = await fetchJson(manifestUrl, 'no-store');
+		if (manifest.schema !== 'lps-atlas-cmip6-climate-index-v1' || !manifest.index || !manifest.index.path) {
+			throw new Error('Climate manifest does not match this atlas.');
+		}
+		const loaded = await fetchJson(assetUrl(manifest.index.path));
+		if (loaded.schema !== manifest.schema || loaded.status !== 'validated-production-window' || !Array.isArray(loaded.pairs) || !loaded.pairs.length) {
+			throw new Error('No validated climate experiment pairs are available.');
+		}
+		return loaded;
+	}
+
+	async function loadPair(pair) {
+		const [historical, future, change] = await Promise.all([
+			fetchJson(assetUrl(pair.historical.url)),
+			fetchJson(assetUrl(pair.future.url)),
+			fetchJson(assetUrl(pair.change.url))
+		]);
+		if (historical.schema !== 'lps-atlas-cmip6-climate-summary-v2' || future.schema !== historical.schema) {
+			throw new Error('Climate run assets use an unsupported schema.');
+		}
+		if (change.schema !== 'lps-atlas-cmip6-paired-change-v2') {
+			throw new Error('Climate change asset uses an unsupported schema.');
+		}
+		return {pair, historical, future, change};
+	}
+
+	function populateControls() {
+		const pairControl = $('#mlaClimatePair');
+		pairControl.replaceChildren(...index.pairs.map(pair => {
+			const option = document.createElement('option');
+			option.value = pair.id;
+			option.textContent = pairLabel(pair);
+			return option;
+		}));
+		if (!index.pairs.some(pair => pair.id === state.pair)) state.pair = index.defaults && index.defaults.pair || index.pairs[0].id;
+		pairControl.value = state.pair;
+		$('#mlaClimateSeason').value = state.season;
+		const metricControl = $('#mlaClimateMetric');
+		metricControl.replaceChildren(...Object.entries(METRICS).map(([key, metric]) => {
+			const option = document.createElement('option');
+			option.value = key;
+			option.textContent = metric.label;
+			return option;
+		}));
+		metricControl.value = state.metric;
+	}
+
+	function css(name, fallback) {
+		return getComputedStyle(root).getPropertyValue(name).trim() || fallback;
+	}
+
+	function setupCanvas(canvas) {
+		const bounds = canvas.getBoundingClientRect();
+		const width = Math.max(260, bounds.width || canvas.clientWidth || 600);
+		const height = Math.max(220, bounds.height || canvas.clientHeight || 300);
+		const ratio = Math.min(window.devicePixelRatio || 1, 2);
+		canvas.width = Math.round(width * ratio);
+		canvas.height = Math.round(height * ratio);
+		const context = canvas.getContext('2d');
+		context.setTransform(ratio, 0, 0, ratio, 0, 0);
+		context.clearRect(0, 0, width, height);
+		context.font = `12px ${FONT}`;
+		context.lineJoin = 'round';
+		context.lineCap = 'round';
+		return {context, width, height};
+	}
+
+	function finite(values) {
+		return values.filter(value => value !== null && value !== '' && value !== undefined).map(Number).filter(Number.isFinite);
+	}
+
+	function extent(values, includeZero) {
+		const clean = finite(values);
+		if (!clean.length) return [0, 1];
+		let minimum = Math.min(...clean);
+		let maximum = Math.max(...clean);
+		if (includeZero) minimum = Math.min(0, minimum);
+		if (maximum === minimum) maximum = minimum + Math.max(1, Math.abs(minimum) * .1);
+		const padding = (maximum - minimum) * .08;
+		return [includeZero ? Math.max(0, minimum - padding) : minimum - padding, maximum + padding];
+	}
+
+	function drawAxes(context, plot, yExtent, yLabel) {
+		const ink = css('--mla-muted', '#5f6574');
+		const line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line;
+		context.fillStyle = ink;
+		context.lineWidth = 1;
+		context.textAlign = 'right';
+		context.textBaseline = 'middle';
+		for (let index = 0; index <= 4; index += 1) {
+			const fraction = index / 4;
+			const y = plot.bottom - fraction * (plot.bottom - plot.top);
+			const value = yExtent[0] + fraction * (yExtent[1] - yExtent[0]);
+			context.beginPath();
+			context.moveTo(plot.left, y);
+			context.lineTo(plot.right, y);
+			context.stroke();
+			context.fillText(value.toFixed(Math.abs(value) < 10 ? 1 : 0), plot.left - 7, y);
+		}
+		context.save();
+		context.translate(13, (plot.top + plot.bottom) / 2);
+		context.rotate(-Math.PI / 2);
+		context.textAlign = 'center';
+		context.fillText(yLabel, 0, 0);
+		context.restore();
+	}
+
+	function drawLegend(context, items, x, y) {
+		context.textAlign = 'left';
+		context.textBaseline = 'middle';
+		let cursor = x;
+		for (const item of items) {
+			context.strokeStyle = item.colour;
+			context.lineWidth = 3;
+			context.beginPath();
+			context.moveTo(cursor, y);
+			context.lineTo(cursor + 20, y);
+			context.stroke();
+			context.fillStyle = css('--mla-ink', '#202334');
+			context.fillText(item.label, cursor + 26, y);
+			cursor += 32 + context.measureText(item.label).width + 18;
+		}
+	}
+
+	function drawAnnual() {
+		const canvas = $('#mlaClimateAnnualChart');
+		const {context, width, height} = setupCanvas(canvas);
+		const metric = METRICS[state.metric];
+		const historical = current.historical.seasonal[state.season].annual.map(row => row[state.metric] == null ? NaN : Number(row[state.metric]));
+		const future = current.future.seasonal[state.season].annual.map(row => row[state.metric] == null ? NaN : Number(row[state.metric]));
+		const yExtent = extent([...historical, ...future], metric.zero);
+		const plot = {left: 58, right: width - 18, top: 31, bottom: height - 34};
+		drawAxes(context, plot, yExtent, metric.unit);
+		const maximumLength = Math.max(historical.length, future.length);
+		const x = index => plot.left + index / Math.max(1, maximumLength - 1) * (plot.right - plot.left);
+		const y = value => plot.bottom - (value - yExtent[0]) / (yExtent[1] - yExtent[0]) * (plot.bottom - plot.top);
+		for (const [values, colour] of [[historical, HISTORICAL_COLOUR], [future, FUTURE_COLOUR]]) {
+			context.strokeStyle = colour;
+			context.lineWidth = 2.2;
+			context.beginPath();
+			let open = false;
+			values.forEach((value, index) => {
+				if (!Number.isFinite(value)) { open = false; return; }
+				if (!open) context.moveTo(x(index), y(value));
+				else context.lineTo(x(index), y(value));
+				open = true;
+			});
+			context.stroke();
+		}
+		context.fillStyle = css('--mla-muted', '#5f6574');
+		context.textAlign = 'left';
+		context.textBaseline = 'top';
+		context.fillText('1', plot.left, plot.bottom + 8);
+		context.textAlign = 'right';
+		context.fillText(String(maximumLength), plot.right, plot.bottom + 8);
+		context.textAlign = 'center';
+		context.fillText('year within window', (plot.left + plot.right) / 2, plot.bottom + 8);
+		drawLegend(context, [
+			{label: current.historical.run.period_label, colour: HISTORICAL_COLOUR},
+			{label: current.future.run.period_label, colour: FUTURE_COLOUR}
+		], plot.left, 16);
+	}
+
+	function drawMonthly() {
+		const canvas = $('#mlaClimateMonthlyChart');
+		const {context, width, height} = setupCanvas(canvas);
+		const left = 48, right = width - 12, top = 31, bottom = height - 34;
+		const historical = current.historical.monthly.map(row => Number(row.systems_per_year));
+		const future = current.future.monthly.map(row => Number(row.systems_per_year));
+		const yExtent = extent([...historical, ...future], true);
+		drawAxes(context, {left, right, top, bottom}, yExtent, 'systems yr⁻¹');
+		const groupWidth = (right - left) / 12;
+		const barWidth = Math.max(3, groupWidth * .31);
+		const y = value => bottom - value / yExtent[1] * (bottom - top);
+		for (let index = 0; index < 12; index += 1) {
+			const centre = left + (index + .5) * groupWidth;
+			for (const [value, colour, offset] of [[historical[index], HISTORICAL_COLOUR, -barWidth], [future[index], FUTURE_COLOUR, 0]]) {
+				context.fillStyle = colour;
+				context.fillRect(centre + offset, y(value), barWidth - 1, bottom - y(value));
+			}
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.textBaseline = 'top';
+			context.fillText(MONTHS[index], centre - .5, bottom + 8);
+		}
+		drawLegend(context, [{label: 'Historical', colour: HISTORICAL_COLOUR}, {label: 'Future', colour: FUTURE_COLOUR}], left, 16);
+	}
+
+	function drawClasses() {
+		const canvas = $('#mlaClimateClassChart');
+		const {context, width, height} = setupCanvas(canvas);
+		const left = 48, right = width - 12, top = 31, bottom = height - 34;
+		const historicalCounts = current.historical.seasonal[state.season].class_counts;
+		const futureCounts = current.future.seasonal[state.season].class_counts;
+		const historicalTotal = Object.values(historicalCounts).reduce((sum, value) => sum + Number(value), 0) || 1;
+		const futureTotal = Object.values(futureCounts).reduce((sum, value) => sum + Number(value), 0) || 1;
+		const historical = CLASSES.map((_, index) => 100 * Number(historicalCounts[String(index + 1)] || 0) / historicalTotal);
+		const future = CLASSES.map((_, index) => 100 * Number(futureCounts[String(index + 1)] || 0) / futureTotal);
+		const yExtent = extent([...historical, ...future], true);
+		drawAxes(context, {left, right, top, bottom}, yExtent, 'share (%)');
+		const groupWidth = (right - left) / CLASSES.length;
+		const barWidth = Math.max(5, groupWidth * .3);
+		const y = value => bottom - value / yExtent[1] * (bottom - top);
+		CLASSES.forEach((label, index) => {
+			const centre = left + (index + .5) * groupWidth;
+			for (const [value, colour, offset] of [[historical[index], HISTORICAL_COLOUR, -barWidth], [future[index], FUTURE_COLOUR, 0]]) {
+				context.fillStyle = colour;
+				context.fillRect(centre + offset, y(value), barWidth - 1, bottom - y(value));
+			}
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.textBaseline = 'top';
+			context.fillText(label, centre - .5, bottom + 8);
+		});
+		drawLegend(context, [{label: 'Historical', colour: HISTORICAL_COLOUR}, {label: 'Future', colour: FUTURE_COLOUR}], left, 16);
+	}
+
+	function interpolateColour(stops, fraction) {
+		const value = Math.max(0, Math.min(1, fraction)) * (stops.length - 1);
+		const lower = Math.floor(value);
+		const upper = Math.min(stops.length - 1, lower + 1);
+		const weight = value - lower;
+		const rgb = stops[lower].map((channel, index) => Math.round(channel * (1 - weight) + stops[upper][index] * weight));
+		return `rgb(${rgb.join(',')})`;
+	}
+
+	function pathRing(context, points, project) {
+		let open = false;
+		for (const point of points) {
+			if (!Array.isArray(point) || point.length < 2) continue;
+			const [x, y] = project(Number(point[0]), Number(point[1]));
+			if (!open) context.moveTo(x, y);
+			else context.lineTo(x, y);
+			open = true;
+		}
+	}
+
+	function drawGeography(context, project, fillLand) {
+		if (!geography) return;
+		if (fillLand && Array.isArray(geography.land)) {
+			context.fillStyle = css('--mla-land', '#eee9da');
+			for (const ring of geography.land) {
+				context.beginPath();
+				pathRing(context, ring, project);
+				context.fill();
+			}
+		}
+		if (!fillLand && Array.isArray(geography.land)) {
+			context.strokeStyle = 'rgba(39,42,54,.62)';
+			context.lineWidth = .75;
+			for (const ring of geography.land) {
+				context.beginPath();
+				pathRing(context, ring, project);
+				context.stroke();
+			}
+		}
+		context.strokeStyle = 'rgba(39,42,54,.48)';
+		context.lineWidth = .65;
+		for (const item of geography.borders || []) {
+			context.beginPath();
+			pathRing(context, item.p || [], project);
+			context.stroke();
+		}
+	}
+
+	function drawDensityMap(canvas, density, years, mode, scale) {
+		const {context, width, height} = setupCanvas(canvas);
+		const bounds = {west: 50, east: 110, south: -5, north: 40};
+		const plot = {left: 38, right: width - 10, top: 10, bottom: height - 34};
+		const project = (lon, lat) => [
+			plot.left + (lon - bounds.west) / (bounds.east - bounds.west) * (plot.right - plot.left),
+			plot.bottom - (lat - bounds.south) / (bounds.north - bounds.south) * (plot.bottom - plot.top)
+		];
+		context.fillStyle = css('--mla-sea', '#e9f2f3');
+		context.fillRect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
+		drawGeography(context, project, true);
+		const latitudes = density.latitude_edges;
+		const longitudes = density.longitude_edges;
+		const matrix = density.unique_track_counts;
+		const sequential = [[255, 255, 245], [255, 220, 121], [247, 139, 61], [192, 54, 92], [76, 26, 112]];
+		const diverging = [[178, 24, 43], [239, 138, 98], [255, 255, 255], [103, 169, 207], [33, 102, 172]];
+		for (let row = 0; row < matrix.length; row += 1) {
+			const south = latitudes[row], north = latitudes[row + 1];
+			if (north < bounds.south || south > bounds.north) continue;
+			for (let column = 0; column < matrix[row].length; column += 1) {
+				const west = longitudes[column], east = longitudes[column + 1];
+				if (east < bounds.west || west > bounds.east) continue;
+				const value = Number(matrix[row][column]) / years;
+				if (!Number.isFinite(value) || (mode === 'sequential' && value <= 0)) continue;
+				const fraction = mode === 'change' ? .5 + .5 * value / scale : Math.sqrt(Math.max(0, value) / scale);
+				context.fillStyle = interpolateColour(mode === 'change' ? diverging : sequential, fraction);
+				const [x0, y0] = project(west, north);
+				const [x1, y1] = project(east, south);
+				context.fillRect(x0, y0, Math.max(1, x1 - x0 + .35), Math.max(1, y1 - y0 + .35));
+			}
+		}
+		drawGeography(context, project, false);
+		context.fillStyle = css('--mla-muted', '#5f6574');
+		context.textBaseline = 'top';
+		context.textAlign = 'center';
+		for (const lon of [50, 70, 90, 110]) {
+			const [x] = project(lon, bounds.south);
+			context.fillText(`${lon}°E`, x, plot.bottom + 7);
+		}
+		context.textAlign = 'right';
+		context.textBaseline = 'middle';
+		for (const lat of [0, 10, 20, 30, 40]) {
+			const [, y] = project(bounds.west, lat);
+			context.fillText(lat === 0 ? '0°' : `${lat}°N`, plot.left - 5, y);
+		}
+		const legendWidth = Math.min(118, (plot.right - plot.left) * .34);
+		const legendX = plot.right - legendWidth;
+		const legendY = plot.top + 7;
+		for (let index = 0; index < legendWidth; index += 1) {
+			context.fillStyle = interpolateColour(mode === 'change' ? diverging : sequential, index / Math.max(1, legendWidth - 1));
+			context.fillRect(legendX + index, legendY, 1.2, 7);
+		}
+		context.fillStyle = css('--mla-ink', '#202334');
+		context.textBaseline = 'top';
+		context.textAlign = 'left';
+		context.fillText(mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
+		context.textAlign = 'right';
+		context.fillText(mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
+	}
+
+	function differenceDensity(historical, future, historicalYears, futureYears) {
+		return {
+			latitude_edges: historical.latitude_edges,
+			longitude_edges: historical.longitude_edges,
+			unique_track_counts: historical.unique_track_counts.map((row, rowIndex) => row.map((value, columnIndex) =>
+				Number(future.unique_track_counts[rowIndex][columnIndex]) / futureYears - Number(value) / historicalYears
+			))
+		};
+	}
+
+	function quantile(values, probability) {
+		const sorted = finite(values).sort((left, right) => left - right);
+		if (!sorted.length) return 0;
+		const position = (sorted.length - 1) * probability;
+		const lower = Math.floor(position), upper = Math.ceil(position);
+		return lower === upper ? sorted[lower] : sorted[lower] * (upper - position) + sorted[upper] * (position - lower);
+	}
+
+	function drawMaps() {
+		const historical = current.historical.seasonal[state.season].track_density;
+		const future = current.future.seasonal[state.season].track_density;
+		const historicalYears = Number(current.historical.coverage.years);
+		const futureYears = Number(current.future.coverage.years);
+		const historicalValues = historical.unique_track_counts.flat().map(value => Number(value) / historicalYears);
+		const futureValues = future.unique_track_counts.flat().map(value => Number(value) / futureYears);
+		const sequentialScale = Math.max(.1, quantile([...historicalValues, ...futureValues], .98));
+		const difference = differenceDensity(historical, future, historicalYears, futureYears);
+		const differenceValues = difference.unique_track_counts.flat().map(Number);
+		const differenceScale = Math.max(.05, quantile(differenceValues.map(Math.abs), .98));
+		drawDensityMap($('#mlaClimateHistoricalMap'), historical, historicalYears, 'sequential', sequentialScale);
+		drawDensityMap($('#mlaClimateFutureMap'), future, futureYears, 'sequential', sequentialScale);
+		drawDensityMap($('#mlaClimateChangeMap'), difference, 1, 'change', differenceScale);
+	}
+
+	function valueText(value, metric, signed = false) {
+		if (!Number.isFinite(Number(value))) return '—';
+		const number = Number(value);
+		const prefix = signed && number > 0 ? '+' : '';
+		return `${prefix}${number.toFixed(metric.digits)} ${metric.unit}`;
+	}
+
+	function renderStats() {
+		const metric = METRICS[state.metric];
+		const change = current.change.seasonal_changes[state.season][state.metric];
+		const cards = [
+			['Historical mean', valueText(change.historical, metric), current.historical.run.period_label],
+			['Future mean', valueText(change.future, metric), current.future.run.period_label],
+			['Paired change', Number.isFinite(change.percent_change) ? `${change.percent_change > 0 ? '+' : ''}${change.percent_change.toFixed(1)}%` : '—', valueText(change.absolute_change, metric, true)],
+			['90% bootstrap interval', `${valueText(change.ci05, metric, true)} to ${valueText(change.ci95, metric, true)}`, 'annual resampling']
+		];
+		const container = $('#mlaClimateStats');
+		container.replaceChildren(...cards.map(([label, value, note]) => {
+			const card = document.createElement('section');
+			card.className = 'mla-card mla-stat';
+			const labelNode = document.createElement('span');
+			labelNode.textContent = label;
+			const valueNode = document.createElement('strong');
+			valueNode.textContent = value;
+			const noteNode = document.createElement('small');
+			noteNode.textContent = note;
+			card.append(labelNode, valueNode, noteNode);
+			return card;
+		}));
+	}
+
+	function render() {
+		if (!current || panel.hidden) return;
+		const metric = METRICS[state.metric];
+		$('#mlaClimateAnnualHeading').textContent = `Annual ${metric.label.toLowerCase()}`;
+		$('#mlaClimateScope').textContent = `${current.pair.source_label} · single model`;
+		$('#mlaClimateHistoricalMapHeading').textContent = current.historical.run.period_label;
+		$('#mlaClimateFutureMapHeading').textContent = current.future.run.period_label;
+		renderStats();
+		requestAnimationFrame(() => {
+			drawAnnual();
+			drawMonthly();
+			drawClasses();
+			drawMaps();
+		});
+	}
+
+	function showLoadError(error) {
+		console.error(error);
+		$('#mlaClimateContent').hidden = true;
+		$('#mlaClimateLoading').hidden = false;
+		$('#mlaClimateLoading').textContent = 'Climate experiments could not be loaded.';
+	}
+
+	async function selectPair() {
+		const serial = ++pairSerial;
+		const pair = index.pairs.find(candidate => candidate.id === state.pair) || index.pairs[0];
+		state.pair = pair.id;
+		$('#mlaClimateLoading').hidden = false;
+		$('#mlaClimateLoading').textContent = 'Loading paired climate diagnostics…';
+		$('#mlaClimateContent').hidden = true;
+		const loaded = await loadPair(pair);
+		if (serial !== pairSerial) return;
+		current = loaded;
+		if (!current.historical.seasonal[state.season] || !current.future.seasonal[state.season]) state.season = 'all';
+		$('#mlaClimateSeason').value = state.season;
+		$('#mlaClimateLoading').hidden = true;
+		$('#mlaClimateContent').hidden = false;
+		writeState();
+		render();
+	}
+
+	async function activate() {
+		if (loadingPromise) return loadingPromise;
+		loadingPromise = (async () => {
+			try {
+				if (!index) {
+					$('#mlaClimateLoading').textContent = 'Opening validated CMIP6 comparisons…';
+					index = await loadIndex();
+					populateControls();
+				}
+				if (!current || current.pair.id !== state.pair) await selectPair();
+				else render();
+			} catch (error) {
+				showLoadError(error);
+			} finally {
+				loadingPromise = null;
+			}
+		})();
+		return loadingPromise;
+	}
+
+	readState();
+	$('#mlaClimatePair').addEventListener('change', event => {
+		state.pair = event.target.value;
+		writeState();
+		void selectPair().catch(showLoadError);
+	});
+	$('#mlaClimateSeason').addEventListener('change', event => {
+		state.season = event.target.value;
+		writeState();
+		render();
+	});
+	$('#mlaClimateMetric').addEventListener('change', event => {
+		state.metric = event.target.value;
+		writeState();
+		render();
+	});
+	window.addEventListener('mla:climate-visible', event => {
+		if (event.detail && event.detail.geo) geography = event.detail.geo;
+		void activate();
+	});
+})();

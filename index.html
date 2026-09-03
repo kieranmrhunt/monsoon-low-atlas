@@ -430,6 +430,14 @@
 .mla-stat strong { display: block; margin-top: 4px; color: var(--mla-indigo-deep); font-family: var(--mla-font); font-size: 28px; line-height: 1; font-weight: 500; }
 .mla-stat small { display: block; margin-top: 5px; color: var(--mla-muted); }
 
+.mla-climate-controls { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(2, minmax(170px, .7fr)) auto; gap: 10px; align-items: end; padding: 12px; margin-bottom: 14px; }
+.mla-climate-controls .mla-badge { align-self: center; justify-self: end; }
+.mla-climate-map-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.mla-climate-map-panel { min-width: 0; }
+.mla-climate-map-panel h4 { margin: 0 0 6px; font-size: 14px; font-weight: 500; text-align: center; }
+.mla-climate-map { display: block; width: 100%; height: auto; aspect-ratio: 1.24 / 1; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-sea); }
+.mla-climate-loading { padding: 28px; color: var(--mla-muted); text-align: center; }
+
 .mla-compare-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 12px; }
 .mla-cohort-card { padding: 12px; border-left: 5px solid var(--mla-indigo); }
 .mla-cohort-card[data-cohort="B"] { border-left-color: var(--mla-madder); }
@@ -637,6 +645,10 @@
 	.mla-stat-grid { grid-template-columns: 1fr 1fr; }
 	.mla-panel-heading { display: block; }
 	.mla-panel-heading p { margin-top: 7px; }
+	.mla-climate-controls { grid-template-columns: 1fr 1fr; }
+	.mla-climate-controls .mla-field:first-child { grid-column: 1 / -1; }
+	.mla-climate-controls .mla-badge { justify-self: start; }
+	.mla-climate-map-grid { grid-template-columns: 1fr; }
 	.mla-download-grid { grid-template-columns: 1fr; }
 	.mla-time-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; }
 	.mla-track-time-control { min-width: 0; }
@@ -715,6 +727,7 @@
 			<button class="mla-tab" role="tab" id="mlaTabExplore" aria-selected="true" aria-controls="mlaPanelExplore" data-tab="explore" type="button">Explore</button>
 			<button class="mla-tab" role="tab" id="mlaTabForecast" aria-selected="false" aria-controls="mlaPanelForecast" data-tab="forecast" type="button">Forecasts</button>
 			<button class="mla-tab" role="tab" id="mlaTabClimatology" aria-selected="false" aria-controls="mlaPanelClimatology" data-tab="climatology" type="button">Climatology</button>
+			<button class="mla-tab" role="tab" id="mlaTabClimateChange" aria-selected="false" aria-controls="mlaPanelClimateChange" data-tab="climate-change" type="button" hidden>Climate change</button>
 			<button class="mla-tab" role="tab" id="mlaTabExtremes" aria-selected="false" aria-controls="mlaPanelExtremes" data-tab="extremes" type="button">Extremes</button>
 			<button class="mla-tab" role="tab" id="mlaTabData" aria-selected="false" aria-controls="mlaPanelData" data-tab="data" type="button">Data & methods</button>
 		</nav>
@@ -993,6 +1006,26 @@
 			</div>
 		</section>
 
+		<section class="mla-panel" id="mlaPanelClimateChange" role="tabpanel" aria-labelledby="mlaTabClimateChange" data-panel="climate-change" hidden>
+			<div class="mla-panel-heading"><h2>Climate change</h2><p>Like-for-like LPS tracking in CMIP6 historical and future integrations.</p></div>
+			<section class="mla-card mla-climate-controls" aria-label="Climate comparison controls">
+				<label class="mla-field" for="mlaClimatePair"><span class="mla-label">Model and scenario</span><select class="mla-select" id="mlaClimatePair"></select></label>
+				<label class="mla-field" for="mlaClimateSeason"><span class="mla-label">Genesis season</span><select class="mla-select" id="mlaClimateSeason"><option value="jjas">JJAS</option><option value="all">All months</option><option value="mam">MAM</option><option value="ond">OND</option><option value="djf">DJF</option></select></label>
+				<label class="mla-field" for="mlaClimateMetric"><span class="mla-label">Measure</span><select class="mla-select" id="mlaClimateMetric"></select></label>
+				<span class="mla-badge" data-tone="review" id="mlaClimateScope">Model experiment</span>
+			</section>
+			<div class="mla-climate-loading" id="mlaClimateLoading" role="status" aria-live="polite">Open this tab to load climate experiments.</div>
+			<div id="mlaClimateContent" hidden>
+				<div class="mla-stat-grid" id="mlaClimateStats"></div>
+				<div class="mla-chart-grid">
+					<section class="mla-card mla-chart-card mla-chart-wide"><h3 id="mlaClimateAnnualHeading">Annual comparison</h3><p>Each line shows successive years within its 30-year window.</p><canvas class="mla-chart" id="mlaClimateAnnualChart" role="img" aria-label="Annual historical and future LPS comparison"></canvas></section>
+					<section class="mla-card mla-chart-card"><h3>Genesis seasonal cycle</h3><p>Mean systems per year by genesis month.</p><canvas class="mla-chart" id="mlaClimateMonthlyChart" role="img" aria-label="Historical and future monthly LPS frequency"></canvas></section>
+					<section class="mla-card mla-chart-card"><h3>Peak-class mix</h3><p>Share of systems in each atlas-derived peak class.</p><canvas class="mla-chart" id="mlaClimateClassChart" role="img" aria-label="Historical and future LPS peak-class composition"></canvas></section>
+					<section class="mla-card mla-chart-card mla-chart-wide"><h3>Track-density change</h3><p>Unique tracks per 1° cell per year; systems are grouped by genesis season.</p><div class="mla-climate-map-grid"><section class="mla-climate-map-panel"><h4 id="mlaClimateHistoricalMapHeading">Historical</h4><canvas class="mla-climate-map" id="mlaClimateHistoricalMap" role="img" aria-label="Historical CMIP6 LPS track density"></canvas></section><section class="mla-climate-map-panel"><h4 id="mlaClimateFutureMapHeading">Future</h4><canvas class="mla-climate-map" id="mlaClimateFutureMap" role="img" aria-label="Future CMIP6 LPS track density"></canvas></section><section class="mla-climate-map-panel"><h4>Future − historical</h4><canvas class="mla-climate-map" id="mlaClimateChangeMap" role="img" aria-label="Change in CMIP6 LPS track density"></canvas></section></div></section>
+				</div>
+			</div>
+		</section>
+
 		<section class="mla-panel" id="mlaPanelExtremes" role="tabpanel" aria-labelledby="mlaTabExtremes" data-panel="extremes" hidden>
 			<div class="mla-panel-heading"><h2>Catalogue diagnostic extremes</h2><p>Rankings, distributions, relationships and timing within the ERA5-derived catalogue—not authoritative meteorological records.</p></div>
 			<section class="mla-card mla-section-card">
@@ -1042,8 +1075,9 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","analysisSeries":"assets/atlas-analysis-series.c5ee5001daff.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","reanalysisBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-reanalyses-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.9c141042a51c.js"></script>
+<script src="assets/atlas-app.2afd1e1fe1fc.js"></script>
 <script src="assets/forecast-app.1d20e397a734.js"></script>
+<script src="assets/climate-change-app.a2dc0619782d.js"></script>
 
 </body>
 </html>

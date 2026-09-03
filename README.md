@@ -57,14 +57,19 @@ The full-period backfills are resumable Slurm arrays submitted by `scripts/submi
 
 `scripts/inventory_badc_cmip6.py` audits high-frequency CMIP, ScenarioMIP and HighResMIP holdings under `/badc/cmip6/data/CMIP6`. Its model/experiment/member table distinguishes verified fixed-pressure candidates, hybrid-level runs that need vertical interpolation and incomplete holdings; it does not call a model trackable from filenames alone. The accompanying climate-tab contract preserves native calendars, pairs like-for-like historical and scenario members, defaults to one-model-one-vote summaries and requires a month-scale QA pilot before full tracking.
 
-The first end-to-end canary uses MPI-ESM1-2-HR r1i1p1f1 on its shared native grid: historical JJAS 1990 against SSP2-4.5 JJAS 2080. It standardises May--October halos to the 1-degree detector contract, runs the unchanged v5.6 detector over JJAS, then links each period independently:
+The first end-to-end canary uses MPI-ESM1-2-HR r1i1p1f1: historical JJAS 1990 against SSP2-4.5 JJAS 2080. It standardises May--October halos to the common 1-degree detector contract, runs the frozen v5.6 candidate detector and continuity linker independently in each experiment, recomputes physics at every linked centre, applies the exact v5.6 physical-event gate and then applies the v5.5.1 wind/closed-isobar classification. Both canary periods pass the full workflow. They remain engineering tests, not climate estimates.
+
+The first production pair covers all months in 1981--2010 (historical) and 2071--2100 (SSP2-4.5). Processing is resumable at month, annual-link-block and final-centre-physics grain. Overlapping December/January halos reconcile track identity across annual blocks. The common ERA5 land mask and orography prevent model-dependent geography from changing the land classification rule. CMIP 10-m winds are bilinearly sampled from the common 1-degree field to a 0.25-degree calculation mesh before applying the frozen 125-km P95 circulation operator; this stabilises the spatial percentile without inventing source information, and is recorded explicitly in provenance. There is no model-specific threshold tuning.
 
 ```bash
 bash scripts/submit_cmip6_pilot.sh
+bash scripts/submit_cmip6_mpi_production.sh
+bash scripts/submit_cmip6_pair.sh miroc6-canary
+bash scripts/submit_cmip6_pair.sh mpi-lr-canary
 python -m unittest discover -s cmip6_pipeline -t . -p 'test_*.py'
 ```
 
-The pilot deliberately performs no model-specific threshold tuning. Non-Gregorian calendars remain gated until the detector's time identity is separated from civil timestamps; this prevents silent remapping of 360-day model dates.
+MIROC6 and MPI-ESM1-2-LR use separate four-month historical/future canaries before their 30-year presets (`miroc6-paired` and `mpi-lr-paired`) are eligible to run. Once both windows in any production pair pass, the final jobs build seasonal run summaries, year-resampling uncertainty and a relocatable browser bundle under the run's `climate-public/` staging directory. The climate-change tab is present but deliberately hidden unless `climateChangeBase` is set in `index.html`; provisional canaries therefore cannot appear on the public atlas. Non-Gregorian calendars remain gated until the detector's time identity is separated from civil timestamps, preventing silent remapping of no-leap or 360-day model dates. A multi-model atlas claim also remains gated on multiple independently validated historical/scenario pairs and one-model-one-vote aggregation.
 
 ## Weather archive and deployment
 

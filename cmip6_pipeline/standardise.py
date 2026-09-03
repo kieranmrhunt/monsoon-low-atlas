@@ -218,6 +218,26 @@ def validate_month(root: Path, month: str) -> dict[str, object]:
     return report
 
 
+def validate_auxiliary_boundary(root: Path, timestamp: str | pd.Timestamp) -> dict[str, object]:
+    boundary = pd.Timestamp(timestamp)
+    month = boundary.strftime("%Y%m")
+    path = standard_paths(root, month)["auxiliary"]
+    with xr.open_dataset(path) as dataset:
+        require_variables(dataset, ("u", "v", "t", "q"), path)
+        _require_time_axis(dataset, pd.DatetimeIndex([boundary]), "auxiliary boundary")
+        if dataset.sizes.get("latitude") != len(TARGET_LATS) or dataset.sizes.get("longitude") != len(TARGET_LONS):
+            raise ValueError(f"{path} does not use the shared 1-degree grid")
+        if not np.allclose(dataset.level.values, PRESSURE_LEVELS):
+            raise ValueError(f"{path} does not contain 850/700/500 hPa in canonical order")
+        finite = {
+            variable: round(float(np.isfinite(dataset[variable].values).mean()), 6)
+            for variable in ("u", "v", "t", "q")
+        }
+        if min(finite.values()) < 0.75:
+            raise ValueError(f"{path} has insufficient finite boundary data: {finite}")
+    return {"timestamp": boundary.isoformat(), "status": "passed", "path": str(path), "finite_fraction": finite}
+
+
 def _source_records(paths: Iterable[Path]) -> list[dict[str, object]]:
     return [
         {
@@ -345,6 +365,68 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
     return report
 
 
+def standardise_auxiliary_boundary(
+    output_root: Path,
+    badc_root: Path,
+    spec: RunSpec,
+    timestamp: str | pd.Timestamp,
+) -> dict[str, object]:
+    """Write the single next-month pressure-level frame needed at a run boundary."""
+
+    boundary = pd.Timestamp(timestamp)
+    month = boundary.strftime("%Y%m")
+    path = standard_paths(output_root, month)["auxiliary"]
+    provenance = output_root / "standard" / "provenance" / f"pl3h-boundary-{boundary:%Y%m%d%H}.json"
+    if provenance.is_file():
+        try:
+            validate_auxiliary_boundary(output_root, boundary)
+            return json.loads(provenance.read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            pass
+    target = pd.DatetimeIndex([boundary])
+    pressure: dict[str, xr.DataArray] = {}
+    source_paths: list[Path] = []
+    for variable in ("ua", "va", "ta", "hus"):
+        value, paths = _open_variable(
+            badc_root,
+            spec,
+            variable,
+            boundary,
+            boundary,
+            pressure_levels=True,
+        )
+        pressure[variable] = _sample_grid(value)
+        source_paths.extend(paths)
+    output = xr.Dataset(
+        {
+            "u": _interpolate(pressure["ua"], target, "ua"),
+            "v": _interpolate(pressure["va"], target, "va"),
+            "t": _interpolate(pressure["ta"], target, "ta"),
+            "q": _interpolate(pressure["hus"], target, "hus"),
+        },
+        attrs=_attrs(spec, month, "single pressure-level boundary frame for final-month interpolation"),
+    ).astype(np.float32)
+    for name in ("u", "v"):
+        output[name].attrs["units"] = "m s-1"
+    output.t.attrs["units"] = "K"
+    output.q.attrs["units"] = "kg kg-1"
+    atomic_to_netcdf(output, path)
+    report: dict[str, object] = {
+        "schema": "lps-atlas-cmip6-standard-auxiliary-boundary-v1",
+        "created_utc": utc_now(),
+        "run": spec.__dict__,
+        "timestamp": boundary.isoformat(),
+        "source_files": _source_records(source_paths),
+        "output": {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256(path)},
+    }
+    provenance.parent.mkdir(parents=True, exist_ok=True)
+    temporary = provenance.with_suffix(f".json.part-{os.getpid()}")
+    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, provenance)
+    validate_auxiliary_boundary(output_root, boundary)
+    return report
+
+
 def run_spec(args: argparse.Namespace) -> RunSpec:
     return RunSpec(
         activity=args.activity,
@@ -369,6 +451,8 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     standardise = subparsers.add_parser("standardise-month")
     standardise.add_argument("--month", required=True, help="YYYYMM")
+    boundary = subparsers.add_parser("standardise-aux-boundary")
+    boundary.add_argument("--timestamp", required=True, help="Gregorian timestamp, normally YYYY-MM-01T00:00")
     validate = subparsers.add_parser("validate-month")
     validate.add_argument("--month", required=True, help="YYYYMM")
     return parser.parse_args()
@@ -378,6 +462,13 @@ def main() -> None:
     args = parse_args()
     if args.command == "standardise-month":
         report = standardise_month(args.output_root, args.badc_root, run_spec(args), args.month)
+    elif args.command == "standardise-aux-boundary":
+        report = standardise_auxiliary_boundary(
+            args.output_root,
+            args.badc_root,
+            run_spec(args),
+            args.timestamp,
+        )
     else:
         report = validate_month(args.output_root, args.month)
     print(json.dumps(report, indent=2, sort_keys=True))

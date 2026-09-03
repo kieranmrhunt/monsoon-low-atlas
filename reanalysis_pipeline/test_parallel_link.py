@@ -7,10 +7,16 @@ from pathlib import Path
 
 import pandas as pd
 
-from .parallel_link import merge, prepare
+from .parallel_link import merge, prepare, validate_source_label
 
 
 class ParallelReanalysisLinkTest(unittest.TestCase):
+    def test_cmip6_source_labels_are_safe_but_not_hardcoded(self) -> None:
+        label = "MPI-ESM1-2-HR_historical_r1i1p1f1_gn"
+        self.assertEqual(validate_source_label(label), label)
+        with self.assertRaises(ValueError):
+            validate_source_label("../../not-safe")
+
     def test_prepare_adds_month_halos_and_merge_reconciles_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

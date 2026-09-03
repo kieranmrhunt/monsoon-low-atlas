@@ -8,7 +8,10 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+
+import pandas as pd
 
 from reanalysis_pipeline.common import sha256
 from cmip6_pipeline.standardise import validate_month
@@ -19,6 +22,11 @@ TRACKER_ROOT = ATLAS_ROOT.parent / "lps-v5.3-continuity-framework"
 DETECTOR = TRACKER_ROOT / "lps53_detect.py"
 LINKER = TRACKER_ROOT / "lps53_link.py"
 PARAMETERS = TRACKER_ROOT / "params/lps_v5.4.2_liberal_poststitch_identity.json"
+TRACKING_SCHEMA = "lps-atlas-cmip6-detection-v2"
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def run(command: list[str]) -> None:
@@ -26,38 +34,109 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True, cwd=TRACKER_ROOT)
 
 
-def detect_month(data_root: Path, output_root: Path, month: str) -> Path:
+def _candidate_is_complete(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size < 100:
+        return False
+    columns = set(pd.read_csv(path, nrows=0).columns)
+    return {"candidate_uid", "time", "lon", "lat", "centre_score"}.issubset(columns)
+
+
+def detect_month(
+    data_root: Path,
+    output_root: Path,
+    month: str,
+    *,
+    static_file: Path | None = None,
+) -> Path:
     data_root = data_root.resolve()
     output_root = output_root.resolve()
     validate_month(data_root, month)
     standard = data_root / "standard"
     destination = output_root / "candidates"
-    run(
-        [
-            sys.executable,
-            str(DETECTOR),
-            month,
-            "--params",
-            str(PARAMETERS),
-            "--vort-dir",
-            str(standard / "vorticity"),
-            "--precip-dir",
-            str(standard / "precipitation"),
-            "--sfc-dir",
-            str(standard / "surface"),
-            "--aux-dir",
-            str(standard / "auxiliary"),
-            "--out-dir",
-            str(destination),
-            "--log-file",
-            str(output_root / "logs" / f"detect-{month}.log"),
-            "--progress-every",
-            "24",
-        ]
-    )
     path = destination / f"candidates-{month}.csv"
-    if not path.is_file() or path.stat().st_size < 100:
+    status_path = output_root / "status" / f"detect-{month}.json"
+    inputs = {
+        name: sha256(value)
+        for name, value in {
+            "vorticity": standard / "vorticity" / f"{month}.nc",
+            "surface": standard / "surface" / f"{month}.nc",
+            "precipitation": standard / "precipitation" / f"{month}.nc",
+            "auxiliary": standard / "auxiliary" / f"pl3h-{month}.nc",
+        }.items()
+    }
+    fingerprint = {
+        "schema": TRACKING_SCHEMA,
+        "month": month,
+        "inputs": inputs,
+        "detector_sha256": sha256(DETECTOR),
+        "parameters_sha256": sha256(PARAMETERS),
+        "static_sha256": sha256(static_file.resolve()) if static_file is not None else None,
+    }
+    if status_path.is_file() and _candidate_is_complete(path):
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            if (
+                status.get("status") == "complete"
+                and status.get("fingerprint") == fingerprint
+                and status.get("candidate_sha256") == sha256(path)
+            ):
+                return path
+        except (OSError, KeyError, json.JSONDecodeError):
+            pass
+    if static_file is not None and not static_file.is_file():
+        raise FileNotFoundError(static_file)
+    destination.mkdir(parents=True, exist_ok=True)
+    (output_root / "logs").mkdir(parents=True, exist_ok=True)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        str(DETECTOR),
+        month,
+        "--params",
+        str(PARAMETERS),
+        "--vort-dir",
+        str(standard / "vorticity"),
+        "--precip-dir",
+        str(standard / "precipitation"),
+        "--sfc-dir",
+        str(standard / "surface"),
+        "--aux-dir",
+        str(standard / "auxiliary"),
+        "--out-dir",
+        str(destination),
+        "--log-file",
+        str(output_root / "logs" / f"detect-{month}.log"),
+        "--progress-every",
+        "24",
+    ]
+    if static_file is not None:
+        command.extend(["--static-file", str(static_file.resolve())])
+    temporary = status_path.with_suffix(f".json.part-{os.getpid()}")
+    temporary.write_text(
+        json.dumps({"status": "running", "started_utc": utc_now(), "fingerprint": fingerprint}, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, status_path)
+    run(command)
+    if not _candidate_is_complete(path):
         raise RuntimeError(f"detector did not produce {path}")
+    temporary.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "completed_utc": utc_now(),
+                "fingerprint": fingerprint,
+                "candidate": str(path),
+                "candidate_sha256": sha256(path),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, status_path)
     return path
 
 
@@ -109,6 +188,7 @@ def parse_args() -> argparse.Namespace:
     detect.add_argument("--data-root", type=Path, required=True)
     detect.add_argument("--output-root", type=Path, required=True)
     detect.add_argument("--month", required=True)
+    detect.add_argument("--static-file", type=Path)
     linker = subparsers.add_parser("link")
     linker.add_argument("--output-root", type=Path, required=True)
     linker.add_argument("--source-label", required=True)
@@ -118,7 +198,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.command == "detect-month":
-        path = detect_month(args.data_root, args.output_root, args.month)
+        path = detect_month(
+            args.data_root,
+            args.output_root,
+            args.month,
+            static_file=args.static_file,
+        )
     else:
         path = link(args.output_root, args.source_label)
     print(path)
