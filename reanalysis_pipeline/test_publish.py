@@ -10,7 +10,7 @@ import pandas as pd
 
 from .match import MATCH_SCHEMA
 from .native import build_native_archive
-from .publish import MANIFEST_SCHEMA, build_manifest, publish
+from .publish import MANIFEST_SCHEMA, build_manifest, publish, validate_match_asset
 
 
 class PublishReanalysisTest(unittest.TestCase):
@@ -44,6 +44,18 @@ class PublishReanalysisTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["sources"]["merra2"]["status"], "ready")
             self.assertTrue((manifest_path.parent / manifest["sources"]["merra2"]["matches_url"]).is_file())
+
+    def test_browser_invalid_nonfinite_json_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.asset(root)
+            with gzip.open(path, "rt", encoding="utf-8") as stream:
+                payload = json.load(stream)
+            payload["matches"][0]["second_best_score_margin"] = float("nan")
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                json.dump(payload, stream)
+            with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+                validate_match_asset(path, "merra2")
 
     def test_later_publish_retains_existing_ready_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

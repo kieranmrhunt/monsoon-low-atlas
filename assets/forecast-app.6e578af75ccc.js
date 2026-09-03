@@ -173,7 +173,9 @@
 			if (!definition || definition.status !== 'ready' || !native || month < native.start_month || month > native.end_month) return null;
 			const relative = String(native.url_template || '').replace('{month}', month);
 			if (!relative || relative.includes('{month}')) throw new Error(`${ANALYSIS_TRACKS[source].label} source-native track URL is invalid`);
-			const url = /^https?:\/\//.test(relative) ? relative : `${reanalysisBase()}/${relative.replace(/^\//, '')}`;
+			const baseUrl = /^https?:\/\//.test(relative) ? relative : `${reanalysisBase()}/${relative.replace(/^\//, '')}`;
+			const version = definition.sha256 || manifest.generated_utc || '';
+			const url = version ? `${baseUrl}?v=${encodeURIComponent(String(version).slice(0, 12))}` : baseUrl;
 			const asset = indexNativeReanalysisAsset(source, month, await fetchGzipJson(url));
 			nativeReanalysisAssets.set(key, asset);
 			return asset;

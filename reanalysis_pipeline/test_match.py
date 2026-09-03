@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 import pandas as pd
@@ -26,7 +27,29 @@ class ReanalysisMatchTest(unittest.TestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]["source_track_id"], "near")
         self.assertEqual(selected[0]["era5_track_id"], 10)
+        self.assertIsNone(selected[0]["second_best_score_margin"])
+        json.dumps({"selected": selected, "rejected": rejected}, allow_nan=False)
         self.assertTrue(any(record["source_track_id"] == "far" for record in rejected))
+
+    def test_mixed_second_best_margins_remain_strict_json(self) -> None:
+        times = pd.date_range("2016-07-01", periods=24, freq="h")
+        era = normalise_tracks(pd.DataFrame({
+            "track_id": [10] * 24 + [20] * 24 + [30] * 24,
+            "time": list(times) * 3,
+            "lon": [80.0] * 24 + [82.0] * 24 + [90.0] * 24,
+            "lat": [20.0] * 72,
+        }), source="ERA5")
+        alternative = normalise_tracks(pd.DataFrame({
+            "track_id": ["two-candidates"] * 24 + ["one-candidate"] * 24,
+            "time": list(times) * 2,
+            "lon_smooth": [80.0] * 24 + [90.0] * 24,
+            "lat_smooth": [20.0] * 48,
+        }), source="JRA-55")
+        selected, rejected = match_tracks(alternative, era)
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(any(record["second_best_score_margin"] is not None for record in selected))
+        self.assertTrue(any(record["second_best_score_margin"] is None for record in selected))
+        json.dumps({"selected": selected, "rejected": rejected}, allow_nan=False)
 
 
 if __name__ == "__main__":

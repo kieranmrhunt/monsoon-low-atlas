@@ -446,7 +446,8 @@
 			const manifest = await ensureReanalysisManifest();
 			const definition = manifest.sources[source];
 			if (!definition || definition.status !== 'ready' || !definition.matches_url) throw new Error(`${REANALYSIS_SOURCES[source].label} matched tracks are not yet available`);
-			const url = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
+			const baseUrl = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
+			const url = definition.sha256 ? `${baseUrl}?v=${String(definition.sha256).slice(0, 12)}` : baseUrl;
 			const asset = indexReanalysisAsset(source, await fetchJsonAsset(url, `${REANALYSIS_SOURCES[source].label} matched tracks`));
 			reanalysisAssets.set(source, asset);
 			return asset;

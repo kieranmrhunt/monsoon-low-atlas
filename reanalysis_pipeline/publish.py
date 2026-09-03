@@ -31,8 +31,11 @@ def utc_now() -> str:
 
 
 def read_gzip_json(path: Path) -> dict[str, Any]:
+    def reject_nonfinite(value: str) -> None:
+        raise ValueError(f"non-finite JSON number {value!r} in {path}")
+
     with gzip.open(path, "rt", encoding="utf-8") as stream:
-        value = json.load(stream)
+        value = json.load(stream, parse_constant=reject_nonfinite)
     if not isinstance(value, dict):
         raise ValueError(f"{path} does not contain a JSON object")
     return value

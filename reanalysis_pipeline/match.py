@@ -153,9 +153,12 @@ def match_tracks(alternative: pd.DataFrame, era: pd.DataFrame) -> tuple[list[dic
     # A source-native identity can be selected once, and each ERA5 event gets
     # only its strongest source-native counterpart. This keeps Compare mode
     # honest when either catalogue fragments or duplicates a physical event.
+    grouped: dict[Any, list[dict[str, Any]]] = {}
+    for record in candidates:
+        grouped.setdefault(record["era5_track_id"], []).append(record)
     selected: list[dict[str, Any]] = []
-    for era_track_id, group in pd.DataFrame(candidates).groupby("era5_track_id", sort=False) if candidates else []:
-        records = group.sort_values(["score", "overlap_hours"], ascending=[True, False]).to_dict("records")
+    for records in grouped.values():
+        records.sort(key=lambda item: (item["score"], -item["overlap_hours"]))
         selected.append(records[0])
         for record in records[1:]:
             rejected.append({**record, "reason": "weaker_source_track_for_same_era5_event"})
@@ -218,7 +221,12 @@ def atomic_gzip_json(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + f".part-{os.getpid()}")
     with temporary.open("wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=9, mtime=0) as stream:
-            stream.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+            stream.write(json.dumps(
+                value,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8"))
     os.replace(temporary, path)
 
 
