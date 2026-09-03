@@ -17,8 +17,13 @@ PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/pyth
 ROW="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$JOBS")"
 IFS=$'\t' read -r INDEX CYCLE MEMBER <<< "$ROW"
 [[ "$CYCLE" =~ ^[0-9]{10}$ && "$MEMBER" =~ ^p[0-9]{2}$ ]]
+OUTPUT="$RUN_ROOT/members/$CYCLE/$MEMBER.npz"
+if [[ -s "$OUTPUT" ]]; then
+	echo "Reusing completed AIGEFS member shard $OUTPUT"
+	exit 0
+fi
 cd "$ATLAS_ROOT"
 exec "$PYTHON" -m forecast_pipeline.aigefs_shards member \
   --cycle "$CYCLE" \
   --member "$MEMBER" \
-  --output "$RUN_ROOT/members/$CYCLE/$MEMBER.npz"
+  --output "$OUTPUT"
