@@ -191,7 +191,7 @@
 
 	async function ensureArchiveNativeReanalyses() {
 		if (state.mode === 'latest') return;
-		const target = archiveTargetTime();
+		const target = currentValidTime() == null ? archiveTargetTime() : currentValidTime();
 		if (!Number.isFinite(target)) return;
 		await Promise.allSettled(ALTERNATIVE_ANALYSIS_KEYS
 			.filter(source => state.analysisSources.has(source) && nativeReanalysisAvailable(source, target))
@@ -201,6 +201,7 @@
 	async function initialiseReanalysisTracks() {
 		try {
 			await ensureReanalysisManifest();
+			if (state.mode === 'archive') configureTimeline(Boolean(displayEntries().length), archiveTargetTime());
 			await ensureArchiveNativeReanalyses();
 			if (state.mode === 'archive') {
 				populateArchiveTimeControls();
@@ -921,10 +922,11 @@
 		}
 		const analysisTiles = Object.entries(ANALYSIS_TRACKS).map(([source, definition]) => {
 			const sourceAvailable = source === 'era5' ? era5Available : nativeReanalysisAvailable(source, target);
+			const availability = source === 'era5' ? 'No matched track' : reanalysisCoverageLabel(source);
 			const title = sourceAvailable
 				? source === 'era5' ? 'Show or hide matched ERA5 verification tracks' : `Show or hide all ${definition.label} tracks active on this UTC date`
-				: `No ${definition.label} analysis is available on this date`;
-			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(definition.detail) : 'No data'}</small></button>`;
+				: `No ${definition.label} analysis is available on this date · ${availability}`;
+			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(definition.detail) : esc(availability)}</small></button>`;
 		}).join('');
 		const summary = available
 			? `${available} model–lead pair${available === 1 ? '' : 's'} available · ${selected} selected`
@@ -982,6 +984,7 @@
 		results.innerHTML = archiveRunMatrix(entries);
 		const selected = loadFirst && !state.archiveSelected.size ? defaultArchiveEntry(entries) : null;
 		if (selected) loadArchive(selected);
+		else if (!state.archiveSelected.size) configureTimeline(false, target);
 		if (!entries.length) {
 			notice(noArchiveMatchMessage(), 'flag', false);
 			render();
@@ -1145,6 +1148,28 @@
 		return state.timelineTimes[state.leadIndex] || null;
 	}
 
+	function reanalysisCoverageLabel(source) {
+		const definition = reanalysisManifest && reanalysisManifest.sources[source];
+		if (!definition || definition.status !== 'ready') return 'Processing';
+		const native = definition.native_tracks;
+		if (!native || !native.start_month || !native.end_month) return 'No source-native tracks';
+		const label = month => {
+			const value = String(month);
+			const time = Date.UTC(Number(value.slice(0, 4)), Number(value.slice(4, 6)) - 1, 1);
+			return Number.isFinite(time) ? new Intl.DateTimeFormat('en-GB', {timeZone: 'UTC', month: 'short', year: 'numeric'}).format(time) : value;
+		};
+		return native.start_month === native.end_month ? `${label(native.start_month)} only` : `${label(native.start_month)}–${label(native.end_month)}`;
+	}
+
+	function analysisOnlyTimeline(target) {
+		if (state.mode === 'latest' || !Number.isFinite(target)) return [];
+		const available = ALTERNATIVE_ANALYSIS_KEYS.some(source => state.analysisSources.has(source) && nativeReanalysisAvailable(source, target));
+		if (!available) return [];
+		const day = new Date(target);
+		const midnight = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+		return [0, 6, 12, 18].map(hour => midnight + hour * 3600000);
+	}
+
 	function configureTimeline(preserve, preferredTime) {
 		const slider = $('#mlaForecastLead');
 		const previous = Number.isFinite(preferredTime) ? preferredTime : preserve ? currentValidTime() : null;
@@ -1153,6 +1178,7 @@
 			const stamp = new Date(value).getTime();
 			if (Number.isFinite(stamp)) times.add(stamp);
 		}
+		if (!times.size) for (const stamp of analysisOnlyTimeline(archiveTargetTime())) times.add(stamp);
 		state.timelineTimes = [...times].sort((a, b) => a - b);
 		if (previous != null && state.timelineTimes.length && previous >= state.timelineTimes[0] && previous <= state.timelineTimes[state.timelineTimes.length - 1]) {
 			let nearest = 0;
@@ -1186,6 +1212,10 @@
 	function updateTimeLabel() {
 		const valid = currentValidTime();
 		if (valid == null) { $('#mlaForecastTime').textContent = '—'; return; }
+		if (!displayEntries().length) {
+			$('#mlaForecastTime').textContent = `Analysis · ${formatUtc(valid)}`;
+			return;
+		}
 		const leads = displayEntries().map(item => ({value: stepForPayload(item.payload), horizon: itemHorizon(item.payload)})).filter(item => item.value >= 0 && item.value <= item.horizon).map(item => item.value);
 		const range = leads.length && Math.min(...leads) === Math.max(...leads)
 			? `+${String(leads[0]).padStart(3, '0')} h`
@@ -2344,6 +2374,7 @@
 			const source = analysisButton.dataset.forecastAnalysisSource;
 			if (state.analysisSources.has(source)) state.analysisSources.delete(source); else state.analysisSources.add(source);
 			persistPreferences();
+			configureTimeline(Boolean(displayEntries().length), archiveTargetTime());
 			populateArchive(false);
 			render();
 			return;
