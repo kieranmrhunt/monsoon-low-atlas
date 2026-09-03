@@ -9,3 +9,6 @@ CRON_TZ=UTC
 
 # Retry resumable reanalysis submissions while JASMIN's Slurm controller is intermittent.
 5,20,35,50 * * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/flock -n .reanalysis-runs/reanalysis-submit.lock /usr/bin/bash scripts/submit_reanalysis_backfills_if_needed.sh >> hpc-logs/reanalysis-submit.log 2>&1
+
+# Recover ECDS TIGGE results that finish after their submitting Slurm task exits.
+45 */3 * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/flock -n .forecast-runs/tigge-recovery.lock /usr/bin/bash scripts/pump_tigge_recovery.sh >> hpc-logs/tigge-recovery-cron.log 2>&1

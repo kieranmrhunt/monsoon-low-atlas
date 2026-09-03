@@ -1418,6 +1418,7 @@ class TiggeAdapter(BaseAdapter):
         target: Path,
         forecast_types: Sequence[str] | str,
         levtypes: Sequence[str] | str,
+        parameters: Sequence[str] | None = None,
     ) -> None:
         try:
             import cdsapi
@@ -1442,11 +1443,16 @@ class TiggeAdapter(BaseAdapter):
             raise DownloadError(
                 "Unsupported TIGGE level types: " + ", ".join(sorted(unknown_level_types))
             )
-        parameters: list[str] = []
-        if "pl" in requested_level_types:
-            parameters.extend(("131", "132"))
-        if "sfc" in requested_level_types:
-            parameters.extend(("151", "165", "166", "228"))
+        requested_parameters: list[str] = []
+        if parameters is None:
+            if "pl" in requested_level_types:
+                requested_parameters.extend(("131", "132"))
+            if "sfc" in requested_level_types:
+                requested_parameters.extend(("151", "165", "166", "228"))
+        else:
+            requested_parameters.extend(str(value) for value in parameters)
+        if not requested_parameters:
+            raise DownloadError("TIGGE retrieval requires at least one parameter")
         request = {
             "class": "ti",
             "date": cycle.strftime("%Y-%m-%d"),
@@ -1459,7 +1465,7 @@ class TiggeAdapter(BaseAdapter):
                 else requested_level_types
             ),
             "origin": self.centre.archive_origin,
-            "param": "/".join(parameters),
+            "param": "/".join(requested_parameters),
             "step": "/".join(str(int(step)) for step in steps),
             "time": cycle.strftime("%H:00:00"),
             "type": requested_types,

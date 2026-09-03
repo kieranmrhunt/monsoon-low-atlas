@@ -388,6 +388,37 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(requests[0]["levelist"], "500/700/850")
         self.assertEqual(requests[0]["param"], "131/132/151/165/166/228")
 
+    def test_tigge_retrieval_can_probe_one_parameter_family(self) -> None:
+        requests = []
+
+        class RecordingCdsClient:
+            def __init__(self, **unused) -> None:
+                pass
+
+            def retrieve(self, unused_dataset, request, target) -> None:
+                requests.append(request)
+                Path(target).write_bytes(b"GRIB")
+
+        adapter = TiggeAdapter("tigge-imd")
+        cycle = datetime(2024, 12, 23, 12, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.dict("sys.modules", {"cdsapi": SimpleNamespace(Client=RecordingCdsClient)}),
+                patch.object(adapter, "_credentials", return_value="test-key"),
+            ):
+                adapter._retrieve(
+                    cycle,
+                    [0, 6],
+                    Path(directory) / "surface.grib",
+                    ("cf", "pf"),
+                    "sfc",
+                    ("151", "165", "166"),
+                )
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["levtype"], "sfc")
+        self.assertEqual(requests[0]["param"], "151/165/166")
+        self.assertNotIn("levelist", requests[0])
+
     def test_tigge_download_cache_is_cycle_and_model_specific(self) -> None:
         adapter = TiggeAdapter("tigge-imd")
         cycle = datetime(2024, 7, 1, 0, tzinfo=UTC)
