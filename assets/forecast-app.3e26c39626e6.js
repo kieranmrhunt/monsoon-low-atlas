@@ -7,6 +7,7 @@
 	const $ = selector => root.querySelector(selector);
 	const config = JSON.parse(document.getElementById('mla-data-config').textContent || '{}');
 	const DOMAIN = {west: 45, east: 120, south: -15, north: 45};
+	const HOUR_MS = 3600000;
 	const DEFAULT_MAP = {zoom: 1.45, longitude: 82, latitude: 20};
 	const DEFAULT_ARCHIVE_DATE = '2016-07-01';
 	const PREFERENCES_KEY = 'monsoon-low-atlas.forecast.v2';
@@ -23,10 +24,10 @@
 	};
 	const ANALYSIS_TRACKS = Object.freeze({
 		era5: {label: 'ERA5', colour: '#000000', detail: 'v5.6 track'},
-		merra2: {label: 'MERRA-2', colour: '#c51b7d', detail: 'matched track'},
-		imdaa: {label: 'IMDAA', colour: '#008c95', detail: 'matched track'},
-		jra55: {label: 'JRA-55', colour: '#e66101', detail: 'matched track'},
-		erainterim: {label: 'ERA-Interim', colour: '#5e3c99', detail: 'matched track'}
+		merra2: {label: 'MERRA-2', colour: '#c51b7d', detail: 'all active systems'},
+		imdaa: {label: 'IMDAA', colour: '#008c95', detail: 'all active systems'},
+		jra55: {label: 'JRA-55', colour: '#e66101', detail: 'all active systems'},
+		erainterim: {label: 'ERA-Interim', colour: '#5e3c99', detail: 'all active systems'}
 	});
 	const ALTERNATIVE_ANALYSIS_KEYS = Object.freeze(Object.keys(ANALYSIS_TRACKS).filter(source => source !== 'era5'));
 	const OPERATIONAL_MODEL_ORDER = [
@@ -68,8 +69,9 @@
 	const analysisCentreCaches = new WeakMap();
 	const analysisHistoryCaches = new WeakMap();
 	let reanalysisManifestPromise = null;
-	const reanalysisAssets = new Map();
-	const reanalysisLoads = new Map();
+	let reanalysisManifest = null;
+	const nativeReanalysisAssets = new Map();
+	const nativeReanalysisLoads = new Map();
 
 	function persistPreferences() {
 		try {
@@ -124,47 +126,86 @@
 			if (!response.ok) throw new Error(`HTTP ${response.status} for the reanalysis inventory`);
 			const value = await response.json();
 			if (value.schema !== 'lps-atlas-reanalysis-manifest-v1' || !value.sources) throw new Error('Unsupported reanalysis inventory');
+			reanalysisManifest = value;
 			return value;
 		})().catch(error => { reanalysisManifestPromise = null; throw error; });
 		return reanalysisManifestPromise;
 	}
 
-	function indexReanalysisAsset(source, value) {
-		if (value.schema !== 'lps-atlas-reanalysis-matches-v1' || String(value.source).toLowerCase() !== source) throw new Error(`Incompatible ${ANALYSIS_TRACKS[source].label} match asset`);
-		value.matchByEra5 = new Map((value.matches || []).map(record => [String(record.era5_track_id), record]));
+	function reanalysisMonth(timeMs) {
+		return Number.isFinite(timeMs) ? new Date(timeMs).toISOString().slice(0, 7).replace('-', '') : '';
+	}
+
+	function nativeReanalysisAvailable(source, timeMs) {
+		const definition = reanalysisManifest && reanalysisManifest.sources[source];
+		const native = definition && definition.native_tracks;
+		const month = reanalysisMonth(timeMs);
+		return Boolean(definition && definition.status === 'ready' && native && month >= native.start_month && month <= native.end_month);
+	}
+
+	function indexNativeReanalysisAsset(source, month, value) {
+		if (
+			value.schema !== 'lps-atlas-reanalysis-native-month-v1'
+			|| String(value.source).toLowerCase() !== source
+			|| value.month !== month
+			|| !value.tracks
+		) throw new Error(`Incompatible ${ANALYSIS_TRACKS[source].label} source-native track asset`);
+		value.tracksByDay = new Map();
+		for (const [trackId, points] of Object.entries(value.tracks)) {
+			const days = new Set((points || []).map(point => new Date(Number(point[0]) * HOUR_MS).toISOString().slice(0, 10)));
+			for (const day of days) {
+				if (!value.tracksByDay.has(day)) value.tracksByDay.set(day, []);
+				value.tracksByDay.get(day).push({id: trackId, points});
+			}
+		}
 		return value;
 	}
 
-	async function ensureReanalysisAsset(source) {
-		if (reanalysisAssets.has(source)) return reanalysisAssets.get(source);
-		if (reanalysisLoads.has(source)) return reanalysisLoads.get(source);
+	async function ensureNativeReanalysisMonth(source, timeMs) {
+		const month = reanalysisMonth(timeMs);
+		const key = `${source}:${month}`;
+		if (nativeReanalysisAssets.has(key)) return nativeReanalysisAssets.get(key);
+		if (nativeReanalysisLoads.has(key)) return nativeReanalysisLoads.get(key);
 		const promise = (async () => {
 			const manifest = await ensureReanalysisManifest();
 			const definition = manifest.sources[source];
-			if (!definition || definition.status !== 'ready' || !definition.matches_url) throw new Error(`${ANALYSIS_TRACKS[source].label} matches are not ready`);
-			const url = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
-			const asset = indexReanalysisAsset(source, await fetchGzipJson(url));
-			reanalysisAssets.set(source, asset);
+			const native = definition && definition.native_tracks;
+			if (!definition || definition.status !== 'ready' || !native || month < native.start_month || month > native.end_month) return null;
+			const relative = String(native.url_template || '').replace('{month}', month);
+			if (!relative || relative.includes('{month}')) throw new Error(`${ANALYSIS_TRACKS[source].label} source-native track URL is invalid`);
+			const url = /^https?:\/\//.test(relative) ? relative : `${reanalysisBase()}/${relative.replace(/^\//, '')}`;
+			const asset = indexNativeReanalysisAsset(source, month, await fetchGzipJson(url));
+			nativeReanalysisAssets.set(key, asset);
 			return asset;
 		})();
-		reanalysisLoads.set(source, promise);
+		nativeReanalysisLoads.set(key, promise);
 		try { return await promise; }
-		finally { reanalysisLoads.delete(source); }
+		finally { nativeReanalysisLoads.delete(key); }
 	}
 
-	function matchedReanalysisTrack(source, era5TrackId) {
-		const asset = reanalysisAssets.get(source);
-		if (!asset) return null;
-		const match = asset.matchByEra5.get(String(era5TrackId));
-		const points = match && asset.tracks ? asset.tracks[String(match.source_track_id)] : null;
-		return points && points.length ? {match, points} : null;
+	function nativeReanalysisTracksOnDay(source, timeMs) {
+		const asset = nativeReanalysisAssets.get(`${source}:${reanalysisMonth(timeMs)}`);
+		if (!asset || !asset.tracksByDay) return [];
+		return asset.tracksByDay.get(new Date(timeMs).toISOString().slice(0, 10)) || [];
+	}
+
+	async function ensureArchiveNativeReanalyses() {
+		if (state.mode === 'latest') return;
+		const target = archiveTargetTime();
+		if (!Number.isFinite(target)) return;
+		await Promise.allSettled(ALTERNATIVE_ANALYSIS_KEYS
+			.filter(source => state.analysisSources.has(source) && nativeReanalysisAvailable(source, target))
+			.map(source => ensureNativeReanalysisMonth(source, target)));
 	}
 
 	async function initialiseReanalysisTracks() {
 		try {
-			const manifest = await ensureReanalysisManifest();
-			await Promise.allSettled(ALTERNATIVE_ANALYSIS_KEYS.filter(source => manifest.sources[source] && manifest.sources[source].status === 'ready').map(ensureReanalysisAsset));
-			if (state.mode === 'archive') populateArchive(false);
+			await ensureReanalysisManifest();
+			await ensureArchiveNativeReanalyses();
+			if (state.mode === 'archive') {
+				populateArchiveTimeControls();
+				populateArchive(false);
+			}
 			render();
 		} catch (error) {
 			console.warn('Matched reanalysis tracks unavailable', error);
@@ -714,8 +755,15 @@
 	function populateArchiveTimeControls() {
 		if (!state.manifest) return;
 		const entries = archiveEntries();
-		const starts = entries.map(entry => String(entry.valid_start_utc || entry.cycle_utc || '').slice(0, 10)).filter(Boolean).sort();
-		const ends = entries.map(entry => String(entry.valid_end_utc || '').slice(0, 10)).filter(Boolean).sort();
+		const starts = entries.map(entry => String(entry.valid_start_utc || entry.cycle_utc || '').slice(0, 10)).filter(Boolean);
+		const ends = entries.map(entry => String(entry.valid_end_utc || '').slice(0, 10)).filter(Boolean);
+		if (reanalysisManifest && reanalysisManifest.sources) for (const definition of Object.values(reanalysisManifest.sources)) {
+			if (definition && definition.status === 'ready' && definition.native_tracks) {
+				if (definition.coverage_start_utc) starts.push(String(definition.coverage_start_utc).slice(0, 10));
+				if (definition.coverage_end_utc) ends.push(String(definition.coverage_end_utc).slice(0, 10));
+			}
+		}
+		starts.sort(); ends.sort();
 		const calendar = $('#mlaForecastArchiveDate');
 		calendar.min = starts[0] || '';
 		calendar.max = ends[ends.length - 1] || starts[starts.length - 1] || '';
@@ -872,9 +920,11 @@
 			for (const track of (payload && payload.verification ? payload.verification.tracks : []) || []) verificationIds.add(String(track.id));
 		}
 		const analysisTiles = Object.entries(ANALYSIS_TRACKS).map(([source, definition]) => {
-			const sourceAvailable = source === 'era5' ? era5Available : [...verificationIds].some(trackId => matchedReanalysisTrack(source, trackId));
-			const title = sourceAvailable ? `Show or hide matched ${definition.label} analysis tracks` : `No matched ${definition.label} track is available at this valid time`;
-			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(definition.detail) : 'No match'}</small></button>`;
+			const sourceAvailable = source === 'era5' ? era5Available : nativeReanalysisAvailable(source, target);
+			const title = sourceAvailable
+				? source === 'era5' ? 'Show or hide matched ERA5 verification tracks' : `Show or hide all ${definition.label} tracks active on this UTC date`
+				: `No ${definition.label} analysis is available on this date`;
+			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(definition.detail) : 'No data'}</small></button>`;
 		}).join('');
 		const summary = available
 			? `${available} model–lead pair${available === 1 ? '' : 's'} available · ${selected} selected`
@@ -936,6 +986,7 @@
 			notice(noArchiveMatchMessage(), 'flag', false);
 			render();
 		} else if (!state.archiveSelected.size && !selected) notice('', '', false);
+		scheduleRender();
 	}
 
 	async function loadArchivePayload(entry) {
@@ -1787,16 +1838,17 @@
 			}
 		}
 		if (state.mode !== 'latest' && state.analysisSources.size) {
+			const validTime = currentValidTime() == null ? archiveTargetTime() : currentValidTime();
+			for (const source of ALTERNATIVE_ANALYSIS_KEYS) {
+				if (!state.analysisSources.has(source)) continue;
+				for (const track of nativeReanalysisTracksOnDay(source, validTime)) {
+					drawAnalysisPath(target, track.points, ANALYSIS_TRACKS[source].colour, pointAtEpoch(track.points, validTime));
+				}
+			}
 			const verificationTracks = new Map();
 			for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!verificationTracks.has(String(track.id))) verificationTracks.set(String(track.id), {entry, track});
 			for (const {entry, track} of verificationTracks.values()) {
 				const currentStep = stepForPayload(entry.payload);
-				const validTime = currentValidTime();
-				for (const source of ALTERNATIVE_ANALYSIS_KEYS) {
-					if (!state.analysisSources.has(source)) continue;
-					const matched = matchedReanalysisTrack(source, track.id);
-					if (matched) drawAnalysisPath(target, matched.points, ANALYSIS_TRACKS[source].colour, pointAtEpoch(matched.points, validTime));
-				}
 				if (state.analysisSources.has('era5')) drawAnalysisPath(target, track.points, ANALYSIS_TRACKS.era5.colour, pointAt(track.points, currentStep));
 			}
 		}
@@ -2027,6 +2079,8 @@
 		$('#mlaForecastWeatherKey').hidden = true;
 		await drawWeather();
 		if (serial !== state.renderSerial) return;
+		await ensureArchiveNativeReanalyses();
+		if (serial !== state.renderSerial) return;
 		const systemGroups = forecastSystemGroups();
 		drawTracks(systemGroups);
 		await drawForecastEvolution(systemGroups, serial);
@@ -2037,7 +2091,7 @@
 		if (state.mode !== 'latest') for (const item of entries) for (const track of (item.payload.verification || {}).tracks || []) era5TrackIds.add(String(track.id));
 		const analysisCounts = {};
 		for (const source of state.analysisSources) {
-			analysisCounts[source] = source === 'era5' ? era5TrackIds.size : [...era5TrackIds].filter(trackId => matchedReanalysisTrack(source, trackId)).length;
+			analysisCounts[source] = source === 'era5' ? era5TrackIds.size : nativeReanalysisTracksOnDay(source, currentValidTime() == null ? archiveTargetTime() : currentValidTime()).length;
 		}
 		const mapStack = $('#mlaForecastMapStack');
 		mapStack.dataset.zoom = state.mapZoom.toFixed(3);
@@ -2046,7 +2100,9 @@
 		const status = entries.length
 			? [`${entries.length} run${entries.length === 1 ? '' : 's'} loaded`, `${systemGroups.length} storm group${systemGroups.length === 1 ? '' : 's'}`]
 			: [];
-		if (state.mode !== 'latest') for (const source of state.analysisSources) if (analysisCounts[source]) status.push(`${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} match${analysisCounts[source] === 1 ? '' : 'es'}`);
+		if (state.mode !== 'latest') for (const source of state.analysisSources) if (analysisCounts[source]) status.push(source === 'era5'
+			? `${analysisCounts[source]} ERA5 match${analysisCounts[source] === 1 ? '' : 'es'}`
+			: `${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} track${analysisCounts[source] === 1 ? '' : 's'}`);
 		$('#mlaForecastMapStatus').textContent = status.length ? status.join(' · ') : 'Forecast data not loaded.';
 		const runKey = $('#mlaForecastRunKey');
 		runKey.hidden = entries.length < 2;

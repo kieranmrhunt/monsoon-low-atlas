@@ -11,9 +11,11 @@ fi
 DATA_ROOT="${LPS_MERRA2_ROOT:-$ATLAS_ROOT/data/reanalyses/merra2}"
 OUTPUT_ROOT="$DATA_ROOT/tracking"
 RUN_ROOT="$ATLAS_ROOT/.reanalysis-runs/merra2-full-$START_MONTH-$END_MONTH"
+LINK_RUN_ROOT="$RUN_ROOT/parallel-link"
 LEDGER="$DATA_ROOT/opendap-ledger.json"
 ARRAY_CONCURRENCY="${LPS_MERRA2_DOWNLOAD_CONCURRENCY:-12}"
 MONTH_CONCURRENCY="${LPS_MERRA2_MONTH_CONCURRENCY:-72}"
+LINK_CONCURRENCY="${LPS_REANALYSIS_LINK_CONCURRENCY:-24}"
 mkdir -p "$RUN_ROOT" "$ATLAS_ROOT/hpc-logs"
 cd "$ATLAS_ROOT"
 "$PYTHON" -m reanalysis_pipeline.plan_merra2_backfill \
@@ -58,11 +60,31 @@ else
 	  scripts/detect_reanalysis_month.slurm merra2 "$RUN_ROOT/months.tsv" "$DATA_ROOT" "$OUTPUT_ROOT")"
 	printf '%s\n' "$DETECT_ID" > "$RUN_ROOT/detect.job-id"
 fi
-if [[ -s "$RUN_ROOT/finalizer.job-id" ]]; then
-	FINAL_ID="$(sed -n '1p' "$RUN_ROOT/finalizer.job-id")"
+if [[ -s "$RUN_ROOT/parallel-prepare.job-id" ]]; then
+	PREPARE_ID="$(sed -n '1p' "$RUN_ROOT/parallel-prepare.job-id")"
 else
-	FINAL_ID="$(sbatch --parsable --dependency="afterok:$DETECT_ID" \
-	  scripts/finalize_reanalysis.slurm merra2 "$DATA_ROOT" "$OUTPUT_ROOT")"
-	printf '%s\n' "$FINAL_ID" > "$RUN_ROOT/finalizer.job-id"
+	PREPARE_DEPENDENCY=()
+	CANDIDATE_COUNT="$(find "$OUTPUT_ROOT/candidates" -maxdepth 1 -type f -name 'candidates-*.csv' 2>/dev/null | wc -l)"
+	if [[ "$CANDIDATE_COUNT" -lt "$MONTH_COUNT" ]]; then PREPARE_DEPENDENCY=(--dependency="afterok:$DETECT_ID"); fi
+	PREPARE_ID="$(sbatch --parsable "${PREPARE_DEPENDENCY[@]}" \
+	  scripts/prepare_parallel_reanalysis_link.slurm merra2 "$OUTPUT_ROOT" "$LINK_RUN_ROOT")"
+	printf '%s\n' "$PREPARE_ID" > "$RUN_ROOT/parallel-prepare.job-id"
 fi
-echo "MERRA-2 $START_MONTH through $END_MONTH: downloads end at $PREVIOUS_ID, ledger $LEDGER_ID, standardise $STANDARD_ID, detect $DETECT_ID, finalizer $FINAL_ID"
+START_YEAR="${START_MONTH%%-*}"
+END_YEAR="${END_MONTH%%-*}"
+YEAR_COUNT="$((10#$END_YEAR - 10#$START_YEAR + 1))"
+if [[ -s "$RUN_ROOT/parallel-years.job-id" ]]; then
+	LINK_ID="$(sed -n '1p' "$RUN_ROOT/parallel-years.job-id")"
+else
+	LINK_ID="$(sbatch --parsable --dependency="afterok:$PREPARE_ID" \
+	  --array="0-$((YEAR_COUNT - 1))%$LINK_CONCURRENCY" scripts/link_reanalysis_year.slurm "$LINK_RUN_ROOT")"
+	printf '%s\n' "$LINK_ID" > "$RUN_ROOT/parallel-years.job-id"
+fi
+if [[ -s "$RUN_ROOT/parallel-finalizer.job-id" ]]; then
+	FINAL_ID="$(sed -n '1p' "$RUN_ROOT/parallel-finalizer.job-id")"
+else
+	FINAL_ID="$(sbatch --parsable --dependency="afterok:$LINK_ID" \
+	  scripts/finalize_parallel_reanalysis.slurm merra2 "$DATA_ROOT" "$OUTPUT_ROOT" "$LINK_RUN_ROOT")"
+	printf '%s\n' "$FINAL_ID" > "$RUN_ROOT/parallel-finalizer.job-id"
+fi
+echo "MERRA-2 $START_MONTH through $END_MONTH: downloads end at $PREVIOUS_ID, ledger $LEDGER_ID, standardise $STANDARD_ID, detect $DETECT_ID, link years $LINK_ID, finalizer $FINAL_ID"

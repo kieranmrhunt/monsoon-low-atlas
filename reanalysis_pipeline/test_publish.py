@@ -6,7 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 from .match import MATCH_SCHEMA
+from .native import build_native_archive
 from .publish import MANIFEST_SCHEMA, build_manifest, publish
 
 
@@ -51,6 +54,39 @@ class PublishReanalysisTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["sources"]["merra2"]["status"], "ready")
             self.assertEqual(manifest["sources"]["jra55"]["status"], "ready")
+
+    def test_publish_installs_native_months_and_advertises_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            linked = root / "linked.csv"
+            pd.DataFrame([
+                {
+                    "track_id": 1,
+                    "time": time,
+                    "lon_smooth": 80 + index * 0.02,
+                    "lat_smooth": 20,
+                    "lon_detected": 80 + index * 0.02,
+                    "lat_detected": 20,
+                    "position_source": "observed",
+                    "reject_reason": "accepted",
+                    "imd_category_raw": 1,
+                    "candidate_quality": 7,
+                    "centre_score": 7,
+                    "max_vort_smoothed": 8,
+                    "pressure_deficit_hpa": 4,
+                    "heat_low_score": 0.2,
+                }
+                for index, time in enumerate(pd.date_range("2016-07-01", periods=31, freq="h"))
+            ]).to_csv(linked, index=False)
+            native = root / "native"
+            build_native_archive("merra2", linked, native, chunksize=1)
+            public = root / "public"
+            manifest_path = publish(public, {"merra2": self.asset(root)}, {"merra2": native})
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            record = manifest["sources"]["merra2"]["native_tracks"]
+            self.assertEqual(record["start_month"], "201607")
+            self.assertEqual(record["end_month"], "201607")
+            self.assertTrue((public / record["url_template"].replace("{month}", "201607")).is_file())
 
 
 if __name__ == "__main__":

@@ -99,7 +99,7 @@ def link_candidates(output_root: Path, source: str) -> Path:
         "detector": str(DETECTOR),
         "linker": str(LINKER),
         "parameters": {"path": str(PARAMETERS), "sha256": sha256(PARAMETERS)},
-        "method_note": "Frozen v5.6 detector/linker geometry; ERA5 event identity and release category are assigned only after objective track matching.",
+        "method_note": "Frozen v5.4.2 candidate detector and continuity linker retained by v5.6. Source-native physical selection and optional ERA5 identity matching are separate downstream stages; ERA5-only final-physics intensity is not transferred.",
     }
     manifest_path = output_root / f"{source}-tracking-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

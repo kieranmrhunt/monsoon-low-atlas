@@ -52,61 +52,84 @@ def normalise_tracks(frame: pd.DataFrame, *, source: str) -> pd.DataFrame:
     return output.sort_values(["track_id", "time"], kind="stable")
 
 
-def candidate_metrics(alternative: pd.DataFrame, era: pd.DataFrame) -> list[dict[str, Any]]:
+def track_pair_metrics(
+    alternative: pd.DataFrame,
+    era_track: pd.DataFrame,
+    era_track_id: Any,
+) -> dict[str, Any] | None:
     merged = alternative[["time", "longitude", "latitude"]].merge(
-        era[["track_id", "time", "longitude", "latitude"]],
+        era_track[["time", "longitude", "latitude"]],
         on="time",
         suffixes=("_source", "_era5"),
     )
+    if len(merged) < MINIMUM_OVERLAP_HOURS:
+        return None
+    distances = haversine_km(
+        merged["longitude_source"].to_numpy(),
+        merged["latitude_source"].to_numpy(),
+        merged["longitude_era5"].to_numpy(),
+        merged["latitude_era5"].to_numpy(),
+    )
+    median = float(np.median(distances))
+    p90 = float(np.percentile(distances, 90))
+    close_fraction = float(np.mean(distances <= 250.0))
+    source_coverage = len(merged) / max(1, len(alternative))
+    era_coverage = len(merged) / max(1, len(era_track))
+    eligible = (
+        median <= MAXIMUM_MEDIAN_DISTANCE_KM
+        and p90 <= MAXIMUM_P90_DISTANCE_KM
+        and close_fraction >= MINIMUM_CLOSE_FRACTION
+    )
+    score = (
+        median
+        + 0.35 * p90
+        + 100.0 * (1.0 - close_fraction)
+        + 75.0 * (1.0 - min(source_coverage, era_coverage))
+    )
+    return {
+        "era5_track_id": int(era_track_id) if str(era_track_id).isdigit() else str(era_track_id),
+        "overlap_hours": int(len(merged)),
+        "median_distance_km": round(median, 2),
+        "p90_distance_km": round(p90, 2),
+        "within_250km_fraction": round(close_fraction, 4),
+        "source_coverage_fraction": round(source_coverage, 4),
+        "era5_coverage_fraction": round(era_coverage, 4),
+        "score": round(score, 3),
+        "eligible": bool(eligible),
+    }
+
+
+def candidate_metrics(alternative: pd.DataFrame, era: pd.DataFrame) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
-    for era_track_id, group in merged.groupby("track_id", sort=False):
-        if len(group) < MINIMUM_OVERLAP_HOURS:
-            continue
-        distances = haversine_km(
-            group["longitude_source"].to_numpy(),
-            group["latitude_source"].to_numpy(),
-            group["longitude_era5"].to_numpy(),
-            group["latitude_era5"].to_numpy(),
-        )
-        median = float(np.median(distances))
-        p90 = float(np.percentile(distances, 90))
-        close_fraction = float(np.mean(distances <= 250.0))
-        era_size = int((era["track_id"] == era_track_id).sum())
-        source_coverage = len(group) / max(1, len(alternative))
-        era_coverage = len(group) / max(1, era_size)
-        eligible = (
-            median <= MAXIMUM_MEDIAN_DISTANCE_KM
-            and p90 <= MAXIMUM_P90_DISTANCE_KM
-            and close_fraction >= MINIMUM_CLOSE_FRACTION
-        )
-        score = (
-            median
-            + 0.35 * p90
-            + 100.0 * (1.0 - close_fraction)
-            + 75.0 * (1.0 - min(source_coverage, era_coverage))
-        )
-        output.append({
-            "era5_track_id": int(era_track_id) if str(era_track_id).isdigit() else str(era_track_id),
-            "overlap_hours": int(len(group)),
-            "median_distance_km": round(median, 2),
-            "p90_distance_km": round(p90, 2),
-            "within_250km_fraction": round(close_fraction, 4),
-            "source_coverage_fraction": round(source_coverage, 4),
-            "era5_coverage_fraction": round(era_coverage, 4),
-            "score": round(score, 3),
-            "eligible": bool(eligible),
-        })
+    for era_track_id, era_track in era.groupby("track_id", sort=False):
+        metrics = track_pair_metrics(alternative, era_track, era_track_id)
+        if metrics is not None:
+            output.append(metrics)
     return sorted(output, key=lambda item: (not item["eligible"], item["score"], -item["overlap_hours"]))
 
 
 def match_tracks(alternative: pd.DataFrame, era: pd.DataFrame) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     candidates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    era_starts = era.groupby("track_id")["time"].agg(["min", "max"])
+    era_groups = {
+        track_id: group[["time", "longitude", "latitude"]].copy()
+        for track_id, group in era.groupby("track_id", sort=False)
+    }
+    era_order = {track_id: index for index, track_id in enumerate(era_groups)}
+    era_by_time = {
+        pd.Timestamp(timestamp): tuple(track_ids)
+        for timestamp, track_ids in era.groupby("time", sort=False)["track_id"].unique().items()
+    }
     for source_track_id, track in alternative.groupby("track_id", sort=False):
-        start, end = track["time"].min(), track["time"].max()
-        possible_ids = era_starts.index[(era_starts["max"] >= start) & (era_starts["min"] <= end)]
-        metrics = candidate_metrics(track, era.loc[era["track_id"].isin(possible_ids)])
+        possible_ids: set[Any] = set()
+        for timestamp in pd.DatetimeIndex(track["time"]).unique():
+            possible_ids.update(era_by_time.get(pd.Timestamp(timestamp), ()))
+        metrics = [
+            value
+            for era_track_id in sorted(possible_ids, key=era_order.__getitem__)
+            if (value := track_pair_metrics(track, era_groups[era_track_id], era_track_id)) is not None
+        ]
+        metrics.sort(key=lambda item: (not item["eligible"], item["score"], -item["overlap_hours"]))
         eligible = [item for item in metrics if item["eligible"]]
         if not eligible:
             rejected.append({"source_track_id": str(source_track_id), "reason": "no_confident_era5_match"})
