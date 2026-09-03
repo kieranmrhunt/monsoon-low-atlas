@@ -109,8 +109,8 @@
 		return JSON.parse(await new Response(stream).text());
 	}
 
-	async function fetchGzipJson(url) {
-		return gunzipJson(await fetch(url, {cache: 'force-cache'}));
+	async function fetchGzipJson(url, cache = 'force-cache') {
+		return gunzipJson(await fetch(url, {cache}));
 	}
 
 	function reanalysisBase() {
@@ -173,10 +173,8 @@
 			if (!definition || definition.status !== 'ready' || !native || month < native.start_month || month > native.end_month) return null;
 			const relative = String(native.url_template || '').replace('{month}', month);
 			if (!relative || relative.includes('{month}')) throw new Error(`${ANALYSIS_TRACKS[source].label} source-native track URL is invalid`);
-			const baseUrl = /^https?:\/\//.test(relative) ? relative : `${reanalysisBase()}/${relative.replace(/^\//, '')}`;
-			const version = definition.sha256 || manifest.generated_utc || '';
-			const url = version ? `${baseUrl}?v=${encodeURIComponent(String(version).slice(0, 12))}` : baseUrl;
-			const asset = indexNativeReanalysisAsset(source, month, await fetchGzipJson(url));
+			const url = /^https?:\/\//.test(relative) ? relative : `${reanalysisBase()}/${relative.replace(/^\//, '')}`;
+			const asset = indexNativeReanalysisAsset(source, month, await fetchGzipJson(url, 'no-store'));
 			nativeReanalysisAssets.set(key, asset);
 			return asset;
 		})();

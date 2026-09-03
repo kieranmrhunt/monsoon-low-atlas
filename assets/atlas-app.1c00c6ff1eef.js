@@ -405,8 +405,8 @@
 		return new Response(stream).json();
 	}
 
-	async function fetchJsonAsset(url, label) {
-		const response = await fetch(url, {cache: 'force-cache'});
+	async function fetchJsonAsset(url, label, cache = 'force-cache') {
+		const response = await fetch(url, {cache});
 		if (!response.ok) throw new Error(`Could not fetch ${label} (${response.status})`);
 		return decodeJsonBytes(new Uint8Array(await response.arrayBuffer()));
 	}
@@ -446,9 +446,8 @@
 			const manifest = await ensureReanalysisManifest();
 			const definition = manifest.sources[source];
 			if (!definition || definition.status !== 'ready' || !definition.matches_url) throw new Error(`${REANALYSIS_SOURCES[source].label} matched tracks are not yet available`);
-			const baseUrl = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
-			const url = definition.sha256 ? `${baseUrl}?v=${String(definition.sha256).slice(0, 12)}` : baseUrl;
-			const asset = indexReanalysisAsset(source, await fetchJsonAsset(url, `${REANALYSIS_SOURCES[source].label} matched tracks`));
+			const url = /^https?:\/\//.test(definition.matches_url) ? definition.matches_url : `${reanalysisBase()}/${String(definition.matches_url).replace(/^\//, '')}`;
+			const asset = indexReanalysisAsset(source, await fetchJsonAsset(url, `${REANALYSIS_SOURCES[source].label} matched tracks`, 'no-store'));
 			reanalysisAssets.set(source, asset);
 			return asset;
 		})();

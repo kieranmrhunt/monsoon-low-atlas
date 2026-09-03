@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,7 +44,10 @@ class PublishReanalysisTest(unittest.TestCase):
             manifest_path = publish(root / "public", {"merra2": self.asset(root)})
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["sources"]["merra2"]["status"], "ready")
-            self.assertTrue((manifest_path.parent / manifest["sources"]["merra2"]["matches_url"]).is_file())
+            published = manifest_path.parent / manifest["sources"]["merra2"]["matches_url"]
+            self.assertTrue(published.is_file())
+            self.assertTrue(manifest_path.stat().st_mode & stat.S_IROTH)
+            self.assertTrue(published.stat().st_mode & stat.S_IROTH)
 
     def test_browser_invalid_nonfinite_json_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,7 +102,9 @@ class PublishReanalysisTest(unittest.TestCase):
             record = manifest["sources"]["merra2"]["native_tracks"]
             self.assertEqual(record["start_month"], "201607")
             self.assertEqual(record["end_month"], "201607")
-            self.assertTrue((public / record["url_template"].replace("{month}", "201607")).is_file())
+            published = public / record["url_template"].replace("{month}", "201607")
+            self.assertTrue(published.is_file())
+            self.assertTrue(published.stat().st_mode & stat.S_IROTH)
 
 
 if __name__ == "__main__":

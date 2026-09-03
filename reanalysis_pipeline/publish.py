@@ -150,8 +150,10 @@ def build_manifest(
 
 def atomic_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.chmod(destination.parent.stat().st_mode | 0o055)
     temporary = destination.with_suffix(destination.suffix + f".part-{os.getpid()}")
     shutil.copyfile(source, temporary)
+    temporary.chmod(0o644)
     os.replace(temporary, destination)
 
 
@@ -159,6 +161,8 @@ def install_native_archive(source: str, path: Path, output: Path) -> None:
     value = validate_native_archive(path, source)
     destination = output / "native" / source
     destination.mkdir(parents=True, exist_ok=True)
+    (output / "native").chmod((output / "native").stat().st_mode | 0o055)
+    destination.chmod(destination.stat().st_mode | 0o055)
     for record in value["months"].values():
         atomic_copy(path / record["url"], destination / record["url"])
     # The index is the commit marker and is installed only after every month.
@@ -217,9 +221,11 @@ def publish(
         if sha256(destination) != manifest["sources"][source]["sha256"]:
             raise RuntimeError(f"checksum mismatch after publishing {source}")
     output.mkdir(parents=True, exist_ok=True)
+    output.chmod(output.stat().st_mode | 0o055)
     destination = output / "manifest.json"
     temporary = destination.with_suffix(f".json.part-{os.getpid()}")
     temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.chmod(0o644)
     os.replace(temporary, destination)
     return destination
 
