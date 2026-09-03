@@ -296,15 +296,18 @@
 		return true;
 	}
 
-	function preferredCoalescedPoint(candidate, incumbent, keeperId) {
-		if (!incumbent) return true;
-		const candidateObserved = String(candidate.point[candidate.point.length - 1]).toLowerCase() === 'o';
-		const incumbentObserved = String(incumbent.point[incumbent.point.length - 1]).toLowerCase() === 'o';
-		if (candidateObserved !== incumbentObserved) return candidateObserved;
-		const candidateScore = Number(candidate.point[3]);
-		const incumbentScore = Number(incumbent.point[3]);
-		if (Number.isFinite(candidateScore) && Number.isFinite(incumbentScore) && candidateScore !== incumbentScore) return candidateScore > incumbentScore;
-		return candidate.trackId === keeperId && incumbent.trackId !== keeperId;
+	function coalescedContinuationRank(track, mergeStep, keeperId) {
+		const encounter = (track.points || []).filter(point => {
+			const step = Number(point[0]);
+			return step >= mergeStep && step < mergeStep + 6;
+		});
+		const observed = encounter.filter(point => String(point[point.length - 1]).toLowerCase() === 'o').length;
+		const vorticity = encounter.map(point => Number(point[3])).filter(Number.isFinite).sort((a, b) => a - b);
+		const middle = Math.floor(vorticity.length / 2);
+		const medianVorticity = !vorticity.length ? -Infinity
+			: vorticity.length % 2 ? vorticity[middle]
+			: 0.5 * (vorticity[middle - 1] + vorticity[middle]);
+		return [-observed, -medianVorticity, track.id === keeperId ? 0 : 1, String(track.id)];
 	}
 
 	function refreshForecastTrack(track) {
@@ -351,22 +354,19 @@
 			const secondRank = forecastTrackRank(match.second);
 			const keeper = rankBefore(firstRank, secondRank) ? match.first : match.second;
 			const terminated = keeper === match.first ? match.second : match.first;
-			const tailByStep = new Map();
-			for (const track of [keeper, terminated]) for (const point of track.points || []) {
-				if (Number(point[0]) < match.mergeStep) continue;
-				const candidate = {point, trackId: track.id};
-				const step = Number(point[0]);
-				if (preferredCoalescedPoint(candidate, tailByStep.get(step), keeper.id)) tailByStep.set(step, candidate);
-			}
+			const continuation = rankBefore(
+				coalescedContinuationRank(match.first, match.mergeStep, keeper.id),
+				coalescedContinuationRank(match.second, match.mergeStep, keeper.id)
+			) ? match.first : match.second;
 			keeper.points = [
 				...(keeper.points || []).filter(point => Number(point[0]) < match.mergeStep),
-				...[...tailByStep.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value.point)
+				...(continuation.points || []).filter(point => Number(point[0]) >= match.mergeStep)
 			];
 			terminated.points = (terminated.points || []).filter(point => Number(point[0]) < match.mergeStep);
 			refreshForecastTrack(keeper);
 			refreshForecastTrack(terminated);
 			if (!terminated.points.length) tracks = tracks.filter(track => track !== terminated);
-			audit.push({member: match.member, kept: String(keeper.id), terminated: String(terminated.id), mergeStep: match.mergeStep});
+			audit.push({member: match.member, kept: String(keeper.id), terminated: String(terminated.id), continuation: String(continuation.id), mergeStep: match.mergeStep});
 		}
 		payload.tracks = tracks;
 		if (audit.length && Array.isArray(payload.systems)) {
