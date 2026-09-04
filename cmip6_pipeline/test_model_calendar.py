@@ -9,6 +9,33 @@ from cmip6_pipeline.model_calendar import native_iso, time_axis
 
 
 class TimeAxisTest(unittest.TestCase):
+    def test_gregorian_clock_is_identity_including_leap_day(self) -> None:
+        axis = time_axis("proleptic_gregorian", "199901")
+        native = [
+            cftime.DatetimeProlepticGregorian(2000, 2, 29, 23),
+            cftime.DatetimeProlepticGregorian(2000, 3, 1, 0),
+        ]
+        analysis = axis.native_to_analysis(native)
+        self.assertEqual(analysis[0], pd.Timestamp("2000-02-29T23:00:00"))
+        self.assertEqual(analysis[1], pd.Timestamp("2000-03-01T00:00:00"))
+        self.assertEqual(analysis[1] - analysis[0], pd.Timedelta(hours=1))
+
+    def test_noleap_clock_keeps_elapsed_time_and_native_identity(self) -> None:
+        axis = time_axis("noleap", "199901")
+        native = [
+            cftime.DatetimeNoLeap(2000, 2, 28, 23),
+            cftime.DatetimeNoLeap(2000, 3, 1, 0),
+        ]
+        analysis = axis.native_to_analysis(native)
+        self.assertEqual(analysis[0], pd.Timestamp("2000-02-28T23:00:00"))
+        self.assertEqual(analysis[1], pd.Timestamp("2000-02-29T00:00:00"))
+        self.assertEqual(analysis[1] - analysis[0], pd.Timedelta(hours=1))
+        restored = axis.analysis_to_native(analysis)
+        self.assertEqual(
+            [native_iso(value) for value in restored],
+            [native_iso(value) for value in native],
+        )
+
     def test_360_day_clock_is_hourly_across_non_civil_dates(self) -> None:
         axis = time_axis("360_day", "198101")
         native = [
