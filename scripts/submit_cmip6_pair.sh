@@ -28,7 +28,6 @@ fi
 
 STANDARD_COUNT="$(wc -l < "$RUN_ROOT/standardise.tsv")"
 DETECT_COUNT="$(wc -l < "$RUN_ROOT/detect.tsv")"
-LINK_COUNT="$(wc -l < "$RUN_ROOT/link.tsv")"
 STANDARD_ID="$(sbatch --parsable --array="1-$STANDARD_COUNT%$CONCURRENCY" \
   scripts/standardise_cmip6_month.slurm "$RUN_ROOT/standardise.tsv")"
 DEPENDENCY="afterok:$STANDARD_ID"
@@ -42,13 +41,11 @@ if [[ -s "$RUN_ROOT/aux-boundary.tsv" ]]; then
 fi
 DETECT_ID="$(sbatch --parsable --dependency="$DEPENDENCY" --array="1-$DETECT_COUNT%$CONCURRENCY" \
   scripts/detect_cmip6_month.slurm "$RUN_ROOT/detect.tsv")"
-LINK_ID="$(sbatch --parsable --dependency="afterok:$DETECT_ID" --array="1-$LINK_COUNT%$LINK_COUNT" \
-  scripts/link_cmip6_period.slurm "$RUN_ROOT/link.tsv")"
-PHYSICS_ID="$(sbatch --parsable --dependency="afterok:$LINK_ID" scripts/dispatch_cmip6_physics.slurm "$RUN_ROOT")"
+LINK_DISPATCH_ID="$(sbatch --parsable --dependency="afterok:$DETECT_ID" \
+  scripts/dispatch_cmip6_parallel_link.slurm "$RUN_ROOT")"
 
 printf '%s\n' "$STANDARD_ID" > "$RUN_ROOT/standardise.job-id"
 printf '%s\n' "$DETECT_ID" > "$RUN_ROOT/detect.job-id"
-printf '%s\n' "$LINK_ID" > "$RUN_ROOT/link.job-id"
-printf '%s\n' "$PHYSICS_ID" > "$RUN_ROOT/physics-dispatch.job-id"
-printf 'CMIP6 %s: standardise %s, boundary %s, detect %s, link %s, physics dispatch %s\n' \
-  "$PRESET" "$STANDARD_ID" "${BOUNDARY_ID:-none}" "$DETECT_ID" "$LINK_ID" "$PHYSICS_ID"
+printf '%s\n' "$LINK_DISPATCH_ID" > "$RUN_ROOT/link-dispatch.job-id"
+printf 'CMIP6 %s: standardise %s, boundary %s, detect %s, annual-link dispatch %s\n' \
+  "$PRESET" "$STANDARD_ID" "${BOUNDARY_ID:-none}" "$DETECT_ID" "$LINK_DISPATCH_ID"

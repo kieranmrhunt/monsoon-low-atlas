@@ -24,7 +24,7 @@
     "surface pressure for hybrid-level conversion"
   ],
   "processing_rules": [
-    "Preserve each model's native calendar and retain cftime timestamps.",
+    "Preserve each model's exact elapsed-time and native-calendar identity; use cftime at ingestion and an invertible ordinal analysis clock only where the frozen detector requires pandas timestamps.",
     "Run a month-scale field and timestep QA pilot before a model is admitted.",
     "Use one frozen detector/linker version across historical and scenario segments.",
     "Join historical and scenario segments only for the same model, member and compatible grid.",
@@ -55,6 +55,19 @@
     "status": "standardisation, frozen detector/linker, final-centre physics, classification and compact seasonal publication asset completed",
     "interpretation": "Engineering canary only; one season per climate is not a climate-change estimate."
   },
+  "native_calendar_canary": {
+    "source_id": "HadGEM3-GC31-LL",
+    "member_id": "r1i1p1f3",
+    "calendar": "360_day",
+    "historical_period": "JJAS 1990",
+    "future_period": "JJAS 2080",
+    "future_experiment": "ssp245",
+    "status": "field standardisation, frozen tracking, final-centre physics, native-time inversion QA and compact staging completed",
+    "time_identity": "Continuous native elapsed hours are exposed to the unchanged detector on an ordinal analysis clock; exact native dates are restored in the final catalogue without adding, dropping or stretching model days.",
+    "pressure_sampling": "Both halves use HadGEM3-GC31-LL 6hrPlev interval-mean MSLP because SSP2-4.5 has no instantaneous 6hrPlevPt MSLP; source cell methods are retained in provenance.",
+    "production_windows": "1981-2010 historical and 2070-2099 SSP2-4.5",
+    "interpretation": "Engineering canary only; admission to the ensemble still requires the complete historical realism screen."
+  },
   "first_production_pair": {
     "source_id": "MPI-ESM1-2-HR",
     "member_id": "r1i1p1f1",
@@ -77,7 +90,7 @@
     ],
     "status": "hold-publication",
     "finding": "MIROC6 alone passes the conservative all-LPS historical screen; no model passes the all-month plus JJAS absolute classification screen.",
-    "next_gate": "Add at least one independent historically credible model and keep absolute D/DD/CS changes out of headline inference until category realism improves."
+    "next_gate": "Evaluate the complete HadGEM3-GC31-LL pair as a fifth independent model and keep absolute D/DD/CS changes out of headline inference until category realism improves."
   },
   "prepublication_gates": [
     "Run at least the 1981-2010 and 2071-2100 windows for every admitted model/scenario pair.",

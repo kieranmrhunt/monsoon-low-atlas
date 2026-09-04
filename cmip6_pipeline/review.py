@@ -317,6 +317,9 @@ def markdown(review: dict[str, Any]) -> str:
             + " |"
         )
     decision = review["decision"]
+    rain_signal = review["signal_agreement"]["jjas"][
+        "mean_peak_24h_precipitation_mm"
+    ]
     lines = [
         "# CMIP6 LPS candidate review",
         "",
@@ -337,7 +340,8 @@ def markdown(review: dict[str, Any]) -> str:
         *change_rows,
         "",
         (
-            "The precipitation increase has the only unanimous model sign. "
+            "Track-centred 24-hour precipitation increases in "
+            f"{rain_signal['positive']} of {rain_signal['models']} models. "
             "These are staging diagnostics, not a public claim."
         ),
         "",
@@ -379,6 +383,81 @@ def _review_payload(
     class_eligible: list[str],
     signals: dict[str, Any],
 ) -> dict[str, Any]:
+    ready = len(total_eligible) >= 2
+    classes_ready = len(class_eligible) >= 2
+    findings = [
+        (
+            {
+                "severity": "medium",
+                "confidence": "high",
+                "finding": (
+                    f"The {len(models)}-model candidate meets the automated minimum "
+                    "historical screen for an explicit human review."
+                ),
+                "impact": (
+                    f"{len(total_eligible)} independently tracked models support an "
+                    "all-LPS headline; failing models must remain visibly identified."
+                ),
+                "remediation": (
+                    "Inspect the exact model dispositions and spatial diagnostics before "
+                    "issuing an approval record."
+                ),
+            }
+            if ready
+            else {
+                "severity": "high",
+                "confidence": "high",
+                "finding": (
+                    f"The {len(models)}-model candidate is not yet suitable for a headline "
+                    "multi-model projection."
+                ),
+                "impact": (
+                    "Historically under-detecting models would dominate an equal-weight mean."
+                ),
+                "remediation": (
+                    "Add another independently credible model or publish only an explicitly "
+                    "single-model result."
+                ),
+            }
+        ),
+        (
+            {
+                "severity": "medium",
+                "confidence": "medium",
+                "finding": (
+                    "At least two models pass the absolute D/DD/CS historical-frequency "
+                    "screen, but threshold classes remain resolution-sensitive."
+                ),
+                "impact": "Class-filtered changes still need explicit scientific review.",
+                "remediation": (
+                    "Compare the eligible models and continuous intensity diagnostics before "
+                    "using class-filtered changes as a headline."
+                ),
+            }
+            if classes_ready
+            else {
+                "severity": "high",
+                "confidence": "high",
+                "finding": "Absolute D/DD/CS category frequencies are not publication-ready.",
+                "impact": (
+                    "Class-filtered changes would mix climate response with threshold and grid bias."
+                ),
+                "remediation": (
+                    "Restrict any first view to all LPSs and continuous intensity diagnostics."
+                ),
+            }
+        ),
+        {
+            "severity": "medium",
+            "confidence": "medium",
+            "finding": (
+                "The JJAS track-centred precipitation response is the most consistent "
+                "preliminary intensity signal."
+            ),
+            "evidence": signals["jjas"]["mean_peak_24h_precipitation_mm"],
+            "remediation": "Reassess after expanding the admissible model set.",
+        },
+    ]
     return {
         "schema": SCHEMA,
         "generated_utc": utc_now(),
@@ -396,58 +475,27 @@ def _review_payload(
             "note": "Conservative publication rubric; no detector thresholds are retuned.",
         },
         "decision": {
-            "status": (
-                "ready-for-explicit-human-approval"
-                if len(total_eligible) >= 2
-                else "hold-publication"
-            ),
+            "status": "ready-for-explicit-human-approval" if ready else "hold-publication",
             "all_lps_headline_eligible_models": total_eligible,
             "absolute_class_headline_eligible_models": class_eligible,
             "reason": (
-                f"Only {len(total_eligible)} independently tracked model passes the conservative "
-                "all-LPS historical screen; at least two are required for a multi-model headline."
+                (
+                    f"{len(total_eligible)} independently tracked models pass the conservative "
+                    "all-LPS historical screen, meeting the automated minimum; explicit human "
+                    "approval is still required."
+                )
+                if ready
+                else (
+                    f"Only {len(total_eligible)} independently tracked model"
+                    f"{'s' if len(total_eligible) != 1 else ''} "
+                    f"{'pass' if len(total_eligible) != 1 else 'passes'} the conservative all-LPS "
+                    "historical screen; at least two are required for a multi-model headline."
+                )
             ),
         },
         "models": models,
         "signal_agreement": signals,
-        "findings": [
-            {
-                "severity": "high",
-                "confidence": "high",
-                "finding": (
-                    "The four-model candidate is not yet suitable for a headline "
-                    "multi-model projection."
-                ),
-                "impact": (
-                    "Historically under-detecting models would dominate an equal-weight mean."
-                ),
-                "remediation": (
-                    "Add another independently credible model or publish only an explicitly "
-                    "single-model result."
-                ),
-            },
-            {
-                "severity": "high",
-                "confidence": "high",
-                "finding": "Absolute D/DD/CS category frequencies are not publication-ready.",
-                "impact": (
-                    "Class-filtered changes would mix climate response with threshold and grid bias."
-                ),
-                "remediation": (
-                    "Restrict any first view to all LPSs and continuous intensity diagnostics."
-                ),
-            },
-            {
-                "severity": "medium",
-                "confidence": "medium",
-                "finding": (
-                    "The JJAS precipitation-intensity increase is the most consistent "
-                    "preliminary signal."
-                ),
-                "evidence": signals["jjas"]["mean_peak_24h_precipitation_mm"],
-                "remediation": "Reassess after expanding the admissible model set.",
-            },
-        ],
+        "findings": findings,
         "assumptions": [
             "ERA5 v5.6 over the identical 1981–2010 years is the reference.",
             "Unique-track density on the common 1-degree grid is the spatial diagnostic.",
