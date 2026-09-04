@@ -1835,7 +1835,15 @@
 		if (Math.abs(state.mapZoom - 1) > .01) parameters.set('centre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
 		if (state.selected != null) parameters.set('system', String(atlasId(state.selected)));
 		const existing = new URLSearchParams(window.location.search);
-		for (const key of ['cmpair', 'cmseason', 'cmmetric']) {
+		// The forecast panel owns these parameters. Preserve them whenever the
+		// main atlas normalises its own state so a startup/render race cannot
+		// discard an exact shared forecast selection before that panel reads it.
+		for (const key of [
+			'cmpair', 'cmseason', 'cmmetric',
+			'fmode', 'fdate', 'fhour', 'fquery', 'fruns', 'fanalysis', 'fmodels', 'finit',
+			'fsystem', 'fgroup', 'ffocus', 'fmembers', 'fvalid', 'fweather', 'fweather_run',
+			'fzoom', 'fcentre'
+		]) {
 			if (existing.has(key)) parameters.set(key, existing.get(key));
 		}
 		return parameters;
