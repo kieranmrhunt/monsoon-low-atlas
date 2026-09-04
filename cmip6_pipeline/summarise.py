@@ -979,6 +979,18 @@ def assemble_ensemble(
                 "source_label": copied_pairs[pair_id]["source_label"],
                 "status": screen.get("screening_status"),
                 "diagnostic_flags": screen.get("diagnostic_flags"),
+                "comparisons": screen.get("comparisons"),
+                "jjas": {
+                    "status": (screen.get("seasonal", {}).get("jjas") or {}).get(
+                        "screening_status"
+                    ),
+                    "diagnostic_flags": (
+                        screen.get("seasonal", {}).get("jjas") or {}
+                    ).get("diagnostic_flags"),
+                    "comparisons": (screen.get("seasonal", {}).get("jjas") or {}).get(
+                        "comparisons"
+                    ),
+                },
             }
         )
     historical["qa"]["historical_screening"] = screen_records

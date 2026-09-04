@@ -176,7 +176,18 @@ class SummariseTest(unittest.TestCase):
                                 "catalogue": {"sha256": sha256(source)},
                                 "checks": {"duplicate_track_times": 0},
                                 "historical_screen": (
-                                    {"screening_status": "passes-basic-historical-screen"}
+                                    {
+                                        "screening_status": "passes-basic-historical-screen",
+                                        "diagnostic_flags": [],
+                                        "comparisons": {"event_frequency_ratio": 0.9},
+                                        "seasonal": {
+                                            "jjas": {
+                                                "screening_status": "review-model-bias",
+                                                "diagnostic_flags": ["low_event_frequency"],
+                                                "comparisons": {"event_frequency_ratio": 0.5},
+                                            }
+                                        },
+                                    }
                                     if role == "historical" else None
                                 ),
                             }
@@ -207,6 +218,12 @@ class SummariseTest(unittest.TestCase):
                 index = json.load(stream)
             self.assertEqual(index["status"], "multi-model-awaiting-review")
             self.assertEqual(index["ensemble"]["model_count"], 2)
+            screen = index["ensemble"]["historical_screening"][0]
+            self.assertEqual(screen["comparisons"]["event_frequency_ratio"], 0.9)
+            self.assertEqual(screen["jjas"]["status"], "review-model-bias")
+            self.assertEqual(
+                screen["jjas"]["comparisons"]["event_frequency_ratio"], 0.5
+            )
             ensemble = next(pair for pair in index["pairs"] if pair.get("kind") == "multi-model")
             self.assertEqual(ensemble["source_label"], "Multi-model mean")
             with gzip.open(combined / ensemble["change"]["url"], "rt", encoding="utf-8") as stream:
