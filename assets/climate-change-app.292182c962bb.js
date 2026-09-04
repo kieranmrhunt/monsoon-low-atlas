@@ -27,7 +27,7 @@
 	const FUTURE_COLOUR = '#c6473b';
 	const MODEL_COLOURS = ['#00629b', '#d55e00', '#009e73', '#8f3b76', '#6f4c9b', '#e69f00', '#0072b2', '#cc79a7'];
 	const GWL_COLOURS = {'1.5': '#e69f00', '2': '#d55e00', '3': '#c33149', '4': '#6f4c9b'};
-	const METRICS = {
+	let METRICS = {
 		systems: {label: 'Systems', unit: 'yr⁻¹', digits: 1, zero: true},
 		depressions_or_stronger: {label: 'Depressions or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
 		deep_depressions_or_stronger: {label: 'Deep depressions or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
@@ -50,8 +50,11 @@
 		heavy_50mm_exposed_cell_day_share: {label: '50 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true, changeMode: 'points'}
 	};
 	const VALID_SEASONS = new Set(['all', 'jjas', 'mam', 'ond', 'djf']);
+	const VALID_VIEWS = new Set(['overview', 'tracks', 'rainfall', 'structure', 'evaluation']);
+	const VALID_MAP_METRICS = new Set(['track_density', 'genesis_density', 'lysis_density']);
+	const VALID_PROFILES = new Set(['vorticity', 'rh', 'q', 'temperature', 'core_temperature']);
 	const PUBLISHED_STATUSES = new Set(['validated-production-window', 'multi-model-awaiting-review']);
-	const state = {pair: '', season: 'jjas', metric: 'systems', rainMetric: 'exposed_mean_mm_day'};
+	const state = {pair: '', basis: 'gwl', comparison: '', season: 'jjas', metric: 'systems', metricGroup: 'Frequency and class', rainMetric: 'exposed_mean_mm_day', mapMetric: 'track_density', profileMetric: 'vorticity', view: 'overview'};
 	const cache = new Map();
 	let index = null;
 	let current = null;
@@ -59,35 +62,54 @@
 	let geography = null;
 	let loadingPromise = null;
 	let pairSerial = 0;
+	let layoutReady = false;
+	let chartHits = [];
+	let tooltip = null;
 
 	function readState() {
 		try {
-			const stored = JSON.parse(localStorage.getItem('mla-climate-state-v1') || '{}');
+			const stored = JSON.parse(localStorage.getItem('mla-climate-state-v2') || localStorage.getItem('mla-climate-state-v1') || '{}');
 			if (typeof stored.pair === 'string') state.pair = stored.pair;
+			if (['gwl', 'time-slice'].includes(stored.basis)) state.basis = stored.basis;
+			if (typeof stored.comparison === 'string') state.comparison = stored.comparison;
 			if (VALID_SEASONS.has(stored.season)) state.season = stored.season;
-			if (Object.hasOwn(METRICS, stored.metric)) state.metric = stored.metric;
+			if (typeof stored.metric === 'string') state.metric = stored.metric;
+			if (typeof stored.metricGroup === 'string') state.metricGroup = stored.metricGroup;
 			if (Object.hasOwn(RAIN_METRICS, stored.rainMetric)) state.rainMetric = stored.rainMetric;
+			if (VALID_MAP_METRICS.has(stored.mapMetric)) state.mapMetric = stored.mapMetric;
+			if (VALID_PROFILES.has(stored.profileMetric)) state.profileMetric = stored.profileMetric;
+			if (VALID_VIEWS.has(stored.view)) state.view = stored.view;
 		} catch (_) {
 			// Private browsing can disable storage without disabling the atlas.
 		}
 		const parameters = new URLSearchParams(window.location.search);
 		if (parameters.has('cmpair')) state.pair = parameters.get('cmpair');
+		if (['gwl', 'time-slice'].includes(parameters.get('cmbasis'))) state.basis = parameters.get('cmbasis');
+		if (parameters.has('cmcomparison')) state.comparison = parameters.get('cmcomparison');
 		if (VALID_SEASONS.has(parameters.get('cmseason'))) state.season = parameters.get('cmseason');
-		if (Object.hasOwn(METRICS, parameters.get('cmmetric'))) state.metric = parameters.get('cmmetric');
+		if (parameters.has('cmmetric')) state.metric = parameters.get('cmmetric');
 		if (Object.hasOwn(RAIN_METRICS, parameters.get('cmrain'))) state.rainMetric = parameters.get('cmrain');
+		if (VALID_MAP_METRICS.has(parameters.get('cmmap'))) state.mapMetric = parameters.get('cmmap');
+		if (VALID_PROFILES.has(parameters.get('cmprofile'))) state.profileMetric = parameters.get('cmprofile');
+		if (VALID_VIEWS.has(parameters.get('cmview'))) state.view = parameters.get('cmview');
 	}
 
 	function writeState() {
 		try {
-			localStorage.setItem('mla-climate-state-v1', JSON.stringify(state));
+			localStorage.setItem('mla-climate-state-v2', JSON.stringify(state));
 		} catch (_) {
 			// URL state remains available when local storage is unavailable.
 		}
 		const url = new URL(window.location.href);
 		url.searchParams.set('cmpair', state.pair);
+		url.searchParams.set('cmbasis', state.basis);
+		url.searchParams.set('cmcomparison', state.comparison);
 		url.searchParams.set('cmseason', state.season);
 		url.searchParams.set('cmmetric', state.metric);
 		url.searchParams.set('cmrain', state.rainMetric);
+		url.searchParams.set('cmmap', state.mapMetric);
+		url.searchParams.set('cmprofile', state.profileMetric);
+		url.searchParams.set('cmview', state.view);
 		history.replaceState(null, '', url);
 	}
 
@@ -172,28 +194,200 @@
 		}));
 	}
 
-	function populateControls() {
-		const pairControl = $('#mlaClimatePair');
-		pairControl.replaceChildren(...index.pairs.map(pair => {
-			const option = document.createElement('option');
-			option.value = pair.id;
-			option.textContent = pairLabel(pair);
-			return option;
-		}));
-		if (!index.pairs.some(pair => pair.id === state.pair)) {
-			state.pair = index.defaults && index.defaults.pair || index.pairs[0].id;
+	function comparisonBasis(pair) {
+		return pair.comparison_basis || (pair.comparison && pair.comparison.basis) || 'time-slice';
+	}
+
+	function comparisonKey(pair) {
+		const basis = comparisonBasis(pair);
+		if (basis === 'gwl') return `gwl:${Number(pair.comparison.level_c)}`;
+		return `time-slice:${String(pair.future.run.experiment_id).toLowerCase()}`;
+	}
+
+	function comparisonLabel(pair) {
+		if (comparisonBasis(pair) === 'gwl') {
+			return `+${Number(pair.comparison.level_c).toFixed(Number(pair.comparison.level_c) % 1 ? 1 : 0)} °C · ${String(pair.comparison.scenario).toUpperCase()}`;
 		}
-		pairControl.value = state.pair;
-		$('#mlaClimateSeason').value = state.season;
+		const scenario = String(pair.future.run.experiment_id).toUpperCase();
+		const windows = new Set(index.pairs.filter(item => comparisonKey(item) === comparisonKey(pair)).map(item => item.future.run.period_label));
+		return `${scenario} · ${windows.size === 1 ? [...windows][0] : 'late-century windows'}`;
+	}
+
+	function comparisonGroups(basis = state.basis) {
+		const groups = new Map();
+		for (const pair of index.pairs.filter(item => comparisonBasis(item) === basis)) {
+			const key = comparisonKey(pair);
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key).push(pair);
+		}
+		return groups;
+	}
+
+	function preferredPair(pairs) {
+		return pairs.find(pair => pair.kind === 'multi-model') || pairs[0];
+	}
+
+	function mergeMetricDefinitions(payload) {
+		const supplied = payload && payload.metric_definitions;
+		if (!supplied || typeof supplied !== 'object') return;
+		METRICS = Object.fromEntries(Object.entries(supplied).map(([key, value]) => [key, {
+			label: value.label || key,
+			group: value.group || 'Other diagnostics',
+			unit: value.unit || '',
+			digits: Number.isFinite(Number(value.digits)) ? Number(value.digits) : 1,
+			zero: Boolean(value.zero),
+			changeMode: value.change_mode || 'percent',
+			resolutionSensitive: Boolean(value.resolution_sensitive),
+			description: value.description || ''
+		}]));
+	}
+
+	function availableMetricSet() {
+		const seasonal = current && current.change && current.change.seasonal_changes && current.change.seasonal_changes[state.season];
+		if (seasonal) {
+			const values = Object.entries(seasonal)
+				.filter(([key, record]) => {
+					const metric = METRICS[key];
+					const fields = metric && changeFields(metric);
+					return fields && record && numberAvailable(record.historical) && numberAvailable(record.future) && numberAvailable(record[fields.value]);
+				})
+				.map(([key]) => key);
+			if (values.length) return new Set(values);
+		}
+		const values = current && current.pair && current.pair.capabilities && Array.isArray(current.pair.capabilities.available_metrics)
+			? current.pair.capabilities.available_metrics
+			: current && current.historical && current.historical.capabilities && current.historical.capabilities.available_metrics;
+		return new Set(Array.isArray(values) && values.length ? values : Object.keys(METRICS));
+	}
+
+	function populateMetricControls() {
+		const available = availableMetricSet();
+		const requestedMetric = state.metric;
+		if (!Object.hasOwn(METRICS, state.metric) || !available.has(state.metric)) state.metric = available.has('systems') ? 'systems' : [...available][0];
+		const groups = new Map();
+		for (const [key, metric] of Object.entries(METRICS)) {
+			if (!groups.has(metric.group)) groups.set(metric.group, []);
+			groups.get(metric.group).push([key, metric]);
+		}
 		const metricControl = $('#mlaClimateMetric');
-		metricControl.replaceChildren(...Object.entries(METRICS).map(([key, metric]) => {
-			const option = document.createElement('option');
-			option.value = key;
-			option.textContent = metric.label;
-			return option;
+		metricControl.replaceChildren(...[...groups].map(([group, values]) => {
+			const node = document.createElement('optgroup');
+			node.label = group;
+			for (const [key, metric] of values) {
+				const option = document.createElement('option');
+				option.value = key;
+				option.textContent = `${metric.label}${metric.resolutionSensitive ? ' · resolution-sensitive' : ''}`;
+				option.disabled = !available.has(key);
+				node.append(option);
+			}
+			return node;
 		}));
 		metricControl.value = state.metric;
+		const selectedGroup = METRICS[state.metric] && METRICS[state.metric].group;
+		if (state.metric !== requestedMetric || !groups.has(state.metricGroup)) state.metricGroup = selectedGroup || [...groups.keys()][0];
+		const groupControl = $('#mlaClimateMetricGroup');
+		groupControl.replaceChildren(...[...groups.keys()].map(group => {
+			const option = document.createElement('option');
+			option.value = group;
+			option.textContent = group;
+			return option;
+		}));
+		groupControl.value = state.metricGroup;
+	}
+
+	function populatePairControls() {
+		if (!index.pairs.some(pair => pair.id === state.pair)) {
+			const groups = comparisonGroups(state.basis);
+			const requested = groups.get(state.comparison) || [...groups.values()][0];
+			const fallback = requested && preferredPair(requested) || index.pairs.find(pair => pair.id === index.defaults.pair) || index.pairs[0];
+			state.pair = fallback.id;
+		}
+		let selected = index.pairs.find(pair => pair.id === state.pair);
+		state.basis = comparisonBasis(selected);
+		state.comparison = comparisonKey(selected);
+		const bases = [...new Set(index.pairs.map(comparisonBasis))];
+		const basisControl = $('#mlaClimateBasis');
+		for (const option of basisControl.options) option.disabled = !bases.includes(option.value);
+		basisControl.value = state.basis;
+		const groups = comparisonGroups();
+		const comparisonControl = $('#mlaClimateComparison');
+		comparisonControl.replaceChildren(...[...groups].map(([key, pairs]) => {
+			const option = document.createElement('option');
+			option.value = key;
+			option.textContent = comparisonLabel(preferredPair(pairs));
+			return option;
+		}));
+		if (!groups.has(state.comparison)) {
+			state.comparison = groups.keys().next().value;
+			selected = preferredPair(groups.get(state.comparison));
+			state.pair = selected.id;
+		}
+		comparisonControl.value = state.comparison;
+		const datasets = groups.get(state.comparison) || [];
+		const datasetControl = $('#mlaClimateDataset');
+		datasetControl.replaceChildren(...datasets.sort((left, right) => Number(right.kind === 'multi-model') - Number(left.kind === 'multi-model') || left.source_label.localeCompare(right.source_label)).map(pair => {
+			const option = document.createElement('option');
+			option.value = pair.id;
+			const count = pair.kind === 'multi-model' ? ` · ${pair.model_ids.length} models` : ` · ${pair.member_id}`;
+			option.textContent = `${pair.source_label}${count}`;
+			return option;
+		}));
+		if (!datasets.some(pair => pair.id === state.pair)) state.pair = preferredPair(datasets).id;
+		datasetControl.value = state.pair;
+		$('#mlaClimateSeason').value = state.season;
 		$('#mlaClimateRainMetric').value = state.rainMetric;
+		$('#mlaClimateMapMetric').value = state.mapMetric;
+		$('#mlaClimateProfileMetric').value = state.profileMetric;
+	}
+
+	function prepareLayout() {
+		if (layoutReady) return;
+		layoutReady = true;
+		const content = $('#mlaClimateContent');
+		const originalGrid = content.querySelector(':scope > .mla-chart-grid');
+		const stats = $('#mlaClimateStats');
+		const definitions = {
+			overview: ['#mlaClimateModelChange', '#mlaClimateAnnualChart', '#mlaClimateMetricFamilyCard'],
+			tracks: ['#mlaClimateDensityGrid', '#mlaClimateMonthlyChart', '#mlaClimateClassChart'],
+			rainfall: ['#mlaClimateRainfallCard', '#mlaClimateRainDriversCard', '#mlaClimateRegionalRainfallCard', '#mlaClimateFootprintCard'],
+			structure: ['#mlaClimateVerticalProfileCard', '#mlaClimateCompositeExpansionCard'],
+			evaluation: ['#mlaClimateAvailabilityCard', '#mlaClimateHistoricalSkill', '#mlaClimateWarmingChange', '#mlaClimateGwl', '#mlaClimateInterpretationCard']
+		};
+		for (const [view, selectors] of Object.entries(definitions)) {
+			const section = document.createElement('section');
+			section.className = 'mla-climate-view';
+			section.dataset.climateView = view;
+			section.hidden = view !== state.view;
+			const grid = document.createElement('div');
+			grid.className = 'mla-chart-grid';
+			if (view === 'overview') section.append(stats);
+			if (view === 'rainfall') {
+				const notice = document.createElement('p');
+				notice.className = 'mla-climate-view-notice';
+				notice.id = 'mlaClimateRainfallNotice';
+				section.append(notice);
+			}
+			for (const selector of selectors) {
+				const child = $(selector);
+				const card = child && (child.classList.contains('mla-card') ? child : child.closest('.mla-card'));
+				if (card) grid.append(card);
+			}
+			section.append(grid);
+			content.append(section);
+		}
+		originalGrid.remove();
+		tooltip = document.createElement('div');
+		tooltip.className = 'mla-climate-tooltip';
+		tooltip.hidden = true;
+		document.body.append(tooltip);
+	}
+
+	function setView(view, shouldRender = true) {
+		state.view = VALID_VIEWS.has(view) ? view : 'overview';
+		panel.querySelectorAll('[data-climate-view]').forEach(node => { node.hidden = node.dataset.climateView !== state.view; });
+		panel.querySelectorAll('[data-climate-view-button]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.climateViewButton === state.view)));
+		writeState();
+		if (shouldRender) render();
 	}
 
 	function css(name, fallback) {
@@ -287,8 +481,7 @@
 		const yExtent = extent([...historical, ...future], metric.zero);
 		const plot = {left: 58, right: width - 18, top: 31, bottom: height - 34};
 		drawAxes(context, plot, yExtent, metric.unit);
-		const maximumLength = Math.max(historical.length, future.length);
-		const x = index => plot.left + index / Math.max(1, maximumLength - 1) * (plot.right - plot.left);
+		const x = (index, length) => plot.left + index / Math.max(1, length - 1) * (plot.right - plot.left);
 		const y = value => plot.bottom - (value - yExtent[0]) / (yExtent[1] - yExtent[0]) * (plot.bottom - plot.top);
 		for (const [values, colour] of [[historical, HISTORICAL_COLOUR], [future, FUTURE_COLOUR]]) {
 			context.strokeStyle = colour;
@@ -297,8 +490,8 @@
 			let open = false;
 			values.forEach((value, index) => {
 				if (!Number.isFinite(value)) { open = false; return; }
-				if (!open) context.moveTo(x(index), y(value));
-				else context.lineTo(x(index), y(value));
+				if (!open) context.moveTo(x(index, values.length), y(value));
+				else context.lineTo(x(index, values.length), y(value));
 				open = true;
 			});
 			context.stroke();
@@ -308,9 +501,9 @@
 		context.textBaseline = 'top';
 		context.fillText('1', plot.left, plot.bottom + 8);
 		context.textAlign = 'right';
-		context.fillText(String(maximumLength), plot.right, plot.bottom + 8);
+		context.fillText(`${historical.length} / ${future.length}`, plot.right, plot.bottom + 8);
 		context.textAlign = 'center';
-		context.fillText('year within window', (plot.left + plot.right) / 2, plot.bottom + 8);
+		context.fillText('year within window (historical / future)', (plot.left + plot.right) / 2, plot.bottom + 8);
 		drawLegend(context, [
 			{label: current.historical.run.period_label, colour: HISTORICAL_COLOUR},
 			{label: current.future.run.period_label, colour: FUTURE_COLOUR}
@@ -381,8 +574,9 @@
 	}
 
 	function modelColour(modelId, ordinal) {
-		const pairs = index.pairs.filter(pair => pair.kind !== 'multi-model');
-		const position = pairs.findIndex(pair => pair.id === modelId);
+		const source = modelPair(modelId) && modelPair(modelId).source_label;
+		const sources = [...new Set(index.pairs.filter(pair => pair.kind !== 'multi-model').map(pair => pair.source_label))];
+		const position = sources.indexOf(source);
 		return MODEL_COLOURS[(position >= 0 ? position : ordinal) % MODEL_COLOURS.length];
 	}
 
@@ -416,22 +610,36 @@
 		return `${number > 0 ? '+' : ''}${number.toFixed(1)}%`;
 	}
 
+	function changeFields(metric = METRICS[state.metric]) {
+		return metric.changeMode === 'absolute'
+			? {value: 'absolute_change', low: 'ci05', high: 'ci95'}
+			: {value: 'percent_change', low: 'percent_ci05', high: 'percent_ci95'};
+	}
+
+	function changeText(value, metric = METRICS[state.metric]) {
+		if (!numberAvailable(value)) return '—';
+		if (metric.changeMode !== 'absolute') return signedPercent(value);
+		return valueText(value, metric, true);
+	}
+
 	function drawModelChanges() {
 		const canvas = $('#mlaClimateModelChange');
 		const {context, width, height} = setupCanvas(canvas);
-		const records = selectedModelChanges().filter(record => numberAvailable(record.percent_change));
+		const metric = METRICS[state.metric];
+		const fields = changeFields(metric);
+		const records = selectedModelChanges().map(record => ({...record, plotValue: record[fields.value], plotLow: record[fields.low], plotHigh: record[fields.high]})).filter(record => numberAvailable(record.plotValue));
 		const status = $('#mlaClimateModelChangeStatus');
 		const data = $('#mlaClimateModelChangeData');
 		if (!records.length) {
 			context.fillStyle = css('--mla-muted', '#5f6574');
 			context.textAlign = 'center';
-			context.fillText('Percentage change is unavailable because the historical mean is zero.', width / 2, height / 2);
-			status.textContent = 'Use an absolute continuous measure for a stable comparison.';
+			context.fillText('This measure is unavailable for the selected comparison.', width / 2, height / 2);
+			status.textContent = '';
 			data.textContent = '';
 			return;
 		}
-		const intervalValues = finite(records.flatMap(record => [record.percent_ci05, record.percent_change, record.percent_ci95]));
-		const scale = Math.max(5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
+		const intervalValues = finite(records.flatMap(record => [record.plotLow, record.plotValue, record.plotHigh]));
+		const scale = Math.max(metric.changeMode === 'absolute' ? .1 : 5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
 		const left = Math.min(132, Math.max(90, width * .29)), right = width - 31, top = 28, bottom = height - 40;
 		const rowGap = (bottom - top) / Math.max(1, records.length);
 		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
@@ -445,7 +653,7 @@
 			const value = fraction * scale;
 			const px = x(value);
 			context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke();
-			context.fillText(`${Math.round(value)}%`, px, bottom + 8);
+			context.fillText(metric.changeMode === 'absolute' ? value.toFixed(Math.abs(scale) < 5 ? 1 : 0) : `${Math.round(value)}%`, px, bottom + 8);
 		}
 		context.strokeStyle = ink;
 		context.lineWidth = 1.5;
@@ -456,27 +664,27 @@
 			context.textAlign = 'right';
 			context.textBaseline = 'middle';
 			context.fillText(record.label, left - 9, y);
-			const low = Number(record.percent_ci05), high = Number(record.percent_ci95);
-			if (numberAvailable(record.percent_ci05) && numberAvailable(record.percent_ci95)) {
+			const low = Number(record.plotLow), high = Number(record.plotHigh);
+			if (numberAvailable(record.plotLow) && numberAvailable(record.plotHigh)) {
 				context.strokeStyle = record.colour;
 				context.lineWidth = 2;
 				context.beginPath(); context.moveTo(x(low), y); context.lineTo(x(high), y); context.stroke();
 				for (const value of [low, high]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
 			}
 			context.fillStyle = record.colour;
-			context.beginPath(); context.arc(x(record.percent_change), y, 5, 0, Math.PI * 2); context.fill();
+			context.beginPath(); context.arc(x(record.plotValue), y, 5, 0, Math.PI * 2); context.fill();
+			chartHits.push({canvas, x: x(record.plotValue), y, radius: 10, pairId: record.id, text: `${record.label}: ${changeText(record.plotValue, metric)} · click to inspect model`});
 		});
 		context.fillStyle = muted;
 		context.textAlign = 'center';
 		context.textBaseline = 'bottom';
-		context.fillText('future − historical (%)', (left + right) / 2, height - 2);
-		const positive = records.filter(record => Number(record.percent_change) > 0).length;
-		const negative = records.filter(record => Number(record.percent_change) < 0).length;
-		const robustPositive = records.filter(record => Number(record.percent_ci05) > 0).length;
-		const robustNegative = records.filter(record => Number(record.percent_ci95) < 0).length;
-		status.textContent = `${positive}/${records.length} increase · ${negative}/${records.length} decrease · ${robustPositive + robustNegative} intervals exclude zero`;
-		const metric = METRICS[state.metric];
-		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(valueText(record.historical, metric))}</td><td>${esc(valueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(numberAvailable(record.percent_ci05) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+		context.fillText(metric.changeMode === 'absolute' ? `future − historical (${metric.unit})` : 'future − historical (%)', (left + right) / 2, height - 2);
+		const positive = records.filter(record => Number(record.plotValue) > 0).length;
+		const negative = records.filter(record => Number(record.plotValue) < 0).length;
+		const robustPositive = records.filter(record => Number(record.plotLow) > 0).length;
+		const robustNegative = records.filter(record => Number(record.plotHigh) < 0).length;
+		status.textContent = `${positive}/${records.length} increase · ${negative}/${records.length} decrease · ${robustPositive + robustNegative} intervals exclude zero · N=${records.length}${metric.resolutionSensitive ? ' · resolution-sensitive' : ''}`;
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(valueText(record.historical, metric))}</td><td>${esc(valueText(record.future, metric))}</td><td>${esc(changeText(record.plotValue, metric))}</td><td>${esc(numberAvailable(record.plotLow) ? `${changeText(record.plotLow, metric)} to ${changeText(record.plotHigh, metric)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
 	}
 
 	function warmingForModel(modelId) {
@@ -491,17 +699,25 @@
 		return `${number > 0 ? '+' : ''}${number.toFixed(1)}% °C⁻¹`;
 	}
 
+	function perDegreeText(value, metric = METRICS[state.metric]) {
+		if (!numberAvailable(value)) return '—';
+		const number = Number(value);
+		return `${number > 0 ? '+' : ''}${number.toFixed(metric.digits)}${metric.changeMode === 'absolute' ? ` ${metric.unit} °C⁻¹` : '% °C⁻¹'}`;
+	}
+
 	function drawWarmingNormalisedChanges() {
 		const canvas = $('#mlaClimateWarmingChange');
 		const {context, width, height} = setupCanvas(canvas);
+		const metric = METRICS[state.metric];
+		const fields = changeFields(metric);
 		const records = selectedModelChanges().map(record => {
 			const warming = warmingForModel(record.id);
 			return {
 				...record,
 				warming,
-				normalised: warming && numberAvailable(record.percent_change) ? Number(record.percent_change) / warming : null,
-				low: warming && numberAvailable(record.percent_ci05) ? Number(record.percent_ci05) / warming : null,
-				high: warming && numberAvailable(record.percent_ci95) ? Number(record.percent_ci95) / warming : null
+				normalised: warming && numberAvailable(record[fields.value]) ? Number(record[fields.value]) / warming : null,
+				low: warming && numberAvailable(record[fields.low]) ? Number(record[fields.low]) / warming : null,
+				high: warming && numberAvailable(record[fields.high]) ? Number(record[fields.high]) / warming : null
 			};
 		}).filter(record => numberAvailable(record.normalised));
 		const status = $('#mlaClimateWarmingStatus');
@@ -552,22 +768,25 @@
 		context.fillStyle = muted;
 		context.textAlign = 'center';
 		context.textBaseline = 'bottom';
-		context.fillText('paired change per degree of global warming (% °C⁻¹)', (left + right) / 2, height - 2);
+		context.fillText(`paired change per degree of global warming (${metric.changeMode === 'absolute' ? `${metric.unit} °C⁻¹` : '% °C⁻¹'})`, (left + right) / 2, height - 2);
 		const mean = records.reduce((sum, record) => sum + Number(record.normalised), 0) / records.length;
 		const warmings = records.map(record => Number(record.warming));
-		status.textContent = `${current.pair.kind === 'multi-model' ? 'Equal-model mean' : 'Response'} ${signedPerDegree(mean)} · global warming ${Math.min(...warmings).toFixed(2)}${records.length > 1 ? `–${Math.max(...warmings).toFixed(2)}` : ''} °C`;
-		data.innerHTML = `<table><thead><tr><th>Model</th><th>Global warming</th><th>Response</th><th>Within-model 90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>+${Number(record.warming).toFixed(2)} °C</td><td>${esc(signedPerDegree(record.normalised))}</td><td>${esc(numberAvailable(record.low) ? `${signedPerDegree(record.low)} to ${signedPerDegree(record.high)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+		status.textContent = `${current.pair.kind === 'multi-model' ? 'Equal-model mean' : 'Response'} ${perDegreeText(mean, metric)} · global warming ${Math.min(...warmings).toFixed(2)}${records.length > 1 ? `–${Math.max(...warmings).toFixed(2)}` : ''} °C · N=${records.length}`;
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Global warming</th><th>Response</th><th>Within-model 90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>+${Number(record.warming).toFixed(2)} °C</td><td>${esc(perDegreeText(record.normalised, metric))}</td><td>${esc(numberAvailable(record.low) ? `${perDegreeText(record.low, metric)} to ${perDegreeText(record.high, metric)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
 	}
 
 	function publishedGwlRecords() {
 		const pairs = current.pair.kind === 'multi-model'
 			? current.pair.model_ids.map(modelPair).filter(Boolean)
 			: [current.pair];
-		return pairs.map(pair => ({
-			id: pair.id,
-			label: pair.source_label,
-			crossings: pair.warming && pair.warming.published_gwl ? pair.warming.published_gwl.crossings : []
-		})).filter(record => record.crossings.length);
+		return pairs.map(pair => {
+			const reference = pair.warming ? pair : index.pairs.find(candidate => candidate.source_label === pair.source_label && candidate.member_id === pair.member_id && candidate.warming);
+			return {
+				id: pair.id,
+				label: pair.source_label,
+				crossings: reference && reference.warming && reference.warming.published_gwl ? reference.warming.published_gwl.crossings : []
+			};
+		}).filter(record => record.crossings.length);
 	}
 
 	function gwlWindowText(crossing) {
@@ -639,6 +858,13 @@
 		let records;
 		if (current.pair.kind === 'multi-model') {
 			records = [...((current.historical.qa && current.historical.qa.historical_screening) || [])];
+			if (!records.length) {
+				records = current.pair.model_ids.map(modelPair).filter(Boolean).map(pair => ({
+					id: pair.id,
+					source_label: pair.source_label,
+					...((pair.historical.qa && pair.historical.qa.historical_screen) || {})
+				}));
+			}
 		} else {
 			const screen = current.historical.qa && current.historical.qa.historical_screen;
 			records = screen ? [{id: current.pair.id, source_label: current.pair.source_label, ...screen}] : [];
@@ -659,7 +885,7 @@
 	function screenForSeason(record) {
 		if (state.season === 'all') return record;
 		if (state.season !== 'jjas') return null;
-		return current.pair.kind === 'multi-model' ? record.jjas : (record.seasonal || {}).jjas;
+		return current.pair.kind === 'multi-model' ? (record.jjas || (record.seasonal || {}).jjas) : (record.seasonal || {}).jjas;
 	}
 
 	function summaryMedianRatio(screen, key) {
@@ -699,8 +925,8 @@
 		if (!records.length) {
 			context.fillStyle = css('--mla-muted', '#5f6574');
 			context.textAlign = 'center';
-			context.fillText('Historical comparison is available for all months and JJAS.', width / 2, height / 2);
-			status.textContent = 'Choose All months or JJAS.';
+			context.fillText('This measure is not in the current ERA5 screening summary.', width / 2, height / 2);
+			status.textContent = state.season === 'all' || state.season === 'jjas' ? 'The reanalysis envelope is being expanded to the full variable set.' : 'Historical screening is currently available for All months and JJAS.';
 			data.textContent = '';
 			return;
 		}
@@ -769,8 +995,9 @@
 
 	function drawRainfallChanges() {
 		const card = $('#mlaClimateRainfallCard');
-		card.hidden = !current.impact;
-		if (!current.impact) return;
+		const available = Boolean(current.impact) && state.season === 'jjas';
+		card.hidden = !available;
+		if (!available) return;
 		const canvas = $('#mlaClimateRainfallChange');
 		const {context, width, height} = setupCanvas(canvas);
 		const metric = RAIN_METRICS[state.rainMetric];
@@ -869,7 +1096,7 @@
 
 	function drawRegionalRainfall() {
 		const card = $('#mlaClimateRegionalRainfallCard');
-		const records = regionalRainfallRecords();
+		const records = state.season === 'jjas' ? regionalRainfallRecords() : [];
 		card.hidden = !records.length;
 		if (!records.length) return;
 		const canvas = $('#mlaClimateRegionalRainfall');
@@ -1131,13 +1358,13 @@
 		context.fillStyle = css('--mla-ink', '#202334');
 		context.textBaseline = 'top';
 		context.textAlign = 'left';
-		context.fillText(mode === 'agreement' ? 'all fewer' : mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
+		context.fillText(mode === 'agreement' ? 'fewer' : mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
 		if (mode === 'agreement') {
 			context.textAlign = 'center';
 			context.fillText('mixed', legendX + legendWidth / 2, legendY + 9);
 		}
 		context.textAlign = 'right';
-		context.fillText(mode === 'agreement' ? 'all more' : mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
+		context.fillText(mode === 'agreement' ? 'more' : mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
 	}
 
 	function differenceDensity(historical, future, historicalYears, futureYears) {
@@ -1159,8 +1386,12 @@
 	}
 
 	function drawMaps() {
-		const historical = current.historical.seasonal[state.season].track_density;
-		const future = current.future.seasonal[state.season].track_density;
+		const spatialKey = state.mapMetric;
+		const historical = current.historical.seasonal[state.season][spatialKey] || current.historical.seasonal[state.season].track_density;
+		const future = current.future.seasonal[state.season][spatialKey] || current.future.seasonal[state.season].track_density;
+		const labels = {track_density: ['Track-density change', 'Unique tracks per 1° cell per year; systems are grouped by genesis season.'], genesis_density: ['Genesis-density change', 'First published centres per 1° cell per year.'], lysis_density: ['Lysis-density change', 'Last published centres per 1° cell per year.']};
+		$('#mlaClimateDensityHeading').textContent = labels[spatialKey][0];
+		$('#mlaClimateDensitySubtitle').textContent = labels[spatialKey][1];
 		const historicalYears = Number(current.historical.coverage.years);
 		const futureYears = Number(current.future.coverage.years);
 		const historicalValues = historical.unique_track_counts.flat().map(value => Number(value) / historicalYears);
@@ -1172,7 +1403,7 @@
 		drawDensityMap($('#mlaClimateHistoricalMap'), historical, historicalYears, 'sequential', sequentialScale);
 		drawDensityMap($('#mlaClimateFutureMap'), future, futureYears, 'sequential', sequentialScale);
 		drawDensityMap($('#mlaClimateChangeMap'), difference, 1, 'change', differenceScale);
-		const agreement = current.pair.kind === 'multi-model'
+		const agreement = spatialKey === 'track_density' && current.pair.kind === 'multi-model'
 			&& current.change.track_density_agreement
 			&& current.change.track_density_agreement[state.season];
 		const agreementPanel = $('#mlaClimateAgreementPanel');
@@ -1199,6 +1430,201 @@
 		$('#mlaClimateDensityAgreementData').innerHTML = `<table><thead><tr><th>Diagnostic</th><th>Cells</th></tr></thead><tbody><tr><td>Any model changes</td><td>${changed.toLocaleString()}</td></tr><tr><td>At least ${threshold}/${agreement.model_count} agree</td><td>${robust.toLocaleString()}</td></tr><tr><td>All ${agreement.model_count} agree</td><td>${unanimous.toLocaleString()}</td></tr></tbody></table>`;
 	}
 
+	function metricChangeRecords(metricKey) {
+		const metric = METRICS[metricKey];
+		const change = current.change.seasonal_changes[state.season][metricKey];
+		if (!metric || !change) return [];
+		const fields = changeFields(metric);
+		const source = current.pair.kind === 'multi-model' && Array.isArray(change.models)
+			? change.models
+			: [{id: current.pair.id, ...change}];
+		return source.map((record, ordinal) => ({
+			id: record.id,
+			label: modelLabel(record.id),
+			colour: modelColour(record.id, ordinal),
+			value: record[fields.value],
+			low: record[fields.low],
+			high: record[fields.high]
+		})).filter(record => numberAvailable(record.value));
+	}
+
+	function drawMetricFamily() {
+		const canvas = $('#mlaClimateMetricFamilyChart');
+		const metrics = Object.entries(METRICS).filter(([, metric]) => metric.group === state.metricGroup && current.change.seasonal_changes[state.season]);
+		const rows = metrics.map(([key, metric]) => {
+			const records = metricChangeRecords(key);
+			const fields = changeFields(metric);
+			const ensemble = current.change.seasonal_changes[state.season][key] || {};
+			return {key, metric, records, ensembleValue: ensemble[fields.value], modelCount: records.length};
+		}).filter(row => row.records.length && numberAvailable(row.ensembleValue));
+		canvas.style.height = `${Math.max(270, 76 + rows.length * 31)}px`;
+		const {context, width, height} = setupCanvas(canvas);
+		const status = $('#mlaClimateMetricFamilyStatus');
+		const data = $('#mlaClimateMetricFamilyData');
+		if (!rows.length) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('No measures in this family are available for the selected comparison.', width / 2, height / 2);
+			status.textContent = '';
+			data.textContent = '';
+			return;
+		}
+		const modelIds = current.pair.kind === 'multi-model' ? current.pair.model_ids : [current.pair.id];
+		const left = Math.min(220, Math.max(145, width * .27));
+		const summaryWidth = Math.min(132, width * .25);
+		const right = width - summaryWidth - 12;
+		const top = 60, bottom = height - 22;
+		const rowGap = (bottom - top) / rows.length;
+		const cellGap = 3;
+		const cellWidth = Math.max(12, (right - left) / Math.max(1, modelIds.length));
+		const negative = [[178, 24, 43], [255, 247, 247]], positive = [[247, 251, 255], [33, 102, 172]];
+		context.fillStyle = css('--mla-muted', '#5f6574');
+		context.textAlign = 'center';
+		context.textBaseline = 'bottom';
+		modelIds.forEach((id, ordinal) => {
+			const x = left + (ordinal + .5) * cellWidth;
+			const label = modelLabel(id).replace('MPI-ESM1-2-', 'MPI-');
+			context.save(); context.translate(x, top - 7); context.rotate(-.55); context.fillText(label, 0, 0); context.restore();
+		});
+		context.textAlign = 'left';
+		context.fillText('Ensemble change', right + 10, top - 7);
+		rows.forEach((row, rowIndex) => {
+			const y = top + rowIndex * rowGap;
+			context.fillStyle = row.key === state.metric ? css('--mla-indigo-deep', '#243665') : css('--mla-ink', '#202334');
+			context.font = `${row.key === state.metric ? '650' : '400'} 11px ${FONT}`;
+			context.textAlign = 'right';
+			context.textBaseline = 'middle';
+			context.fillText(row.metric.label, left - 8, y + rowGap / 2);
+			const maximum = Math.max(...row.records.map(record => Math.abs(Number(record.value))), .000001);
+			modelIds.forEach((id, ordinal) => {
+				const record = row.records.find(item => item.id === id);
+				const x = left + ordinal * cellWidth;
+				context.fillStyle = css('--mla-card', '#fff');
+				context.fillRect(x + cellGap / 2, y + 2, cellWidth - cellGap, Math.max(8, rowGap - 4));
+				if (!record) return;
+				const value = Number(record.value), magnitude = Math.min(1, Math.abs(value) / maximum);
+				context.fillStyle = interpolateColour(value < 0 ? negative : positive, .25 + .75 * magnitude);
+				context.fillRect(x + cellGap / 2, y + 2, cellWidth - cellGap, Math.max(8, rowGap - 4));
+				chartHits.push({canvas, x: x + cellWidth / 2, y: y + rowGap / 2, radius: Math.max(9, cellWidth / 2), pairId: record.id, text: `${modelLabel(record.id)} · ${row.metric.label}: ${changeText(value, row.metric)}`});
+			});
+			context.font = `600 11px ${FONT}`;
+			context.textAlign = 'left';
+			context.fillStyle = css('--mla-ink', '#202334');
+			context.fillText(`${changeText(row.ensembleValue, row.metric)} · N=${row.modelCount}`, right + 10, y + rowGap / 2);
+		});
+		context.font = `11px ${FONT}`;
+		status.textContent = 'Red = decrease; blue = increase. Saturation is scaled within each row, so compare sign and model agreement rather than colour magnitude between variables.';
+		const headings = modelIds.map(id => `<th>${esc(modelLabel(id))}</th>`).join('');
+		data.innerHTML = `<table><thead><tr><th>Measure</th>${headings}<th>Ensemble</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.metric.label)}</td>${modelIds.map(id => { const record = row.records.find(item => item.id === id); return `<td>${esc(record ? changeText(record.value, row.metric) : '—')}</td>`; }).join('')}<td>${esc(changeText(row.ensembleValue, row.metric))} · N=${row.modelCount}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	const PROFILE_METRICS = {
+		vorticity: {label: 'Relative vorticity', unit: '10⁻⁵ s⁻¹', keys: ['mean_lifetime_vorticity_850_x1e5_s1', 'mean_lifetime_vorticity_700_x1e5_s1', 'mean_lifetime_vorticity_500_x1e5_s1']},
+		rh: {label: 'Relative humidity', unit: '%', keys: ['mean_rh850_pct', 'mean_rh700_pct', 'mean_rh500_pct']},
+		q: {label: 'Specific humidity', unit: 'g kg⁻¹', keys: ['mean_q850_gkg', 'mean_q700_gkg', 'mean_q500_gkg']},
+		temperature: {label: 'Temperature', unit: 'K', keys: ['mean_t850_k', 'mean_t700_k', 'mean_t500_k']},
+		core_temperature: {label: 'Core temperature anomaly', unit: 'K', keys: ['mean_t850_core_anomaly_k', 'mean_t700_core_anomaly_k', 'mean_t500_core_anomaly_k']}
+	};
+
+	function drawVerticalProfile() {
+		const canvas = $('#mlaClimateVerticalProfile');
+		const {context, width, height} = setupCanvas(canvas);
+		const profile = PROFILE_METRICS[state.profileMetric];
+		const levels = [850, 700, 500];
+		const records = profile.keys.map((key, index) => {
+			const change = current.change.seasonal_changes[state.season][key];
+			return change && numberAvailable(change.historical) && numberAvailable(change.future)
+				? {level: levels[index], historical: Number(change.historical), future: Number(change.future), modelCount: Number(change.model_count || 1)}
+				: null;
+		}).filter(Boolean);
+		const status = $('#mlaClimateVerticalProfileStatus');
+		const data = $('#mlaClimateVerticalProfileData');
+		if (records.length < 2) {
+			context.fillStyle = css('--mla-muted', '#5f6574'); context.textAlign = 'center';
+			context.fillText('This vertical profile is unavailable for the selected dataset.', width / 2, height / 2);
+			status.textContent = ''; data.textContent = ''; return;
+		}
+		const values = records.flatMap(record => [record.historical, record.future]);
+		const xExtent = extent(values, false);
+		const plot = {left: 62, right: width - 24, top: 25, bottom: height - 45};
+		const x = value => plot.left + (value - xExtent[0]) / (xExtent[1] - xExtent[0]) * (plot.right - plot.left);
+		const y = level => plot.bottom - (850 - level) / 350 * (plot.bottom - plot.top);
+		const muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line; context.fillStyle = muted; context.lineWidth = 1; context.textAlign = 'right'; context.textBaseline = 'middle';
+		for (const level of levels) { const py = y(level); context.beginPath(); context.moveTo(plot.left, py); context.lineTo(plot.right, py); context.stroke(); context.fillText(`${level}`, plot.left - 8, py); }
+		context.save(); context.translate(13, (plot.top + plot.bottom) / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.fillText('pressure (hPa)', 0, 0); context.restore();
+		context.textAlign = 'center'; context.textBaseline = 'top';
+		for (let ordinal = 0; ordinal <= 4; ordinal += 1) { const value = xExtent[0] + ordinal / 4 * (xExtent[1] - xExtent[0]), px = x(value); context.fillText(value.toFixed(Math.abs(value) < 10 ? 1 : 0), px, plot.bottom + 9); }
+		for (const [key, colour, label] of [['historical', HISTORICAL_COLOUR, 'Historical'], ['future', FUTURE_COLOUR, 'Future']]) {
+			context.strokeStyle = colour; context.lineWidth = 2.5; context.beginPath();
+			records.forEach((record, index) => { const px = x(record[key]), py = y(record.level); if (!index) context.moveTo(px, py); else context.lineTo(px, py); }); context.stroke();
+			for (const record of records) { const px = x(record[key]), py = y(record.level); context.fillStyle = colour; context.beginPath(); context.arc(px, py, 5, 0, Math.PI * 2); context.fill(); chartHits.push({canvas, x: px, y: py, radius: 10, text: `${label} · ${record.level} hPa: ${record[key].toFixed(2)} ${profile.unit}`}); }
+		}
+		context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText(profile.unit, (plot.left + plot.right) / 2, height - 2);
+		drawLegend(context, [{label: current.historical.run.period_label, colour: HISTORICAL_COLOUR}, {label: current.future.run.period_label, colour: FUTURE_COLOUR}], plot.left, 13);
+		const counts = records.map(record => record.modelCount);
+		status.textContent = `${profile.label} along track centres over system lifecycles · N=${Math.min(...counts)}${Math.max(...counts) !== Math.min(...counts) ? `–${Math.max(...counts)}` : ''} model${Math.max(...counts) === 1 ? '' : 's'}.`;
+		data.innerHTML = `<table><thead><tr><th>Level</th><th>Historical</th><th>Future</th><th>N</th></tr></thead><tbody>${records.map(record => `<tr><td>${record.level} hPa</td><td>${record.historical.toFixed(2)} ${esc(profile.unit)}</td><td>${record.future.toFixed(2)} ${esc(profile.unit)}</td><td>${record.modelCount}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function drawRainDrivers() {
+		const card = $('#mlaClimateRainDriversCard');
+		const available = Boolean(current.impact) && state.season === 'jjas';
+		card.hidden = !available;
+		if (!available) return;
+		const changes = current.impact.india_jjas_changes || {};
+		const value = (key, role) => changes[key] && Number(changes[key][role]);
+		const ratioContribution = (future, historical) => future > 0 && historical > 0 ? 100 * Math.log(future / historical) : NaN;
+		const activeHistorical = value('active_lps', 'historical'), activeFuture = value('active_lps', 'future');
+		const areaHistorical = value('exposed_area_day_fraction', 'historical'), areaFuture = value('exposed_area_day_fraction', 'future');
+		const intensityHistorical = value('exposed_mean_mm_day', 'historical'), intensityFuture = value('exposed_mean_mm_day', 'future');
+		const backgroundHistorical = value('all_india_mean_mm_day', 'historical'), backgroundFuture = value('all_india_mean_mm_day', 'future');
+		const shareHistorical = value('rainfall_share', 'historical'), shareFuture = value('rainfall_share', 'future');
+		const records = [
+			{label: 'LPS occurrence', value: ratioContribution(activeFuture, activeHistorical)},
+			{label: 'Footprint per active LPS', value: ratioContribution(areaFuture / activeFuture, areaHistorical / activeHistorical)},
+			{label: 'Exposed-day rain intensity', value: ratioContribution(intensityFuture, intensityHistorical)},
+			{label: 'All-India rain background', value: -ratioContribution(backgroundFuture, backgroundHistorical)}
+		].filter(record => Number.isFinite(record.value));
+		const canvas = $('#mlaClimateRainDrivers');
+		const {context, width, height} = setupCanvas(canvas);
+		const status = $('#mlaClimateRainDriversStatus'), data = $('#mlaClimateRainDriversData');
+		if (records.length !== 4) { context.fillStyle = css('--mla-muted', '#5f6574'); context.textAlign = 'center'; context.fillText('Rainfall-share decomposition is unavailable.', width / 2, height / 2); status.textContent = ''; data.textContent = ''; return; }
+		const observed = ratioContribution(shareFuture, shareHistorical), explained = records.reduce((sum, record) => sum + record.value, 0), residual = observed - explained;
+		if (Math.abs(residual) > .01) records.push({label: 'Aggregation residual', value: residual});
+		const scale = Math.max(2, Math.max(...records.map(record => Math.abs(record.value))) * 1.18);
+		const left = Math.min(175, width * .38), right = width - 28, top = 20, bottom = height - 42, rowGap = (bottom - top) / records.length;
+		const x = value => left + (value + scale) / (2 * scale) * (right - left);
+		context.strokeStyle = css('--mla-line', '#d8d9df'); context.beginPath(); context.moveTo(x(0), top); context.lineTo(x(0), bottom); context.stroke();
+		records.forEach((record, ordinal) => { const y = top + (ordinal + .5) * rowGap; context.fillStyle = css('--mla-ink', '#202334'); context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(record.label, left - 8, y); context.fillStyle = record.value >= 0 ? '#2166ac' : '#b2182b'; const start = x(Math.min(0, record.value)), end = x(Math.max(0, record.value)); context.fillRect(start, y - 7, Math.max(1, end - start), 14); context.textAlign = record.value >= 0 ? 'left' : 'right'; context.fillText(`${record.value > 0 ? '+' : ''}${record.value.toFixed(1)}`, x(record.value) + (record.value >= 0 ? 5 : -5), y); });
+		context.fillStyle = css('--mla-muted', '#5f6574'); context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText('contribution to log change (%)', (left + right) / 2, height - 2);
+		status.textContent = `Observed rainfall-share log change ${observed > 0 ? '+' : ''}${observed.toFixed(1)}% · components sum to ${explained > 0 ? '+' : ''}${explained.toFixed(1)}%.`;
+		data.innerHTML = `<table><thead><tr><th>Component</th><th>Log-change contribution</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${record.value > 0 ? '+' : ''}${record.value.toFixed(2)}%</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function renderAvailability() {
+		const container = $('#mlaClimateAvailability');
+		const groups = new Map();
+		for (const pair of index.pairs) {
+			const key = comparisonKey(pair);
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key).push(pair);
+		}
+		const rows = [...groups.values()].map(pairs => {
+			const pair = preferredPair(pairs);
+			const models = pair.kind === 'multi-model' ? pair.model_ids.length : pairs.filter(item => item.kind !== 'multi-model').length;
+			const capability = pair.capabilities || {};
+			return {pair, models, metricCount: Number(capability.metric_count || (capability.available_metrics || []).length), rain: Boolean(pair.impact || capability.precipitation_impacts)};
+		}).sort((left, right) => comparisonBasis(left.pair).localeCompare(comparisonBasis(right.pair)) || comparisonLabel(left.pair).localeCompare(comparisonLabel(right.pair)));
+		const cells = ['<strong role="columnheader">Comparison</strong>', '<strong role="columnheader">Models</strong>', '<strong role="columnheader">Track measures</strong>', '<strong role="columnheader">India rain</strong>'];
+		for (const row of rows) {
+			const selected = comparisonKey(row.pair) === state.comparison;
+			cells.push(`<span${selected ? ' aria-current="true"' : ''}>${esc(comparisonLabel(row.pair))}</span>`, `<span>${row.models}</span>`, `<span class="${row.metricCount ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.metricCount}/${Object.keys(METRICS).length}</span>`, `<span class="${row.rain ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.rain ? 'Available' : 'Processing'}</span>`);
+		}
+		container.innerHTML = cells.join('');
+		$('#mlaClimateAvailabilityStatus').textContent = `${rows.length} source-backed comparison${rows.length === 1 ? '' : 's'} currently published. Missing diagnostics remain disabled rather than estimated.`;
+	}
+
 	function valueText(value, metric, signed = false) {
 		if (!Number.isFinite(Number(value))) return '—';
 		const number = Number(value);
@@ -1209,21 +1635,26 @@
 	function renderStats() {
 		const metric = METRICS[state.metric];
 		const change = current.change.seasonal_changes[state.season][state.metric];
+		const fields = changeFields(metric);
 		let cards = [
 			['Historical mean', valueText(change.historical, metric), current.historical.run.period_label],
 			['Future mean', valueText(change.future, metric), current.future.run.period_label],
-			['Paired change', Number.isFinite(change.percent_change) ? `${change.percent_change > 0 ? '+' : ''}${change.percent_change.toFixed(1)}%` : '—', valueText(change.absolute_change, metric, true)],
-			['90% bootstrap interval', `${valueText(change.ci05, metric, true)} to ${valueText(change.ci95, metric, true)}`, 'annual resampling']
+			['Paired change', changeText(change[fields.value], metric), metric.changeMode === 'absolute' ? 'absolute difference' : valueText(change.absolute_change, metric, true)],
+			['90% bootstrap interval', `${changeText(change[fields.low], metric)} to ${changeText(change[fields.high], metric)}`, 'annual resampling']
 		];
 		if (current.pair.kind === 'multi-model') {
 			const models = Array.isArray(change.models) ? change.models : [];
 			const positive = models.filter(model => Number(model.absolute_change) > 0).length;
 			const negative = models.filter(model => Number(model.absolute_change) < 0).length;
+			const spreadValues = finite(models.map(model => model[fields.value]));
+			const spread = spreadValues.length
+				? `${changeText(quantile(spreadValues, .05), metric)} to ${changeText(quantile(spreadValues, .95), metric)}`
+				: '—';
 			cards = [
 				['Historical mean', valueText(change.historical, metric), 'one model, one vote'],
 				['Future mean', valueText(change.future, metric), 'one model, one vote'],
-				['Mean paired change', Number.isFinite(change.percent_change) ? `${change.percent_change > 0 ? '+' : ''}${change.percent_change.toFixed(1)}%` : '—', valueText(change.absolute_change, metric, true)],
-				['Across-model 90% range', `${valueText(change.model_spread05, metric, true)} to ${valueText(change.model_spread95, metric, true)}`, `${change.model_count} models`],
+				['Mean paired change', changeText(change[fields.value], metric), metric.changeMode === 'absolute' ? 'absolute difference' : valueText(change.absolute_change, metric, true)],
+				['Across-model 90% range', spread, `${spreadValues.length} models with defined change`],
 				['Model agreement', `${positive}/${models.length} increase`, `${negative}/${models.length} decrease`]
 			];
 		}
@@ -1242,6 +1673,8 @@
 					`${current.historical.run.period_label} to ${current.future.run.period_label}`
 				]);
 			}
+		} else if (comparisonBasis(current.pair) === 'gwl') {
+			cards.push(['Global warming level', `+${Number(current.pair.comparison.level_c).toFixed(1)} °C`, `${String(current.pair.comparison.scenario).toUpperCase()} first-crossing window`]);
 		}
 		const container = $('#mlaClimateStats');
 		container.replaceChildren(...cards.map(([label, value, note]) => {
@@ -1265,24 +1698,49 @@
 		const scope = $('#mlaClimateScope');
 		const preview = index.status === 'multi-model-awaiting-review';
 		scope.dataset.tone = preview ? 'review' : '';
+		const selectedChange = current.change.seasonal_changes[state.season][state.metric] || {};
+		const selectedFields = changeFields(metric);
+		const definedModelCount = current.pair.kind === 'multi-model' && Array.isArray(selectedChange.models)
+			? selectedChange.models.filter(model => numberAvailable(model[selectedFields.value])).length
+			: 1;
+		const modelCount = Number(definedModelCount || selectedChange.model_count || (current.pair.kind === 'multi-model' ? current.pair.model_ids.length : 1));
 		scope.textContent = (current.pair.kind === 'multi-model'
-			? `${current.change.model_count} models · equal weight`
-			: `${current.pair.source_label} · single model`) + (preview ? ' · research preview' : '');
+			? `${modelCount} models for this measure · equal weight`
+			: `${current.pair.source_label} · single model`) + (metric.resolutionSensitive ? ' · resolution-sensitive' : '') + (preview ? ' · research preview' : '');
+		$('#mlaClimateMetricNote').textContent = metric.description || `${metric.label}; ${metric.changeMode === 'absolute' ? 'absolute' : 'relative'} paired change in ${metric.unit}.`;
 		$('#mlaClimateHistoricalMapHeading').textContent = current.historical.run.period_label;
 		$('#mlaClimateFutureMapHeading').textContent = current.future.run.period_label;
-		renderStats();
+		const warmingCard = $('#mlaClimateWarmingChange').closest('.mla-card');
+		warmingCard.hidden = comparisonBasis(current.pair) === 'gwl';
+		const rainNotice = $('#mlaClimateRainfallNotice');
+		rainNotice.hidden = Boolean(current.impact) && state.season === 'jjas';
+		rainNotice.textContent = current.impact
+			? 'India-wide and regional attribution is currently JJAS-only; the storm-centred footprint below follows the selected genesis season.'
+			: `India-wide and storm-footprint rainfall diagnostics are still processing for ${comparisonLabel(current.pair)}. Track-centred precipitation remains available from the main measure selector.`;
+		chartHits = [];
 		requestAnimationFrame(() => {
-			drawModelChanges();
-			drawHistoricalAgreement();
-			drawWarmingNormalisedChanges();
-			drawPublishedGwl();
-			drawRainfallChanges();
-			drawRegionalRainfall();
-			drawFootprints();
-			drawAnnual();
-			drawMonthly();
-			drawClasses();
-			drawMaps();
+			if (state.view === 'overview') {
+				renderStats();
+				drawModelChanges();
+				drawAnnual();
+				drawMetricFamily();
+			} else if (state.view === 'tracks') {
+				drawMaps();
+				drawMonthly();
+				drawClasses();
+			} else if (state.view === 'rainfall') {
+				drawRainfallChanges();
+				drawRainDrivers();
+				drawRegionalRainfall();
+				drawFootprints();
+			} else if (state.view === 'structure') {
+				drawVerticalProfile();
+			} else if (state.view === 'evaluation') {
+				renderAvailability();
+				drawHistoricalAgreement();
+				if (comparisonBasis(current.pair) !== 'gwl') drawWarmingNormalisedChanges();
+				drawPublishedGwl();
+			}
 		});
 	}
 
@@ -1303,10 +1761,13 @@
 		const loaded = await loadPair(pair);
 		if (serial !== pairSerial) return;
 		current = loaded;
+		mergeMetricDefinitions(current.historical);
 		if (!current.historical.seasonal[state.season] || !current.future.seasonal[state.season]) state.season = 'all';
-		$('#mlaClimateSeason').value = state.season;
+		populatePairControls();
+		populateMetricControls();
 		$('#mlaClimateLoading').hidden = true;
 		$('#mlaClimateContent').hidden = false;
+		setView(state.view, false);
 		writeState();
 		render();
 	}
@@ -1319,7 +1780,7 @@
 					$('#mlaClimateLoading').textContent = 'Opening CMIP6 comparisons…';
 					index = await loadIndex();
 					resolutionControls = await loadResolutionControls();
-					populateControls();
+					populatePairControls();
 				}
 				if (!current || current.pair.id !== state.pair) await selectPair();
 				else render();
@@ -1332,19 +1793,84 @@
 		return loadingPromise;
 	}
 
+	function choosePair(pair) {
+		state.pair = pair.id;
+		state.basis = comparisonBasis(pair);
+		state.comparison = comparisonKey(pair);
+		populatePairControls();
+		writeState();
+		void selectPair().catch(showLoadError);
+	}
+
+	function csvCell(value) {
+		const text = String(value == null ? '' : value);
+		return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+	}
+
+	function downloadBlob(blob, filename) {
+		const link = document.createElement('a');
+		link.href = URL.createObjectURL(blob);
+		link.download = filename;
+		link.click();
+		setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+	}
+
+	function downloadCurrentCsv() {
+		const metric = METRICS[state.metric], fields = changeFields(metric);
+		const rows = selectedModelChanges().map(record => [comparisonBasis(current.pair), comparisonLabel(current.pair), state.season, state.metric, metric.label, record.label, record.historical, record.future, record[fields.value], record[fields.low], record[fields.high], metric.changeMode, metric.unit]);
+		const header = ['comparison_basis', 'comparison', 'genesis_season', 'metric', 'metric_label', 'model', 'historical', 'future', 'change', 'ci05', 'ci95', 'change_mode', 'unit'];
+		const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n') + '\n';
+		downloadBlob(new Blob([csv], {type: 'text/csv;charset=utf-8'}), `lps-climate-${state.metric}-${state.season}.csv`);
+	}
+
+	function saveCurrentFigure() {
+		const primary = {overview: '#mlaClimateModelChange', tracks: '#mlaClimateChangeMap', rainfall: current.impact ? (state.season === 'jjas' ? '#mlaClimateRainfallChange' : '#mlaClimateFootprintChange') : null, structure: '#mlaClimateVerticalProfile', evaluation: '#mlaClimateHistoricalSkill'}[state.view];
+		const canvas = primary && $(primary);
+		if (!canvas) return;
+		canvas.toBlob(blob => { if (blob) downloadBlob(blob, `lps-climate-${state.view}-${state.metric}.png`); }, 'image/png');
+	}
+
+	function hitAt(event) {
+		if (!(event.target instanceof HTMLCanvasElement)) return null;
+		const bounds = event.target.getBoundingClientRect();
+		const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
+		return chartHits.filter(hit => hit.canvas === event.target).find(hit => Math.hypot(hit.x - x, hit.y - y) <= hit.radius) || null;
+	}
+
 	readState();
-	$('#mlaClimatePair').addEventListener('change', event => {
+	prepareLayout();
+	setView(state.view, false);
+	$('#mlaClimateBasis').addEventListener('change', event => {
+		state.basis = event.target.value;
+		const groups = comparisonGroups();
+		const pairs = groups.values().next().value;
+		if (pairs) choosePair(preferredPair(pairs));
+	});
+	$('#mlaClimateComparison').addEventListener('change', event => {
+		state.comparison = event.target.value;
+		const pairs = comparisonGroups().get(state.comparison);
+		if (pairs) choosePair(preferredPair(pairs));
+	});
+	$('#mlaClimateDataset').addEventListener('change', event => {
 		state.pair = event.target.value;
 		writeState();
 		void selectPair().catch(showLoadError);
 	});
 	$('#mlaClimateSeason').addEventListener('change', event => {
 		state.season = event.target.value;
+		populateMetricControls();
 		writeState();
 		render();
 	});
 	$('#mlaClimateMetric').addEventListener('change', event => {
 		state.metric = event.target.value;
+		state.metricGroup = METRICS[state.metric].group;
+		$('#mlaClimateMetricGroup').value = state.metricGroup;
+		writeState();
+		render();
+	});
+	$('#mlaClimateMetricGroup').addEventListener('change', event => {
+		state.metricGroup = event.target.value;
 		writeState();
 		render();
 	});
@@ -1353,6 +1879,47 @@
 		writeState();
 		render();
 	});
+	$('#mlaClimateMapMetric').addEventListener('change', event => {
+		state.mapMetric = event.target.value;
+		writeState();
+		render();
+	});
+	$('#mlaClimateProfileMetric').addEventListener('change', event => {
+		state.profileMetric = event.target.value;
+		writeState();
+		render();
+	});
+	panel.querySelectorAll('[data-climate-view-button]').forEach(button => button.addEventListener('click', () => setView(button.dataset.climateViewButton)));
+	$('#mlaClimateCopyLink').addEventListener('click', async event => {
+		writeState();
+		try {
+			await navigator.clipboard.writeText(window.location.href);
+			event.currentTarget.textContent = 'Link copied';
+			setTimeout(() => { event.currentTarget.textContent = 'Copy link'; }, 1400);
+		} catch (_) {
+			event.currentTarget.textContent = 'Use address bar';
+		}
+	});
+	$('#mlaClimateDownloadCsv').addEventListener('click', downloadCurrentCsv);
+	$('#mlaClimateSavePng').addEventListener('click', saveCurrentFigure);
+	panel.addEventListener('pointermove', event => {
+		const hit = hitAt(event);
+		if (!hit) { tooltip.hidden = true; if (event.target instanceof HTMLCanvasElement) event.target.style.cursor = ''; return; }
+		tooltip.textContent = hit.text;
+		tooltip.hidden = false;
+		tooltip.style.left = `${Math.max(8, Math.min(window.innerWidth - 290, event.clientX + 12))}px`;
+		tooltip.style.top = `${Math.min(window.innerHeight - 70, event.clientY + 12)}px`;
+		event.target.style.cursor = hit.pairId && current && current.pair.kind === 'multi-model' ? 'pointer' : 'crosshair';
+	});
+	panel.addEventListener('pointerleave', () => { if (tooltip) tooltip.hidden = true; });
+	panel.addEventListener('click', event => {
+		const hit = hitAt(event);
+		if (!hit || !hit.pairId || !current || current.pair.kind !== 'multi-model') return;
+		const pair = index.pairs.find(item => item.id === hit.pairId);
+		if (pair) choosePair(pair);
+	});
+	let resizeTimer = null;
+	window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 120); });
 	window.addEventListener('mla:climate-visible', event => {
 		if (event.detail && event.detail.geo) geography = event.detail.geo;
 		void activate();

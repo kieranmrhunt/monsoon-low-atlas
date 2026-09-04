@@ -1047,6 +1047,19 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
         raise ValueError(f"climate index checksum does not match {climate_manifest}")
     index = _load_json(index_path)
     pair_records = [pair for pair in index["pairs"] if pair.get("kind") != "multi-model"]
+    multi = next(
+        (
+            pair
+            for pair in index["pairs"]
+            if pair.get("kind") == "multi-model"
+            and pair.get("comparison_basis", "time-slice") == "time-slice"
+        ),
+        None,
+    )
+    if multi is None:
+        raise ValueError("climate bundle has no fixed-window multi-model record")
+    target_pair_ids = set(str(value) for value in multi.get("model_ids", []))
+    target_pair_records = [pair for pair in pair_records if str(pair["id"]) in target_pair_ids]
     pairs_by_identity = {
         (
             pair["source_label"],
@@ -1078,6 +1091,7 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
             "sha256": impact_meta["asset"]["sha256"],
             "bytes": destination.stat().st_size,
         }
+        pair.setdefault("capabilities", {})["precipitation_impacts"] = True
         historical_path = Path(impact_meta["historical_manifest"])
         future_path = Path(impact_meta["future_manifest"])
         entries.append(
@@ -1089,22 +1103,23 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
                 "future": _run_payload(future_path),
             }
         )
-    if len(entries) != len(pair_records):
-        raise ValueError(f"received {len(entries)} impact pairs for {len(pair_records)} climate pairs")
-    order = {pair["id"]: position for position, pair in enumerate(pair_records)}
+    if {str(entry["id"]) for entry in entries} != target_pair_ids:
+        raise ValueError(
+            f"received impact pairs for {sorted(str(entry['id']) for entry in entries)}; "
+            f"fixed-window ensemble requires {sorted(target_pair_ids)}"
+        )
+    order = {pair["id"]: position for position, pair in enumerate(target_pair_records)}
     entries.sort(key=lambda entry: order[entry["id"]])
     ensemble_payload = aggregate_impact_payloads(entries)
     raw_ensemble = json.dumps(ensemble_payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
     ensemble_path = assets_dir / f"climate-impact-ensemble.{hashlib.sha256(raw_ensemble).hexdigest()[:12]}.json.gz"
     atomic_gzip_json(ensemble_path, ensemble_payload)
-    multi = next((pair for pair in index["pairs"] if pair.get("kind") == "multi-model"), None)
-    if multi is None:
-        raise ValueError("climate bundle has no multi-model record")
     multi["impact"] = {
         "url": f"assets/{ensemble_path.name}",
         "sha256": sha256(ensemble_path),
         "bytes": ensemble_path.stat().st_size,
     }
+    multi.setdefault("capabilities", {})["precipitation_impacts"] = True
     index["generated_utc"] = utc_now()
     raw_index = json.dumps(index, separators=(",", ":"), allow_nan=False).encode("utf-8")
     new_index = output_dir / f"climate-index.{hashlib.sha256(raw_index).hexdigest()[:12]}.json.gz"

@@ -310,6 +310,11 @@ class SummariseTest(unittest.TestCase):
             self.assertIn("reference_metrics", screen)
             ensemble = next(pair for pair in index["pairs"] if pair.get("kind") == "multi-model")
             self.assertEqual(ensemble["source_label"], "Multi-model mean")
+            with gzip.open(combined / ensemble["historical"]["url"], "rt", encoding="utf-8") as stream:
+                historical_ensemble = json.load(stream)
+            self.assertIn("genesis_density", historical_ensemble["seasonal"]["jjas"])
+            self.assertIn("lysis_density", historical_ensemble["seasonal"]["jjas"])
+            self.assertGreaterEqual(len(historical_ensemble["metric_definitions"]), 59)
             with gzip.open(combined / ensemble["change"]["url"], "rt", encoding="utf-8") as stream:
                 change = json.load(stream)
             self.assertEqual(change["schema"], ENSEMBLE_SCHEMA)

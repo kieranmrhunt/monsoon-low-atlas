@@ -374,6 +374,45 @@ def hadgem_mm_paired_periods(
     ]
 
 
+def highresmip_paired_periods(
+    source_id: str,
+    institution: str,
+    member_id: str,
+    *,
+    canary: bool = False,
+) -> list[PeriodPlan]:
+    """Pair full-physics HighResMIP historical and future integrations.
+
+    Production stops in December 2049 so every supported archive supplies a
+    complete January 2050 linker and final-centre-physics halo.
+    """
+
+    supported = {
+        ("CNRM-CM6-1", "CNRM-CERFACS", "r1i1p1f2"),
+        ("EC-Earth3P", "EC-Earth-Consortium", "r1i1p2f1"),
+        ("EC-Earth3P-HR", "EC-Earth-Consortium", "r1i1p2f1"),
+    }
+    identity = (source_id, institution, member_id)
+    if identity not in supported:
+        raise ValueError(f"unsupported full-physics HighResMIP run: {identity}")
+    historical_start, historical_end = ("199006", "199009") if canary else ("198101", "201012")
+    future_start, future_end = ("203006", "203009") if canary else ("202001", "204912")
+    return [
+        PeriodPlan(
+            RunSpec("HighResMIP", institution, source_id, "hist-1950", member_id, "gr"),
+            historical_start,
+            historical_end,
+            "full",
+        ),
+        PeriodPlan(
+            RunSpec("HighResMIP", institution, source_id, "highres-future", member_id, "gr"),
+            future_start,
+            future_end,
+            "full",
+        ),
+    ]
+
+
 PRESETS = {
     "mpi-paired": mpi_paired_periods,
     "miroc6-paired": miroc6_paired_periods,
@@ -388,6 +427,24 @@ PRESETS = {
     "hadgem-mm-ssp126-canary": lambda: hadgem_mm_paired_periods("ssp126", canary=True),
     "hadgem-mm-ssp585-paired": lambda: hadgem_mm_paired_periods("ssp585"),
     "hadgem-mm-ssp585-canary": lambda: hadgem_mm_paired_periods("ssp585", canary=True),
+    "highres-cnrm-paired": lambda: highresmip_paired_periods(
+        "CNRM-CM6-1", "CNRM-CERFACS", "r1i1p1f2"
+    ),
+    "highres-cnrm-canary": lambda: highresmip_paired_periods(
+        "CNRM-CM6-1", "CNRM-CERFACS", "r1i1p1f2", canary=True
+    ),
+    "highres-ecearth-paired": lambda: highresmip_paired_periods(
+        "EC-Earth3P", "EC-Earth-Consortium", "r1i1p2f1"
+    ),
+    "highres-ecearth-canary": lambda: highresmip_paired_periods(
+        "EC-Earth3P", "EC-Earth-Consortium", "r1i1p2f1", canary=True
+    ),
+    "highres-ecearth-hr-paired": lambda: highresmip_paired_periods(
+        "EC-Earth3P-HR", "EC-Earth-Consortium", "r1i1p2f1"
+    ),
+    "highres-ecearth-hr-canary": lambda: highresmip_paired_periods(
+        "EC-Earth3P-HR", "EC-Earth-Consortium", "r1i1p2f1", canary=True
+    ),
 }
 
 

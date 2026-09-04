@@ -48,6 +48,25 @@ class PlanTest(unittest.TestCase):
         self.assertEqual((periods[0].core_start, periods[0].core_end), ("198101", "201012"))
         self.assertEqual((periods[1].core_start, periods[1].core_end), ("207001", "209912"))
 
+    def test_highresmip_pairs_are_full_physics_like_for_like_runs(self) -> None:
+        for name, source, member in (
+            ("highres-cnrm", "CNRM-CM6-1", "r1i1p1f2"),
+            ("highres-ecearth", "EC-Earth3P", "r1i1p2f1"),
+            ("highres-ecearth-hr", "EC-Earth3P-HR", "r1i1p2f1"),
+        ):
+            periods = PRESETS[f"{name}-paired"]()
+            self.assertEqual([period.spec.activity for period in periods], ["HighResMIP"] * 2)
+            self.assertEqual([period.spec.source_id for period in periods], [source] * 2)
+            self.assertEqual([period.spec.member_id for period in periods], [member] * 2)
+            self.assertEqual([period.spec.grid_label for period in periods], ["gr"] * 2)
+            self.assertEqual([period.spec.experiment_id for period in periods], ["hist-1950", "highres-future"])
+            self.assertEqual((periods[0].core_start, periods[0].core_end), ("198101", "201012"))
+            self.assertEqual((periods[1].core_start, periods[1].core_end), ("202001", "204912"))
+
+            canary = PRESETS[f"{name}-canary"]()
+            self.assertEqual((canary[0].core_start, canary[0].core_end), ("199006", "199009"))
+            self.assertEqual((canary[1].core_start, canary[1].core_end), ("203006", "203009"))
+
     @patch("cmip6_pipeline.plan._verify_source_month")
     def test_full_and_boundary_halos_are_explicit(self, _verify: object) -> None:
         with tempfile.TemporaryDirectory() as temporary:

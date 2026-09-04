@@ -54,6 +54,10 @@ FIELD_TABLE_OVERRIDES = {
     # SSP2-4.5 has no 6hrPlevPt psl for this model. Use the same available
     # six-hour pressure table for its historical and future halves.
     ("HadGEM3-GC31-LL", "psl"): "6hrPlev",
+    # The r1 HighResMIP historical EC-Earth integrations publish psl in
+    # 6hrPlev, while the other detector fields use 6hrPlevPt.
+    ("EC-Earth3P", "psl"): "6hrPlev",
+    ("EC-Earth3P-HR", "psl"): "6hrPlev",
 }
 
 

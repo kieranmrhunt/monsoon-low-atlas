@@ -33,17 +33,143 @@ SEASONS = {
     "ond": (10, 11, 12),
     "djf": (12, 1, 2),
 }
-CHANGE_METRICS = (
-    "systems",
+METRIC_DEFINITIONS: dict[str, dict[str, Any]] = {
+    # Counts and classes. The class metrics are deliberately labelled as
+    # resolution-sensitive in the browser contract: identical thresholds do
+    # not make coarse and fine atmospheric grids equally able to resolve a
+    # compact circulation.
+    "systems": {
+        "label": "Systems",
+        "group": "Frequency and class",
+        "unit": "yr⁻¹",
+        "digits": 1,
+        "zero": True,
+        "description": "Number of systems grouped by genesis year and season.",
+    },
+    "depressions_or_stronger": {
+        "label": "Depressions or stronger",
+        "group": "Frequency and class",
+        "unit": "yr⁻¹",
+        "digits": 1,
+        "zero": True,
+        "resolution_sensitive": True,
+        "description": "Systems reaching atlas-derived IMD category D or stronger.",
+    },
+    "deep_depressions_or_stronger": {
+        "label": "Deep depressions or stronger",
+        "group": "Frequency and class",
+        "unit": "yr⁻¹",
+        "digits": 1,
+        "zero": True,
+        "resolution_sensitive": True,
+        "description": "Systems reaching atlas-derived IMD category DD or stronger.",
+    },
+    "cyclonic_storms_or_stronger": {
+        "label": "Cyclonic storms or stronger",
+        "group": "Frequency and class",
+        "unit": "yr⁻¹",
+        "digits": 1,
+        "zero": True,
+        "resolution_sensitive": True,
+        "description": "Systems reaching atlas-derived IMD category CS or stronger.",
+    },
+    "system_days": {
+        "label": "System-days",
+        "group": "Frequency and class",
+        "unit": "days yr⁻¹",
+        "digits": 1,
+        "zero": True,
+        "description": "Sum of published hourly system positions divided by 24.",
+    },
+    # Lifecycle and displacement.
+    "mean_duration_hours": {"label": "Mean duration", "group": "Lifecycle and movement", "unit": "h", "digits": 0, "event": "duration_hours", "reducer": "mean"},
+    "median_duration_hours": {"label": "Median duration", "group": "Lifecycle and movement", "unit": "h", "digits": 0, "event": "duration_hours", "reducer": "median"},
+    "mean_path_length_km": {"label": "Mean path length", "group": "Lifecycle and movement", "unit": "km", "digits": 0, "event": "path_length_km", "reducer": "mean"},
+    "median_path_length_km": {"label": "Median path length", "group": "Lifecycle and movement", "unit": "km", "digits": 0, "event": "path_length_km", "reducer": "median"},
+    "mean_translation_speed_kmh": {"label": "Mean translation speed", "group": "Lifecycle and movement", "unit": "km h⁻¹", "digits": 1, "event": "translation_speed_kmh", "reducer": "mean"},
+    "mean_westward_displacement_deg": {"label": "Mean westward displacement", "group": "Lifecycle and movement", "unit": "°", "digits": 1, "event": "westward_displacement_deg", "reducer": "mean"},
+    "mean_northward_displacement_deg": {"label": "Mean northward displacement", "group": "Lifecycle and movement", "unit": "°", "digits": 1, "event": "northward_displacement_deg", "reducer": "mean"},
+    "mean_genesis_lon": {"label": "Mean genesis longitude", "group": "Lifecycle and movement", "unit": "°E", "digits": 1, "event": "genesis_lon", "reducer": "mean"},
+    "mean_genesis_lat": {"label": "Mean genesis latitude", "group": "Lifecycle and movement", "unit": "°N", "digits": 1, "event": "genesis_lat", "reducer": "mean"},
+    "mean_lysis_lon": {"label": "Mean lysis longitude", "group": "Lifecycle and movement", "unit": "°E", "digits": 1, "event": "lysis_lon", "reducer": "mean"},
+    "mean_lysis_lat": {"label": "Mean lysis latitude", "group": "Lifecycle and movement", "unit": "°N", "digits": 1, "event": "lysis_lat", "reducer": "mean"},
+    # Wind, pressure and circulation structure.
+    "mean_peak_wind_ms": {"label": "Mean peak circulation wind", "group": "Wind and pressure", "unit": "m s⁻¹", "digits": 1, "event": "peak_wind_ms", "reducer": "mean", "resolution_sensitive": True},
+    "p90_peak_wind_ms": {"label": "90th percentile peak circulation wind", "group": "Wind and pressure", "unit": "m s⁻¹", "digits": 1, "event": "peak_wind_ms", "reducer": "p90", "resolution_sensitive": True},
+    "mean_peak_max_wind_ms": {"label": "Mean peak maximum 10 m wind", "group": "Wind and pressure", "unit": "m s⁻¹", "digits": 1, "event": "peak_max_wind_ms", "reducer": "mean", "resolution_sensitive": True},
+    "mean_lifetime_wind_ms": {"label": "Mean lifetime 10 m wind", "group": "Wind and pressure", "unit": "m s⁻¹", "digits": 1, "event": "lifetime_mean_wind_ms", "reducer": "mean"},
+    "mean_peak_pressure_deficit_hpa": {"label": "Mean peak pressure deficit", "group": "Wind and pressure", "unit": "hPa", "digits": 1, "event": "peak_pressure_deficit_hpa", "reducer": "mean", "resolution_sensitive": True},
+    "p90_peak_pressure_deficit_hpa": {"label": "90th percentile peak pressure deficit", "group": "Wind and pressure", "unit": "hPa", "digits": 1, "event": "peak_pressure_deficit_hpa", "reducer": "p90", "resolution_sensitive": True},
+    "mean_minimum_mslp_hpa": {"label": "Mean event minimum MSLP", "group": "Wind and pressure", "unit": "hPa", "digits": 1, "event": "minimum_mslp_hpa", "reducer": "mean", "resolution_sensitive": True},
+    "mean_environmental_mslp_hpa": {"label": "Mean environmental MSLP", "group": "Wind and pressure", "unit": "hPa", "digits": 1, "event": "lifetime_environmental_mslp_hpa", "reducer": "mean"},
+    "mean_peak_closed_isobars": {"label": "Mean peak closed 2 hPa isobars", "group": "Wind and pressure", "unit": "count", "digits": 1, "event": "peak_closed_isobars", "reducer": "mean", "resolution_sensitive": True},
+    "mean_peak_vorticity_x1e5_s1": {"label": "Mean peak smoothed vorticity", "group": "Vorticity structure", "unit": "10⁻⁵ s⁻¹", "digits": 1, "event": "peak_vorticity_x1e5_s1", "reducer": "mean", "resolution_sensitive": True},
+    "p90_peak_vorticity_x1e5_s1": {"label": "90th percentile peak smoothed vorticity", "group": "Vorticity structure", "unit": "10⁻⁵ s⁻¹", "digits": 1, "event": "peak_vorticity_x1e5_s1", "reducer": "p90", "resolution_sensitive": True},
+    "mean_lifetime_vorticity_850_x1e5_s1": {"label": "Mean lifetime 850 hPa vorticity", "group": "Vorticity structure", "unit": "10⁻⁵ s⁻¹", "digits": 1, "event": "lifetime_vorticity_850_x1e5_s1", "reducer": "mean"},
+    "mean_lifetime_vorticity_700_x1e5_s1": {"label": "Mean lifetime 700 hPa vorticity", "group": "Vorticity structure", "unit": "10⁻⁵ s⁻¹", "digits": 1, "event": "lifetime_vorticity_700_x1e5_s1", "reducer": "mean"},
+    "mean_lifetime_vorticity_500_x1e5_s1": {"label": "Mean lifetime 500 hPa vorticity", "group": "Vorticity structure", "unit": "10⁻⁵ s⁻¹", "digits": 1, "event": "lifetime_vorticity_500_x1e5_s1", "reducer": "mean"},
+    "mean_lifetime_vorticity_deep_x1e5_s1": {"label": "Mean lifetime deep-layer vorticity", "group": "Vorticity structure", "unit": "10⁻⁵ s⁻¹", "digits": 1, "event": "lifetime_vorticity_deep_x1e5_s1", "reducer": "mean"},
+    "mean_vorticity_500_to_850_ratio": {"label": "Mean 500 / 850 hPa vorticity ratio", "group": "Vorticity structure", "unit": "ratio", "digits": 2, "event": "lifetime_vorticity_500_to_850_ratio", "reducer": "mean"},
+    # Track-centred rain diagnostics.
+    "mean_peak_24h_precipitation_mm": {"label": "Mean peak 24 h precipitation", "group": "Precipitation", "unit": "mm", "digits": 1, "event": "peak_24h_precipitation_mm", "reducer": "mean"},
+    "p90_peak_24h_precipitation_mm": {"label": "90th percentile peak 24 h precipitation", "group": "Precipitation", "unit": "mm", "digits": 1, "event": "peak_24h_precipitation_mm", "reducer": "p90"},
+    "mean_lifetime_24h_precipitation_mm": {"label": "Mean lifetime 24 h precipitation", "group": "Precipitation", "unit": "mm", "digits": 1, "event": "mean_24h_precipitation_mm", "reducer": "mean"},
+    "mean_peak_1h_precipitation_mm": {"label": "Mean peak hourly precipitation", "group": "Precipitation", "unit": "mm h⁻¹", "digits": 2, "event": "peak_1h_precipitation_mm", "reducer": "mean"},
+    "p90_peak_1h_precipitation_mm": {"label": "90th percentile peak hourly precipitation", "group": "Precipitation", "unit": "mm h⁻¹", "digits": 2, "event": "peak_1h_precipitation_mm", "reducer": "p90"},
+    # Moisture, temperature and environmental context. Values are lifecycle
+    # means within each event before events are given equal weight by year.
+    "mean_q850_gkg": {"label": "Mean 850 hPa specific humidity", "group": "Moisture", "unit": "g kg⁻¹", "digits": 1, "event": "lifetime_q850_gkg", "reducer": "mean"},
+    "mean_q700_gkg": {"label": "Mean 700 hPa specific humidity", "group": "Moisture", "unit": "g kg⁻¹", "digits": 1, "event": "lifetime_q700_gkg", "reducer": "mean"},
+    "mean_q500_gkg": {"label": "Mean 500 hPa specific humidity", "group": "Moisture", "unit": "g kg⁻¹", "digits": 1, "event": "lifetime_q500_gkg", "reducer": "mean"},
+    "mean_q_deep_gkg": {"label": "Mean deep-layer specific humidity", "group": "Moisture", "unit": "g kg⁻¹", "digits": 1, "event": "lifetime_q_deep_gkg", "reducer": "mean"},
+    "mean_rh850_pct": {"label": "Mean 850 hPa relative humidity", "group": "Moisture", "unit": "%", "digits": 1, "event": "lifetime_rh850_pct", "reducer": "mean"},
+    "mean_rh700_pct": {"label": "Mean 700 hPa relative humidity", "group": "Moisture", "unit": "%", "digits": 1, "event": "lifetime_rh700_pct", "reducer": "mean"},
+    "mean_rh500_pct": {"label": "Mean 500 hPa relative humidity", "group": "Moisture", "unit": "%", "digits": 1, "event": "lifetime_rh500_pct", "reducer": "mean"},
+    "mean_rh_deep_pct": {"label": "Mean deep-layer relative humidity", "group": "Moisture", "unit": "%", "digits": 1, "event": "lifetime_rh_deep_pct", "reducer": "mean"},
+    "mean_t850_k": {"label": "Mean 850 hPa temperature", "group": "Temperature and core", "unit": "K", "digits": 1, "event": "lifetime_t850_k", "reducer": "mean"},
+    "mean_t700_k": {"label": "Mean 700 hPa temperature", "group": "Temperature and core", "unit": "K", "digits": 1, "event": "lifetime_t700_k", "reducer": "mean"},
+    "mean_t500_k": {"label": "Mean 500 hPa temperature", "group": "Temperature and core", "unit": "K", "digits": 1, "event": "lifetime_t500_k", "reducer": "mean"},
+    "mean_t850_core_anomaly_k": {"label": "Mean 850 hPa core temperature anomaly", "group": "Temperature and core", "unit": "K", "digits": 2, "event": "lifetime_t850_core_anomaly_k", "reducer": "mean"},
+    "mean_t700_core_anomaly_k": {"label": "Mean 700 hPa core temperature anomaly", "group": "Temperature and core", "unit": "K", "digits": 2, "event": "lifetime_t700_core_anomaly_k", "reducer": "mean"},
+    "mean_t500_core_anomaly_k": {"label": "Mean 500 hPa core temperature anomaly", "group": "Temperature and core", "unit": "K", "digits": 2, "event": "lifetime_t500_core_anomaly_k", "reducer": "mean"},
+    "mean_deep_core_temperature_anomaly_k": {"label": "Mean deep-layer core temperature anomaly", "group": "Temperature and core", "unit": "K", "digits": 2, "event": "lifetime_deep_core_temperature_anomaly_k", "reducer": "mean"},
+    "mean_t850_minus_t500_k": {"label": "Mean T850 − T500", "group": "Temperature and core", "unit": "K", "digits": 1, "event": "lifetime_t850_minus_t500_k", "reducer": "mean"},
+    "mean_t700_minus_t500_k": {"label": "Mean T700 − T500", "group": "Temperature and core", "unit": "K", "digits": 1, "event": "lifetime_t700_minus_t500_k", "reducer": "mean"},
+    "mean_background_wind_ms": {"label": "Mean background wind speed", "group": "Surface and environment", "unit": "m s⁻¹", "digits": 1, "event": "lifetime_background_wind_ms", "reducer": "mean"},
+    "mean_background_u_ms": {"label": "Mean zonal background wind", "group": "Surface and environment", "unit": "m s⁻¹", "digits": 1, "event": "lifetime_background_u_ms", "reducer": "mean"},
+    "mean_background_v_ms": {"label": "Mean meridional background wind", "group": "Surface and environment", "unit": "m s⁻¹", "digits": 1, "event": "lifetime_background_v_ms", "reducer": "mean"},
+    "mean_land_fraction": {"label": "Mean lifetime land fraction", "group": "Surface and environment", "unit": "fraction", "digits": 2, "event": "lifetime_land_fraction", "reducer": "mean"},
+    "mean_orography_m": {"label": "Mean centre orography", "group": "Surface and environment", "unit": "m", "digits": 0, "event": "lifetime_orography_m", "reducer": "mean"},
+}
+CHANGE_METRICS = tuple(METRIC_DEFINITIONS)
+ABSOLUTE_CHANGE_METRICS = {
     "depressions_or_stronger",
     "deep_depressions_or_stronger",
     "cyclonic_storms_or_stronger",
-    "system_days",
-    "mean_duration_hours",
-    "mean_peak_wind_ms",
-    "mean_peak_pressure_deficit_hpa",
-    "mean_peak_24h_precipitation_mm",
-)
+    "mean_westward_displacement_deg",
+    "mean_northward_displacement_deg",
+    "mean_genesis_lon",
+    "mean_genesis_lat",
+    "mean_lysis_lon",
+    "mean_lysis_lat",
+    "mean_minimum_mslp_hpa",
+    "mean_environmental_mslp_hpa",
+    "mean_peak_closed_isobars",
+    "mean_vorticity_500_to_850_ratio",
+    "mean_t850_k",
+    "mean_t700_k",
+    "mean_t500_k",
+    "mean_t850_core_anomaly_k",
+    "mean_t700_core_anomaly_k",
+    "mean_t500_core_anomaly_k",
+    "mean_deep_core_temperature_anomaly_k",
+    "mean_t850_minus_t500_k",
+    "mean_t700_minus_t500_k",
+    "mean_background_u_ms",
+    "mean_background_v_ms",
+    "mean_land_fraction",
+    "mean_orography_m",
+}
 ANNUAL_COLUMNS = ("year", *CHANGE_METRICS)
 EVENT_COLUMNS = (
     "track_id",
@@ -56,6 +182,9 @@ EVENT_COLUMNS = (
     "genesis_month",
     "duration_hours",
     "path_length_km",
+    "translation_speed_kmh",
+    "westward_displacement_deg",
+    "northward_displacement_deg",
     "genesis_lon",
     "genesis_lat",
     "lysis_lon",
@@ -66,6 +195,39 @@ EVENT_COLUMNS = (
     "peak_vorticity_x1e5_s1",
     "peak_24h_precipitation_mm",
     "mean_24h_precipitation_mm",
+    "peak_1h_precipitation_mm",
+    "peak_max_wind_ms",
+    "lifetime_mean_wind_ms",
+    "minimum_mslp_hpa",
+    "lifetime_environmental_mslp_hpa",
+    "peak_closed_isobars",
+    "lifetime_vorticity_850_x1e5_s1",
+    "lifetime_vorticity_700_x1e5_s1",
+    "lifetime_vorticity_500_x1e5_s1",
+    "lifetime_vorticity_deep_x1e5_s1",
+    "lifetime_vorticity_500_to_850_ratio",
+    "lifetime_q850_gkg",
+    "lifetime_q700_gkg",
+    "lifetime_q500_gkg",
+    "lifetime_q_deep_gkg",
+    "lifetime_rh850_pct",
+    "lifetime_rh700_pct",
+    "lifetime_rh500_pct",
+    "lifetime_rh_deep_pct",
+    "lifetime_t850_k",
+    "lifetime_t700_k",
+    "lifetime_t500_k",
+    "lifetime_t850_core_anomaly_k",
+    "lifetime_t700_core_anomaly_k",
+    "lifetime_t500_core_anomaly_k",
+    "lifetime_deep_core_temperature_anomaly_k",
+    "lifetime_t850_minus_t500_k",
+    "lifetime_t700_minus_t500_k",
+    "lifetime_background_wind_ms",
+    "lifetime_background_u_ms",
+    "lifetime_background_v_ms",
+    "lifetime_land_fraction",
+    "lifetime_orography_m",
 )
 
 
@@ -110,6 +272,41 @@ def haversine_steps(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     return 2.0 * 6371.0088 * np.arcsin(np.sqrt(np.clip(value, 0.0, 1.0)))
 
 
+def _numeric_values(frame: pd.DataFrame, column: str) -> np.ndarray:
+    """Return finite numeric values, or an empty array for an absent diagnostic."""
+
+    if column not in frame:
+        return np.asarray([], dtype=float)
+    values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+    return values[np.isfinite(values)]
+
+
+def _track_stat(frame: pd.DataFrame, column: str, reducer: str = "mean") -> float:
+    values = _numeric_values(frame, column)
+    if not len(values):
+        return float("nan")
+    if reducer == "mean":
+        return float(values.mean())
+    if reducer == "max":
+        return float(values.max())
+    if reducer == "min":
+        return float(values.min())
+    raise ValueError(f"unsupported track reducer {reducer}")
+
+
+def _event_metric(group: pd.DataFrame, column: str, reducer: str) -> float:
+    values = _numeric_values(group, column)
+    if not len(values):
+        return float("nan")
+    if reducer == "mean":
+        return float(values.mean())
+    if reducer == "median":
+        return float(np.median(values))
+    if reducer == "p90":
+        return float(np.quantile(values, 0.9))
+    raise ValueError(f"unsupported event reducer {reducer}")
+
+
 def event_summary(frame: pd.DataFrame) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for track_id, group in frame.groupby("track_id", sort=True):
@@ -129,6 +326,17 @@ def event_summary(frame: pd.DataFrame) -> pd.DataFrame:
             model_start = group.time.iloc[0].isoformat()
             model_end = group.time.iloc[-1].isoformat()
             model_calendar = "proleptic_gregorian"
+        path_length_km = float(np.nansum(haversine_steps(lon, lat)))
+        elapsed_hours = max(1.0, float((group.time.iloc[-1] - group.time.iloc[0]).total_seconds() / 3600.0))
+        background_u = pd.to_numeric(
+            group.get("background_u_300_500km_ms", pd.Series(np.nan, index=group.index)),
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        background_v = pd.to_numeric(
+            group.get("background_v_300_500km_ms", pd.Series(np.nan, index=group.index)),
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        background_speed = np.hypot(background_u, background_v)
         records.append(
             {
                 "track_id": int(track_id),
@@ -140,17 +348,53 @@ def event_summary(frame: pd.DataFrame) -> pd.DataFrame:
                 "genesis_year": genesis_year,
                 "genesis_month": genesis_month,
                 "duration_hours": int(len(group)),
-                "path_length_km": float(np.nansum(haversine_steps(lon, lat))),
+                "path_length_km": path_length_km,
+                "translation_speed_kmh": path_length_km / elapsed_hours,
+                "westward_displacement_deg": float(lon[0] - lon[-1]),
+                "northward_displacement_deg": float(lat[-1] - lat[0]),
                 "genesis_lon": float(lon[0]),
                 "genesis_lat": float(lat[0]),
                 "lysis_lon": float(lon[-1]),
                 "lysis_lat": float(lat[-1]),
-                "peak_category": int(pd.to_numeric(group.event_peak_imd_category, errors="coerce").max()),
-                "peak_wind_ms": float(pd.to_numeric(group.p95_anomaly_wind_125km_ms, errors="coerce").max()),
-                "peak_pressure_deficit_hpa": float(pd.to_numeric(group.pressure_deficit_hpa, errors="coerce").max()),
-                "peak_vorticity_x1e5_s1": float(pd.to_numeric(group.max_vort_smoothed, errors="coerce").max()),
-                "peak_24h_precipitation_mm": float(pd.to_numeric(group.precip_24hr, errors="coerce").max()),
-                "mean_24h_precipitation_mm": float(pd.to_numeric(group.precip_24hr, errors="coerce").mean()),
+                "peak_category": int(_track_stat(group, "event_peak_imd_category", "max")),
+                "peak_wind_ms": _track_stat(group, "p95_anomaly_wind_125km_ms", "max"),
+                "peak_pressure_deficit_hpa": _track_stat(group, "pressure_deficit_hpa", "max"),
+                "peak_vorticity_x1e5_s1": _track_stat(group, "max_vort_smoothed", "max"),
+                "peak_24h_precipitation_mm": _track_stat(group, "precip_24hr", "max"),
+                "mean_24h_precipitation_mm": _track_stat(group, "precip_24hr"),
+                "peak_1h_precipitation_mm": _track_stat(group, "precip_1hr", "max"),
+                "peak_max_wind_ms": _track_stat(group, "max_wind", "max"),
+                "lifetime_mean_wind_ms": _track_stat(group, "mean_wind"),
+                "minimum_mslp_hpa": _track_stat(group, "min_mslp", "min"),
+                "lifetime_environmental_mslp_hpa": _track_stat(group, "ring_mslp_p60"),
+                "peak_closed_isobars": _track_stat(group, "closed_isobars_2hpa_actual", "max"),
+                "lifetime_vorticity_850_x1e5_s1": _track_stat(group, "mean_vort_850"),
+                "lifetime_vorticity_700_x1e5_s1": _track_stat(group, "mean_vort_700"),
+                "lifetime_vorticity_500_x1e5_s1": _track_stat(group, "mean_vort_500"),
+                "lifetime_vorticity_deep_x1e5_s1": _track_stat(group, "mean_vort_deep"),
+                "lifetime_vorticity_500_to_850_ratio": _track_stat(group, "vort500_to_850_ratio"),
+                "lifetime_q850_gkg": _track_stat(group, "q850_mean_gkg"),
+                "lifetime_q700_gkg": _track_stat(group, "q700_mean_gkg"),
+                "lifetime_q500_gkg": _track_stat(group, "q500_mean_gkg"),
+                "lifetime_q_deep_gkg": _track_stat(group, "q_deep_mean_gkg"),
+                "lifetime_rh850_pct": _track_stat(group, "rh850_mean_pct"),
+                "lifetime_rh700_pct": _track_stat(group, "rh700_mean_pct"),
+                "lifetime_rh500_pct": _track_stat(group, "rh500_mean_pct"),
+                "lifetime_rh_deep_pct": _track_stat(group, "rh_deep_mean_pct"),
+                "lifetime_t850_k": _track_stat(group, "t850_mean_k"),
+                "lifetime_t700_k": _track_stat(group, "t700_mean_k"),
+                "lifetime_t500_k": _track_stat(group, "t500_mean_k"),
+                "lifetime_t850_core_anomaly_k": _track_stat(group, "t850_inner_minus_annulus_k"),
+                "lifetime_t700_core_anomaly_k": _track_stat(group, "t700_inner_minus_annulus_k"),
+                "lifetime_t500_core_anomaly_k": _track_stat(group, "t500_inner_minus_annulus_k"),
+                "lifetime_deep_core_temperature_anomaly_k": _track_stat(group, "t_inner_minus_annulus_deep_k"),
+                "lifetime_t850_minus_t500_k": _track_stat(group, "t850_minus_t500_k"),
+                "lifetime_t700_minus_t500_k": _track_stat(group, "t700_minus_t500_k"),
+                "lifetime_background_wind_ms": float(np.nanmean(background_speed)) if np.isfinite(background_speed).any() else float("nan"),
+                "lifetime_background_u_ms": _track_stat(group, "background_u_300_500km_ms"),
+                "lifetime_background_v_ms": _track_stat(group, "background_v_300_500km_ms"),
+                "lifetime_land_fraction": _track_stat(group, "land_fraction"),
+                "lifetime_orography_m": _track_stat(group, "orography_m"),
             }
         )
     return pd.DataFrame.from_records(records, columns=EVENT_COLUMNS)
@@ -166,20 +410,19 @@ def annual_summary(
     years = pd.DataFrame({"year": np.arange(start_year, end_year + 1, dtype=int)})
     rows: list[dict[str, Any]] = []
     for year, group in events.groupby("genesis_year"):
-        rows.append(
-            {
-                "year": int(year),
-                "systems": int(len(group)),
-                "depressions_or_stronger": int(group.peak_category.ge(2).sum()),
-                "deep_depressions_or_stronger": int(group.peak_category.ge(3).sum()),
-                "cyclonic_storms_or_stronger": int(group.peak_category.ge(4).sum()),
-                "system_days": float(group.duration_hours.sum() / 24.0),
-                "mean_duration_hours": float(group.duration_hours.mean()),
-                "mean_peak_wind_ms": float(group.peak_wind_ms.mean()),
-                "mean_peak_pressure_deficit_hpa": float(group.peak_pressure_deficit_hpa.mean()),
-                "mean_peak_24h_precipitation_mm": float(group.peak_24h_precipitation_mm.mean()),
-            }
-        )
+        row: dict[str, Any] = {
+            "year": int(year),
+            "systems": int(len(group)),
+            "depressions_or_stronger": int(group.peak_category.ge(2).sum()),
+            "deep_depressions_or_stronger": int(group.peak_category.ge(3).sum()),
+            "cyclonic_storms_or_stronger": int(group.peak_category.ge(4).sum()),
+            "system_days": float(group.duration_hours.sum() / 24.0),
+        }
+        for metric, definition in METRIC_DEFINITIONS.items():
+            event_column = definition.get("event")
+            if event_column:
+                row[metric] = _event_metric(group, str(event_column), str(definition["reducer"]))
+        rows.append(row)
     annual = years.merge(pd.DataFrame.from_records(rows, columns=ANNUAL_COLUMNS), on="year", how="left")
     count_columns = ["systems", "depressions_or_stronger", "deep_depressions_or_stronger", "cyclonic_storms_or_stronger", "system_days"]
     for column in count_columns:
@@ -229,6 +472,28 @@ def _json_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return safe.replace({np.nan: None}).to_dict("records")
 
 
+def public_metric_definitions() -> dict[str, dict[str, Any]]:
+    """Return browser metadata without the private event-reduction recipe."""
+
+    return {
+        metric: {
+            key: value
+            for key, value in definition.items()
+            if key not in {"event", "reducer"}
+        }
+        | {"change_mode": "absolute" if metric in ABSOLUTE_CHANGE_METRICS else "percent"}
+        for metric, definition in METRIC_DEFINITIONS.items()
+    }
+
+
+def available_metrics(annual: pd.DataFrame) -> list[str]:
+    return [
+        metric
+        for metric in CHANGE_METRICS
+        if metric in annual and pd.to_numeric(annual[metric], errors="coerce").notna().any()
+    ]
+
+
 def seasonal_summary(
     frame: pd.DataFrame,
     events: pd.DataFrame,
@@ -242,6 +507,12 @@ def seasonal_summary(
         selected_events = events.loc[events.genesis_month.isin(months)]
         selected_ids = set(selected_events.track_id.astype(int))
         selected_positions = frame.loc[frame.track_id.isin(selected_ids)]
+        genesis_points = selected_events[["track_id", "genesis_lon", "genesis_lat"]].rename(
+            columns={"genesis_lon": "lon", "genesis_lat": "lat"}
+        )
+        lysis_points = selected_events[["track_id", "lysis_lon", "lysis_lat"]].rename(
+            columns={"lysis_lon": "lon", "lysis_lat": "lat"}
+        )
         result[key] = {
             "months": list(months),
             "counts": {
@@ -254,6 +525,8 @@ def seasonal_summary(
                 for category, count in selected_events.peak_category.value_counts().sort_index().items()
             },
             "track_density": density(selected_positions),
+            "genesis_density": density(genesis_points),
+            "lysis_density": density(lysis_points),
         }
     return result
 
@@ -317,6 +590,12 @@ def summarise_run(
         },
         "coverage": {"start_year": start_year, "end_year": end_year, "years": years},
         "counts": {"events": len(events), "positions": len(frame)},
+        "metric_definitions": public_metric_definitions(),
+        "capabilities": {
+            "available_metrics": available_metrics(annual),
+            "unavailable_metrics": sorted(set(CHANGE_METRICS) - set(available_metrics(annual))),
+            "availability_rule": "at least one finite annual value in this run",
+        },
         "season_definitions": {key: list(months) for key, months in SEASONS.items()},
         "seasonal": seasonal_summary(frame, events, start_year, end_year),
         "monthly": monthly_summary(events, years),
@@ -409,8 +688,13 @@ def _finite_mean(values: list[Any]) -> float | None:
     return float(clean.mean()) if len(clean) else None
 
 
-def _aggregate_density(payloads: list[dict[str, Any]], season: str, years: int) -> dict[str, Any]:
-    densities = [payload["seasonal"][season]["track_density"] for payload in payloads]
+def _aggregate_density(
+    payloads: list[dict[str, Any]],
+    season: str,
+    years: int,
+    density_key: str = "track_density",
+) -> dict[str, Any]:
+    densities = [payload["seasonal"][season][density_key] for payload in payloads]
     latitude_edges = densities[0]["latitude_edges"]
     longitude_edges = densities[0]["longitude_edges"]
     rates: list[np.ndarray] = []
@@ -564,7 +848,9 @@ def aggregate_run_payloads(
             },
             "annual": annual,
             "class_counts": class_counts,
-            "track_density": _aggregate_density(payloads, season, years),
+            "track_density": _aggregate_density(payloads, season, years, "track_density"),
+            "genesis_density": _aggregate_density(payloads, season, years, "genesis_density"),
+            "lysis_density": _aggregate_density(payloads, season, years, "lysis_density"),
         }
 
     monthly: list[dict[str, Any]] = []
@@ -611,6 +897,25 @@ def aggregate_run_payloads(
         "counts": {
             "events": _finite_mean([payload["counts"]["events"] for payload in payloads]),
             "positions": _finite_mean([payload["counts"]["positions"] for payload in payloads]),
+        },
+        "metric_definitions": public_metric_definitions(),
+        "capabilities": {
+            "available_metrics": [
+                metric
+                for metric in CHANGE_METRICS
+                if any(
+                    metric in set(payload.get("capabilities", {}).get("available_metrics", CHANGE_METRICS))
+                    for payload in payloads
+                )
+            ],
+            "metric_model_counts": {
+                metric: sum(
+                    metric in set(payload.get("capabilities", {}).get("available_metrics", CHANGE_METRICS))
+                    for payload in payloads
+                )
+                for metric in CHANGE_METRICS
+            },
+            "availability_rule": "available in at least one equally weighted source model",
         },
         "season_definitions": {key: list(months) for key, months in SEASONS.items()},
         "seasonal": seasonal,
@@ -962,8 +1267,26 @@ def publish_pair(
         }
     pair_record = {
         "id": pair_id,
+        "comparison_basis": "time-slice",
         "source_label": historical_run["source_label"],
         "member_id": historical_run["member_id"],
+        "comparison": {
+            "basis": "time-slice",
+            "baseline": historical_payload["run"]["period_label"],
+            "future": future_payload["run"]["period_label"],
+            "scenario": future_payload["run"]["experiment_id"],
+        },
+        "capabilities": {
+            "available_metrics": sorted(
+                set(historical_payload.get("capabilities", {}).get("available_metrics", []))
+                & set(future_payload.get("capabilities", {}).get("available_metrics", []))
+            ),
+            "metric_count": len(
+                set(historical_payload.get("capabilities", {}).get("available_metrics", []))
+                & set(future_payload.get("capabilities", {}).get("available_metrics", []))
+            ),
+            "precipitation_impacts": False,
+        },
         "historical": {
             "run": historical_run,
             "coverage": historical_payload["coverage"],
@@ -1175,13 +1498,37 @@ def assemble_ensemble(
             }
         )
     historical["qa"]["historical_screening"] = screen_records
+    paired_metric_counts = {
+        metric: sum(
+            metric in set(left.get("capabilities", {}).get("available_metrics", CHANGE_METRICS))
+            and metric in set(right.get("capabilities", {}).get("available_metrics", CHANGE_METRICS))
+            for left, right in zip(historical_payloads, future_payloads, strict=True)
+        )
+        for metric in CHANGE_METRICS
+    }
+    paired_available_metrics = [
+        metric for metric, count in paired_metric_counts.items() if count > 0
+    ]
     ensemble_record = {
         "id": ensemble_id,
         "kind": "multi-model",
+        "comparison_basis": "time-slice",
         "label": f"Multi-model mean · {scenario.upper()} · {len(production_ids)} models",
         "source_label": "Multi-model mean",
         "member_id": "one-model-one-vote",
         "model_ids": production_ids,
+        "comparison": {
+            "basis": "time-slice",
+            "baseline": "model-specific 1981–2010 windows",
+            "future": "model-specific late-century windows",
+            "scenario": scenario,
+        },
+        "capabilities": {
+            "available_metrics": paired_available_metrics,
+            "metric_model_counts": paired_metric_counts,
+            "metric_count": len(paired_available_metrics),
+            "precipitation_impacts": False,
+        },
         "historical": {
             "run": historical["run"],
             "coverage": historical["coverage"],
