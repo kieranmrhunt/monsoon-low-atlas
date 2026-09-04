@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from cmip6_pipeline.model_calendar import time_axis
 from cmip6_pipeline.physics import (
     GAP_COMPLETENESS_COLUMN,
     classify_intensity,
@@ -12,10 +13,38 @@ from cmip6_pipeline.physics import (
     drop_unobserved_track_fragments,
     persistent_category,
     require_complete_gap_blocks,
+    restore_native_time,
 )
 
 
 class PhysicsTest(unittest.TestCase):
+    def test_native_genesis_filter_keeps_complete_boundary_crossing_track(self) -> None:
+        axis = time_axis("360_day", "201012")
+        frame = pd.DataFrame(
+            {
+                "track_id": [1, 1, 2],
+                "time": pd.to_datetime(
+                    ["2010-12-30T00:00", "2010-12-31T00:00", "2010-12-31T06:00"]
+                ),
+            }
+        )
+        result, summary = restore_native_time(
+            frame,
+            {
+                "core_start": "201012",
+                "core_end": "201012",
+                "native_core_start": "201012",
+                "native_core_end": "201012",
+                "time_axis": axis.record(),
+            },
+        )
+        self.assertEqual(result.track_id.tolist(), [1, 1])
+        self.assertEqual(result.model_time.tolist(), [
+            "2010-12-30T00:00:00",
+            "2011-01-01T00:00:00",
+        ])
+        self.assertEqual(summary["tracks_removed_outside_native_genesis_window"], 1)
+
     def test_closed_isobar_count_stops_at_open_component(self) -> None:
         yy, xx = np.mgrid[-5:6, -5:6]
         field = 998.0 + np.hypot(xx, yy)

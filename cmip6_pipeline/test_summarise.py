@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from cmip6_pipeline.model_calendar import time_axis
 from cmip6_pipeline.summarise import (
     ENSEMBLE_SCHEMA,
     INDEX_SCHEMA,
@@ -26,6 +27,25 @@ from reanalysis_pipeline.common import sha256
 
 
 class SummariseTest(unittest.TestCase):
+    def test_event_season_uses_native_model_month_not_analysis_clock(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "track_id": [4, 4],
+                "time": pd.to_datetime(["1981-03-01T00:00", "1981-03-01T01:00"]),
+                "lon": [80.0, 80.1],
+                "lat": [20.0, 20.1],
+                "event_peak_imd_category": [1, 1],
+                "p95_anomaly_wind_125km_ms": [9.0, 9.0],
+                "pressure_deficit_hpa": [3.0, 3.0],
+                "max_vort_smoothed": [7.0, 7.0],
+                "precip_24hr": [10.0, 10.0],
+            }
+        )
+        annotated = time_axis("360_day", "198101").annotate(frame)
+        result = event_summary(annotated).iloc[0]
+        self.assertEqual(result.genesis_month, 2)
+        self.assertEqual(result.model_start, "1981-02-30T00:00:00")
+
     def test_multimodel_percent_change_matches_displayed_ensemble_means(self) -> None:
         def payload(historical: float, future: float, role: str) -> dict:
             value = historical if role == "historical" else future

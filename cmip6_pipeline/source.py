@@ -73,6 +73,15 @@ def period(path: Path) -> tuple[pd.Timestamp, pd.Timestamp]:
     return _stamp(match.group(1), end=False), _stamp(match.group(2), end=True)
 
 
+def period_stamps(path: Path) -> tuple[str, str]:
+    """Return sortable 14-digit DRS bounds without assuming a civil calendar."""
+
+    match = PERIOD_RE.search(path.name)
+    if match is None:
+        raise ValueError(f"cannot read CMIP6 period from {path.name}")
+    return match.group(1).ljust(14, "0"), match.group(2).ljust(14, "9")
+
+
 def files_overlapping(directory: Path, start: pd.Timestamp, end: pd.Timestamp) -> list[Path]:
     """Return CMIP6 segments intersecting [start, end], including its halo."""
 
@@ -86,4 +95,27 @@ def files_overlapping(directory: Path, start: pd.Timestamp, end: pd.Timestamp) -
             selected.append(path)
     if not selected:
         raise FileNotFoundError(f"no files in {directory} overlap {start}..{end}")
+    return selected
+
+
+def files_overlapping_stamps(directory: Path, start: str, end: str) -> list[Path]:
+    """Return segments intersecting compact native-calendar bounds.
+
+    CMIP6 DRS timestamps are lexically ordered within a calendar. Comparing
+    their zero/nine-padded forms avoids constructing invalid civil dates such
+    as 30 February in a 360-day integration.
+    """
+
+    lower = start.ljust(14, "0")
+    upper = end.ljust(14, "9")
+    selected: list[Path] = []
+    for path in sorted(directory.glob("*.nc")):
+        try:
+            first, last = period_stamps(path)
+        except ValueError:
+            continue
+        if last >= lower and first <= upper:
+            selected.append(path)
+    if not selected:
+        raise FileNotFoundError(f"no files in {directory} overlap native time {lower}..{upper}")
     return selected

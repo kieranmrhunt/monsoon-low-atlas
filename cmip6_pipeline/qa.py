@@ -15,6 +15,7 @@ import pandas as pd
 
 from reanalysis_pipeline.common import sha256
 
+from .model_calendar import TimeAxis
 from .summarise import density, event_summary
 
 
@@ -93,8 +94,10 @@ def _haversine_steps(frame: pd.DataFrame) -> np.ndarray:
 
 
 def _core_bounds(plan: dict[str, Any]) -> tuple[pd.Timestamp, pd.Timestamp, list[int], int]:
-    start = pd.Period(str(plan["core_start"]), freq="M").start_time
-    end = (pd.Period(str(plan["core_end"]), freq="M") + 1).start_time - pd.Timedelta(hours=1)
+    core_start = str(plan.get("native_core_start", plan["core_start"]))
+    core_end = str(plan.get("native_core_end", plan["core_end"]))
+    start = pd.Period(core_start, freq="M").start_time
+    end = (pd.Period(core_end, freq="M") + 1).start_time - pd.Timedelta(hours=1)
     periods = pd.period_range(start=start, end=end, freq="M")
     months = sorted(set(int(period.month) for period in periods))
     years = len(sorted(set(int(period.year) for period in periods)))
@@ -130,8 +133,14 @@ def _catalogue_metrics(frame: pd.DataFrame, months: list[int], years: int) -> di
 
 
 def _positions_for_genesis_months(frame: pd.DataFrame, months: list[int]) -> pd.DataFrame:
-    genesis = frame.groupby("track_id", sort=False).time.min()
-    selected = genesis.loc[genesis.dt.month.isin(months)].index
+    ordered = frame.sort_values(["track_id", "time"], kind="mergesort")
+    genesis = ordered.groupby("track_id", sort=False).first()
+    genesis_month = (
+        pd.to_numeric(genesis.model_month, errors="coerce")
+        if "model_month" in genesis
+        else genesis.time.dt.month
+    )
+    selected = genesis.index[genesis_month.isin(months)]
     return frame.loc[frame.track_id.isin(selected)]
 
 
@@ -198,9 +207,7 @@ def _select_reference(
     selected = genesis.loc[
         genesis.dt.year.between(start.year, end.year) & genesis.dt.month.isin(months)
     ].index
-    return reference.loc[
-        reference.track_id.isin(selected) & reference.time.between(start, end)
-    ].copy()
+    return reference.loc[reference.track_id.isin(selected)].copy()
 
 
 def _safe_ratio(model: float | None, reference: float | None) -> float | None:
@@ -372,6 +379,12 @@ def validate_catalogue(
         }
     frame["time"] = pd.to_datetime(frame.time, errors="raise")
     frame.sort_values(["track_id", "time"], kind="mergesort", inplace=True)
+    axis_record = plan.get("time_axis")
+    axis = TimeAxis.from_record(axis_record) if axis_record else None
+    analysis_start = pd.Timestamp(plan.get("analysis_core_start", start))
+    analysis_end_exclusive = pd.Timestamp(
+        plan.get("analysis_core_end_exclusive", end + pd.Timedelta(hours=1))
+    )
     duplicate_track_times = int(frame.duplicated(["track_id", "time"]).sum())
     if duplicate_track_times:
         failures.append(f"{duplicate_track_times} duplicate track/time rows")
@@ -383,8 +396,51 @@ def validate_catalogue(
             failures.append(f"{column} has {missing_values} non-finite rows")
     if not frame.lon.between(45.0, 120.0).all() or not frame.lat.between(-15.0, 45.0).all():
         failures.append("published centres leave the common tracking domain")
-    if frame.time.min() < start or frame.time.max() > end:
-        failures.append("catalogue timestamps leave the planned core interval")
+    if axis is None:
+        if frame.time.min() < start or frame.time.max() > end:
+            failures.append("catalogue timestamps leave the planned core interval")
+    else:
+        native_columns = {
+            "model_time",
+            "model_year",
+            "model_month",
+            "model_day",
+            "model_hour",
+            "model_minute",
+            "model_calendar",
+            "time_basis",
+        }
+        missing_native = sorted(native_columns - set(frame.columns))
+        if missing_native:
+            failures.append(f"native-calendar identity columns are absent: {', '.join(missing_native)}")
+        else:
+            expected = axis.annotate(frame[["time"]])
+            for column in (
+                "model_time",
+                "model_year",
+                "model_month",
+                "model_day",
+                "model_hour",
+                "model_minute",
+                "model_calendar",
+                "time_basis",
+            ):
+                if not frame[column].reset_index(drop=True).equals(
+                    expected[column].reset_index(drop=True)
+                ):
+                    failures.append(f"{column} is not invertible from the analysis clock")
+            events_for_bounds = event_summary(frame)
+            native_start = str(plan.get("native_core_start", plan["core_start"]))
+            native_end = str(plan.get("native_core_end", plan["core_end"]))
+            genesis_yyyymm = (
+                events_for_bounds.genesis_year.astype(str).str.zfill(4)
+                + events_for_bounds.genesis_month.astype(str).str.zfill(2)
+            )
+            outside = int((~genesis_yyyymm.between(native_start, native_end)).sum())
+            if outside:
+                failures.append(
+                    f"{outside} events have genesis outside the native planned interval"
+                )
     elapsed = frame.groupby("track_id", sort=False).time.diff().dt.total_seconds().div(3600.0)
     non_hourly_steps = int(elapsed.dropna().ne(1.0).sum())
     if non_hourly_steps:
@@ -413,7 +469,12 @@ def validate_catalogue(
         failures.append("at least one event has no finite final-centre smoothed vorticity")
 
     events = event_summary(frame)
-    boundary_censored = int((events.start.le(start) | events.end.ge(end)).sum())
+    boundary_censored = int(
+        (
+            events.start.le(analysis_start)
+            | events.end.ge(analysis_end_exclusive - pd.Timedelta(hours=1))
+        ).sum()
+    )
     record: dict[str, Any] = {
         "schema": SCHEMA,
         "status": "passed" if not failures else "failed",
@@ -429,6 +490,11 @@ def validate_catalogue(
         "core": {
             "start": start.isoformat(),
             "end": end.isoformat(),
+            "native_start": str(plan.get("native_core_start", plan["core_start"])),
+            "native_end": str(plan.get("native_core_end", plan["core_end"])),
+            "calendar": axis.calendar if axis is not None else "proleptic_gregorian",
+            "analysis_start": analysis_start.isoformat(),
+            "analysis_end_exclusive": analysis_end_exclusive.isoformat(),
             "months": months,
             "years": years,
         },

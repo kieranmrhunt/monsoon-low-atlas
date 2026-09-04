@@ -21,6 +21,8 @@ from scipy.ndimage import label
 from reanalysis_pipeline.common import sha256
 from reanalysis_pipeline.standardise_merra2 import standard_paths
 
+from .model_calendar import TimeAxis
+
 
 ATLAS_ROOT = Path(__file__).resolve().parents[1]
 TRACKER_ROOT = ATLAS_ROOT.parent / "lps-v5.3-continuity-framework"
@@ -647,7 +649,59 @@ def classify_intensity(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any
     return output, summary
 
 
-def finalize(initial: Path, output_root: Path) -> Path:
+def restore_native_time(
+    frame: pd.DataFrame,
+    plan: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Annotate the model calendar and retain events whose genesis is in-window."""
+
+    axis_record = plan.get("time_axis")
+    if not axis_record:
+        return frame.copy(), {
+            "calendar": "gregorian",
+            "time_basis": "civil_gregorian",
+            "tracks_removed_outside_native_genesis_window": 0,
+        }
+    axis = TimeAxis.from_record(axis_record)
+    output = axis.annotate(frame)
+    native_start = str(plan.get("native_core_start", plan["core_start"]))
+    native_end = str(plan.get("native_core_end", plan["core_end"]))
+    output["model_yyyymm"] = (
+        output.model_year.astype(str).str.zfill(4)
+        + output.model_month.astype(str).str.zfill(2)
+    )
+    genesis = (
+        output.sort_values(["track_id", "time"], kind="mergesort")
+        .groupby("track_id", sort=False)
+        .first()
+    )
+    selected_ids = genesis.index[
+        genesis.model_yyyymm.between(native_start, native_end)
+    ]
+    before_tracks = int(output.track_id.nunique())
+    output = output.loc[output.track_id.isin(selected_ids)].copy()
+    output.drop(columns="model_yyyymm", inplace=True)
+    output.sort_values(["track_id", "time"], kind="mergesort", inplace=True)
+    output.reset_index(drop=True, inplace=True)
+    return output, {
+        "calendar": axis.calendar,
+        "time_basis": axis.basis,
+        "native_core_start": native_start,
+        "native_core_end": native_end,
+        "analysis_anchor": axis.analysis_anchor,
+        "native_anchor": axis.native_anchor,
+        "tracks_before_native_genesis_filter": before_tracks,
+        "tracks_removed_outside_native_genesis_window": before_tracks
+        - int(output.track_id.nunique()),
+    }
+
+
+def finalize(
+    initial: Path,
+    output_root: Path,
+    *,
+    period_plan: Path | None = None,
+) -> Path:
     initial = initial.resolve()
     output_root = output_root.resolve()
     final = output_root / "cmip6-physical-events.parquet"
@@ -657,6 +711,7 @@ def finalize(initial: Path, output_root: Path) -> Path:
         "physics_module_sha256": sha256(Path(__file__).resolve()),
         "gap_validator_sha256": sha256(GAP_VALIDATOR),
         "event_filter_sha256": sha256(EVENT_FILTER),
+        "period_plan_sha256": sha256(period_plan) if period_plan is not None else None,
     }
     if final.is_file() and summary_path.is_file():
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -735,7 +790,12 @@ def finalize(initial: Path, output_root: Path) -> Path:
         cwd=TRACKER_ROOT,
         check=True,
     )
-    classified, classification = classify_intensity(pd.read_parquet(filtered))
+    filtered_frame = pd.read_parquet(filtered)
+    calendar_summary: dict[str, Any] | None = None
+    if period_plan is not None:
+        plan = json.loads(period_plan.read_text(encoding="utf-8"))
+        filtered_frame, calendar_summary = restore_native_time(filtered_frame, plan)
+    classified, classification = classify_intensity(filtered_frame)
     classified.drop(columns=[GAP_COMPLETENESS_COLUMN], errors="ignore", inplace=True)
     atomic_parquet(final, classified)
     for source, name in (
@@ -756,6 +816,7 @@ def finalize(initial: Path, output_root: Path) -> Path:
             "completed_utc": utc_now(),
             "fingerprint": fingerprint,
             "classification": classification,
+            "time_identity": calendar_summary,
             "output": str(final),
             "output_sha256": sha256(final),
             "method_note": (
@@ -787,6 +848,7 @@ def parse_args() -> argparse.Namespace:
     finalizer = subparsers.add_parser("finalize")
     finalizer.add_argument("--input", type=Path, required=True)
     finalizer.add_argument("--output-root", type=Path, required=True)
+    finalizer.add_argument("--period-plan", type=Path)
     return parser.parse_args()
 
 
@@ -799,7 +861,7 @@ def main() -> None:
     elif args.command == "merge":
         result = merge_months(args.manifest, args.output_root)
     else:
-        result = finalize(args.input, args.output_root)
+        result = finalize(args.input, args.output_root, period_plan=args.period_plan)
     print(result)
 
 

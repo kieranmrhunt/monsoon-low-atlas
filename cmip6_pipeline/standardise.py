@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Standardise a BADC CMIP6 month for the frozen v5.6 LPS detector.
+"""Standardise a BADC CMIP6 interval for the frozen v5.6 LPS detector.
 
-The first production wave targets rectilinear, Gregorian-calendar runs with
-fixed-pressure winds. Source-native fields are regionally sampled to the
-tracker's 1-degree grid. Instantaneous fields are linearly interpolated in
-time; precipitation fluxes retain their native interval means at each hourly
-bin rather than being smoothed across interval boundaries.
+Source-native fields are regionally sampled to the tracker's 1-degree grid.
+For non-Gregorian models, the interval name and time coordinate refer to an
+invertible ordinal analysis clock; native calendar identity is restored after
+tracking. Instantaneous fields are linearly interpolated in time;
+precipitation fluxes retain their native interval means at each hourly bin
+rather than being smoothed across interval boundaries.
 """
 
 from __future__ import annotations
@@ -33,7 +34,8 @@ from reanalysis_pipeline.common import (
 )
 from reanalysis_pipeline.standardise_merra2 import month_bounds, standard_paths
 
-from .source import DEFAULT_ROOT, RunSpec, files_overlapping
+from .model_calendar import TimeAxis, load_time_axis, native_stamp
+from .source import DEFAULT_ROOT, RunSpec, files_overlapping, files_overlapping_stamps
 
 
 STANDARD_SCHEMA = "lps-atlas-cmip6-standard-month-v1"
@@ -48,6 +50,15 @@ FIELD_TABLES = {
     "vas": "3hr",
     "pr": "3hr",
 }
+FIELD_TABLE_OVERRIDES = {
+    # SSP2-4.5 has no 6hrPlevPt psl for this model. Use the same available
+    # six-hour pressure table for its historical and future halves.
+    ("HadGEM3-GC31-LL", "psl"): "6hrPlev",
+}
+
+
+def field_table(spec: RunSpec, variable: str) -> str:
+    return FIELD_TABLE_OVERRIDES.get((spec.source_id, variable), FIELD_TABLES[variable])
 
 
 def utc_now() -> str:
@@ -105,25 +116,59 @@ def _open_variable(
     end: pd.Timestamp,
     *,
     pressure_levels: bool = False,
+    time_axis: TimeAxis | None = None,
 ) -> tuple[xr.DataArray, list[Path]]:
-    table = FIELD_TABLES[variable]
+    table = field_table(spec, variable)
     directory = spec.field_directory(root, table, variable)
-    paths = files_overlapping(directory, start - pd.Timedelta(hours=6), end + pd.Timedelta(hours=6))
+    read_start = start - pd.Timedelta(hours=6)
+    read_end = end + pd.Timedelta(hours=6)
+    if time_axis is None:
+        paths = files_overlapping(directory, read_start, read_end)
+    else:
+        native_start, native_end = time_axis.native_bounds_for_analysis_interval(
+            read_start,
+            read_end,
+        )
+        paths = files_overlapping_stamps(
+            directory,
+            native_stamp(native_start),
+            native_stamp(native_end),
+        )
     parts: list[xr.DataArray] = []
     for path in paths:
         with xr.open_dataset(path) as dataset:
             if variable not in dataset:
                 raise ValueError(f"{path} does not contain {variable}")
             calendar = str(dataset.time.encoding.get("calendar", dataset.time.attrs.get("calendar", "standard")))
-            if calendar not in {"standard", "gregorian", "proleptic_gregorian"}:
+            if time_axis is None and calendar not in {"standard", "gregorian", "proleptic_gregorian"}:
                 raise ValueError(
-                    f"{spec.slug} uses {calendar}; the first-wave adapter intentionally requires a Gregorian calendar"
+                    f"{spec.slug} uses {calendar}; a native-calendar time axis is required"
                 )
-            value = _regional(dataset[variable])
+            if time_axis is not None and calendar != time_axis.calendar:
+                aliases = {calendar, time_axis.calendar}
+                if not aliases <= {"standard", "gregorian", "proleptic_gregorian"}:
+                    raise ValueError(
+                        f"{path} uses {calendar}, not the planned {time_axis.calendar} calendar"
+                    )
+            analysis_times = (
+                time_axis.native_to_analysis(dataset.time.values)
+                if time_axis is not None
+                else pd.DatetimeIndex(pd.to_datetime(dataset.time.values))
+            )
+            selected = np.flatnonzero(
+                (analysis_times >= read_start) & (analysis_times <= read_end)
+            )
+            if not len(selected):
+                continue
+            value = dataset[variable].isel(time=selected).assign_coords(
+                time=analysis_times[selected]
+            )
+            value = _regional(value)
             if pressure_levels:
                 value = _select_levels(value)
-            value = value.sel(time=slice(start - pd.Timedelta(hours=6), end + pd.Timedelta(hours=6)))
             parts.append(value.astype(np.float32).load())
+    if not parts:
+        raise ValueError(f"{variable} has no samples on analysis clock {read_start}..{read_end}")
     combined = xr.concat(parts, dim="time", coords="minimal", compat="override") if len(parts) > 1 else parts[0]
     combined = combined.sortby("time")
     times = pd.DatetimeIndex(pd.to_datetime(combined.time.values))
@@ -158,8 +203,13 @@ def _hourly_precipitation(value: xr.DataArray, times: pd.DatetimeIndex) -> xr.Da
     return sampled
 
 
-def _attrs(spec: RunSpec, month: str, temporal_basis: str) -> dict[str, str]:
-    return {
+def _attrs(
+    spec: RunSpec,
+    month: str,
+    temporal_basis: str,
+    time_axis: TimeAxis | None,
+) -> dict[str, str]:
+    result = {
         "title": f"{spec.source_id} {spec.experiment_id} fields standardized for LPS tracking, {month}",
         "source": "CMIP6 via the CEDA/BADC archive",
         "activity_id": spec.activity,
@@ -172,6 +222,17 @@ def _attrs(spec: RunSpec, month: str, temporal_basis: str) -> dict[str, str]:
         "processing": "regional subset; bilinear spatial interpolation; frozen v5.6 detector input contract",
         "created_utc": utc_now(),
     }
+    if time_axis is not None:
+        result.update(
+            {
+                "source_calendar": time_axis.calendar,
+                "time_coordinate_role": "ordinal analysis clock",
+                "time_axis_basis": time_axis.basis,
+                "native_anchor": time_axis.native_anchor,
+                "analysis_anchor": time_axis.analysis_anchor,
+            }
+        )
+    return result
 
 
 def _require_time_axis(dataset: xr.Dataset, expected: pd.DatetimeIndex, label: str) -> None:
@@ -249,12 +310,23 @@ def _source_records(paths: Iterable[Path]) -> list[dict[str, object]]:
     ]
 
 
-def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: str) -> dict[str, object]:
+def standardise_month(
+    output_root: Path,
+    badc_root: Path,
+    spec: RunSpec,
+    month: str,
+    *,
+    time_axis: TimeAxis | None = None,
+) -> dict[str, object]:
     provenance = standard_paths(output_root, month)["provenance"]
     if provenance.is_file():
         try:
+            cached = json.loads(provenance.read_text(encoding="utf-8"))
+            expected_axis = time_axis.record() if time_axis is not None else None
+            if cached.get("time_axis") != expected_axis:
+                raise ValueError("cached standard month uses a different time-axis mapping")
             validate_month(output_root, month)
-            return json.loads(provenance.read_text(encoding="utf-8"))
+            return cached
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
             pass
     start, end = month_bounds(month)
@@ -265,15 +337,37 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
 
     pressure: dict[str, xr.DataArray] = {}
     for variable in ("ua", "va", "ta", "hus"):
-        value, paths = _open_variable(badc_root, spec, variable, start, read_end, pressure_levels=True)
+        value, paths = _open_variable(
+            badc_root,
+            spec,
+            variable,
+            start,
+            read_end,
+            pressure_levels=True,
+            time_axis=time_axis,
+        )
         pressure[variable] = _sample_grid(value)
         source_paths.extend(paths)
     surface: dict[str, xr.DataArray] = {}
     for variable in ("psl", "ps", "uas", "vas"):
-        value, paths = _open_variable(badc_root, spec, variable, start, read_end)
+        value, paths = _open_variable(
+            badc_root,
+            spec,
+            variable,
+            start,
+            read_end,
+            time_axis=time_axis,
+        )
         surface[variable] = _sample_grid(value)
         source_paths.extend(paths)
-    precipitation, paths = _open_variable(badc_root, spec, "pr", start, read_end)
+    precipitation, paths = _open_variable(
+        badc_root,
+        spec,
+        "pr",
+        start,
+        read_end,
+        time_axis=time_axis,
+    )
     precipitation = _sample_grid(precipitation)
     source_paths.extend(paths)
 
@@ -294,7 +388,12 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
     vorticity_output = xr.Dataset(
         {"vo": (("time", "level", "latitude", "longitude"), vorticity)},
         coords=coordinates,
-        attrs=_attrs(spec, month, "hourly interpolation of six-hourly instantaneous pressure-level winds"),
+        attrs=_attrs(
+            spec,
+            month,
+            "hourly interpolation of six-hourly instantaneous pressure-level winds",
+            time_axis,
+        ),
     )
     vorticity_output.vo.attrs.update({"long_name": "relative vorticity", "units": "10^-5 s^-1"})
 
@@ -305,7 +404,13 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
             "u10": _interpolate(surface["uas"], hourly, "uas"),
             "v10": _interpolate(surface["vas"], hourly, "vas"),
         },
-        attrs=_attrs(spec, month, "hourly interpolation of three- or six-hourly instantaneous surface fields"),
+        attrs=_attrs(
+            spec,
+            month,
+            "hourly linear interpolation of three- or six-hourly source surface fields; "
+            "CMIP6 point/mean semantics retained in each variable's cell_methods attribute",
+            time_axis,
+        ),
     ).astype(np.float32)
     for name, long_name, units in (
         ("msl", "mean sea level pressure", "Pa"),
@@ -318,7 +423,12 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
     rain = _hourly_precipitation(precipitation, hourly)
     precipitation_output = xr.Dataset(
         {"mtpr": rain.transpose("time", "latitude", "longitude")},
-        attrs=_attrs(spec, month, "native three-hour precipitation interval means assigned to hourly bins"),
+        attrs=_attrs(
+            spec,
+            month,
+            "native three-hour precipitation interval means assigned to hourly bins",
+            time_axis,
+        ),
     ).astype(np.float32)
     precipitation_output.mtpr.attrs.update({"long_name": "total precipitation rate", "units": "kg m-2 s-1"})
 
@@ -329,7 +439,12 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
             "t": _interpolate(pressure["ta"], three_hourly, "ta"),
             "q": _interpolate(pressure["hus"], three_hourly, "hus"),
         },
-        attrs=_attrs(spec, month, "three-hour interpolation of six-hourly pressure-level fields"),
+        attrs=_attrs(
+            spec,
+            month,
+            "three-hour interpolation of six-hourly pressure-level fields",
+            time_axis,
+        ),
     ).astype(np.float32)
     for name in ("u", "v"):
         auxiliary_output[name].attrs["units"] = "m s-1"
@@ -351,6 +466,18 @@ def standardise_month(output_root: Path, badc_root: Path, spec: RunSpec, month: 
         "run": spec.__dict__,
         "month": month,
         "coverage": {"start": start.isoformat(), "end_exclusive": end.isoformat()},
+        "time_axis": time_axis.record() if time_axis is not None else None,
+        "source_fields": {
+            variable: {
+                "table_id": field_table(spec, variable),
+                "cell_methods": str(value.attrs.get("cell_methods", "not declared")),
+            }
+            for variable, value in {
+                **pressure,
+                **surface,
+                "pr": precipitation,
+            }.items()
+        },
         "source_files": _source_records(source_paths),
         "outputs": {},
     }
@@ -370,6 +497,8 @@ def standardise_auxiliary_boundary(
     badc_root: Path,
     spec: RunSpec,
     timestamp: str | pd.Timestamp,
+    *,
+    time_axis: TimeAxis | None = None,
 ) -> dict[str, object]:
     """Write the single next-month pressure-level frame needed at a run boundary."""
 
@@ -379,8 +508,12 @@ def standardise_auxiliary_boundary(
     provenance = output_root / "standard" / "provenance" / f"pl3h-boundary-{boundary:%Y%m%d%H}.json"
     if provenance.is_file():
         try:
+            cached = json.loads(provenance.read_text(encoding="utf-8"))
+            expected_axis = time_axis.record() if time_axis is not None else None
+            if cached.get("time_axis") != expected_axis:
+                raise ValueError("cached auxiliary boundary uses a different time-axis mapping")
             validate_auxiliary_boundary(output_root, boundary)
-            return json.loads(provenance.read_text(encoding="utf-8"))
+            return cached
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
             pass
     target = pd.DatetimeIndex([boundary])
@@ -394,6 +527,7 @@ def standardise_auxiliary_boundary(
             boundary,
             boundary,
             pressure_levels=True,
+            time_axis=time_axis,
         )
         pressure[variable] = _sample_grid(value)
         source_paths.extend(paths)
@@ -404,7 +538,12 @@ def standardise_auxiliary_boundary(
             "t": _interpolate(pressure["ta"], target, "ta"),
             "q": _interpolate(pressure["hus"], target, "hus"),
         },
-        attrs=_attrs(spec, month, "single pressure-level boundary frame for final-month interpolation"),
+        attrs=_attrs(
+            spec,
+            month,
+            "single pressure-level boundary frame for final-month interpolation",
+            time_axis,
+        ),
     ).astype(np.float32)
     for name in ("u", "v"):
         output[name].attrs["units"] = "m s-1"
@@ -416,6 +555,7 @@ def standardise_auxiliary_boundary(
         "created_utc": utc_now(),
         "run": spec.__dict__,
         "timestamp": boundary.isoformat(),
+        "time_axis": time_axis.record() if time_axis is not None else None,
         "source_files": _source_records(source_paths),
         "output": {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256(path)},
     }
@@ -448,6 +588,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-id", required=True)
     parser.add_argument("--member-id", required=True)
     parser.add_argument("--grid-label", default="gn")
+    parser.add_argument("--time-axis", type=Path)
     subparsers = parser.add_subparsers(dest="command", required=True)
     standardise = subparsers.add_parser("standardise-month")
     standardise.add_argument("--month", required=True, help="YYYYMM")
@@ -460,14 +601,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    axis = load_time_axis(args.time_axis)
     if args.command == "standardise-month":
-        report = standardise_month(args.output_root, args.badc_root, run_spec(args), args.month)
+        report = standardise_month(
+            args.output_root,
+            args.badc_root,
+            run_spec(args),
+            args.month,
+            time_axis=axis,
+        )
     elif args.command == "standardise-aux-boundary":
         report = standardise_auxiliary_boundary(
             args.output_root,
             args.badc_root,
             run_spec(args),
             args.timestamp,
+            time_axis=axis,
         )
     else:
         report = validate_month(args.output_root, args.month)

@@ -17,7 +17,11 @@ PERIOD_PLAN="${3:-}"
 PYTHON="${LPS_CMIP6_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 cd "$ATLAS_ROOT"
 MERGED="$($PYTHON -m cmip6_pipeline.physics merge --manifest "$MANIFEST" --output-root "$OUTPUT_ROOT" | tail -1)"
-FINAL="$($PYTHON -m cmip6_pipeline.physics finalize --input "$MERGED" --output-root "$OUTPUT_ROOT" | tail -1)"
+FINAL_ARGS=(--input "$MERGED" --output-root "$OUTPUT_ROOT")
+if [[ -n "$PERIOD_PLAN" ]]; then
+  FINAL_ARGS+=(--period-plan "$PERIOD_PLAN")
+fi
+FINAL="$($PYTHON -m cmip6_pipeline.physics finalize "${FINAL_ARGS[@]}" | tail -1)"
 if [[ -n "$PERIOD_PLAN" ]]; then
   QA_REPORT="$OUTPUT_ROOT/qa-summary.json"
   "$PYTHON" -m cmip6_pipeline.qa \

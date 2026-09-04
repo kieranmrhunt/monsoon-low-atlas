@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from cmip6_pipeline.model_calendar import time_axis
 from cmip6_pipeline.qa import SCHEMA, validate_catalogue
 
 
@@ -68,6 +69,39 @@ class CatalogueQaTest(unittest.TestCase):
             result = validate_catalogue(source, plan, reference=None)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["checks"]["duplicate_track_times"], 1)
+
+    def test_native_calendar_identity_is_recomputed_during_qa(self) -> None:
+        axis = time_axis("360_day", "200007")
+        frame = axis.annotate(catalogue())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "catalogue.parquet"
+            frame.to_parquet(source, index=False)
+            start, end = axis.analysis_interval_for_native_months("200007", "200009")
+            plan = root / "period-plan.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "core_start": "200007",
+                        "core_end": "200009",
+                        "native_core_start": "200007",
+                        "native_core_end": "200009",
+                        "analysis_core_start": start.isoformat(),
+                        "analysis_core_end_exclusive": end.isoformat(),
+                        "time_axis": axis.record(),
+                        "run": {"source_id": "TestModel", "experiment_id": "ssp245"},
+                    }
+                )
+            )
+            result = validate_catalogue(source, plan, reference=None)
+            self.assertEqual(result["status"], "passed")
+            frame.loc[0, "model_time"] = "2000-02-30T00:00:00"
+            frame.to_parquet(source, index=False)
+            corrupted = validate_catalogue(source, plan, reference=None)
+            self.assertIn(
+                "model_time is not invertible from the analysis clock",
+                corrupted["failures"],
+            )
 
     def test_historical_screen_reports_jjas_separately(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

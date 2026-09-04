@@ -16,8 +16,9 @@ import pandas as pd
 
 from reanalysis_pipeline.common import sha256
 
-from .source import DEFAULT_ROOT, RunSpec, files_overlapping
-from .standardise import FIELD_TABLES
+from .model_calendar import TimeAxis, native_stamp, time_axis
+from .source import DEFAULT_ROOT, RunSpec, files_overlapping_stamps
+from .standardise import FIELD_TABLES, field_table
 
 
 SCHEMA = "lps-atlas-cmip6-production-plan-v1"
@@ -29,6 +30,7 @@ class PeriodPlan:
     core_start: str
     core_end: str
     next_halo: str = "full"
+    calendar: str = "proleptic_gregorian"
 
 
 def utc_now() -> str:
@@ -66,12 +68,23 @@ def _atomic_tsv(path: Path, rows: list[list[object]]) -> None:
     os.replace(temporary, path)
 
 
-def _verify_source_month(root: Path, spec: RunSpec, month: str, variables: tuple[str, ...]) -> None:
+def _verify_source_month(
+    root: Path,
+    spec: RunSpec,
+    month: str,
+    variables: tuple[str, ...],
+    axis: TimeAxis,
+) -> None:
     start = pd.Period(month, freq="M").start_time
     end = (pd.Period(month, freq="M") + 1).start_time
+    native_start, native_end = axis.native_bounds_for_analysis_interval(start, end)
     for variable in variables:
-        directory = spec.field_directory(root, FIELD_TABLES[variable], variable)
-        files_overlapping(directory, start, end - pd.Timedelta(seconds=1))
+        directory = spec.field_directory(root, field_table(spec, variable), variable)
+        files_overlapping_stamps(
+            directory,
+            native_stamp(native_start),
+            native_stamp(native_end),
+        )
 
 
 def build_plan(
@@ -94,21 +107,32 @@ def build_plan(
     for period_index, item in enumerate(periods, start=1):
         if item.next_halo not in {"full", "boundary"}:
             raise ValueError(f"unsupported next_halo mode {item.next_halo}")
-        core = _months(item.core_start, item.core_end)
-        if not core:
+        native_core = _months(item.core_start, item.core_end)
+        if not native_core:
             raise ValueError(f"empty core interval {item.core_start}..{item.core_end}")
         label = item.spec.slug
         period_root = run_root / label
         data_root = period_root / "data"
         tracking_root = period_root / "tracking"
         link_root = period_root / "parallel-link"
+        axis = time_axis(item.calendar, item.core_start)
+        analysis_start, analysis_end = axis.analysis_interval_for_native_months(
+            item.core_start,
+            item.core_end,
+        )
+        core = _months(
+            analysis_start.strftime("%Y%m"),
+            (analysis_end - pd.Timedelta(hours=1)).strftime("%Y%m"),
+        )
+        axis_path = period_root / "time-axis.json"
+        _atomic_json(axis_path, axis.record())
         full_standard_months = [_previous(core[0]), *core]
         if item.next_halo == "full":
             full_standard_months.append(_next(core[-1]))
         full_standard_months = list(dict.fromkeys(full_standard_months))
 
         for month in full_standard_months:
-            _verify_source_month(badc_root, item.spec, month, tuple(FIELD_TABLES))
+            _verify_source_month(badc_root, item.spec, month, tuple(FIELD_TABLES), axis)
             standard_rows.append(
                 [
                     len(standard_rows) + 1,
@@ -120,13 +144,20 @@ def build_plan(
                     item.spec.grid_label,
                     month,
                     data_root,
+                    axis_path,
                 ]
             )
         boundary_timestamp: str | None = None
         if item.next_halo == "boundary":
             boundary_month = _next(core[-1])
             boundary_timestamp = f"{boundary_month[:4]}-{boundary_month[4:]}-01T00:00:00"
-            _verify_source_month(badc_root, item.spec, boundary_month, ("ua", "va", "ta", "hus"))
+            _verify_source_month(
+                badc_root,
+                item.spec,
+                boundary_month,
+                ("ua", "va", "ta", "hus"),
+                axis,
+            )
             boundary_rows.append(
                 [
                     len(boundary_rows) + 1,
@@ -138,6 +169,7 @@ def build_plan(
                     item.spec.grid_label,
                     boundary_timestamp,
                     data_root,
+                    axis_path,
                 ]
             )
         for month in core:
@@ -147,8 +179,18 @@ def build_plan(
             "run": asdict(item.spec),
             "source_label": label,
             "core_months": core,
-            "core_start": core[0],
-            "core_end": core[-1],
+            "core_start": item.core_start,
+            "core_end": item.core_end,
+            "native_core_months": native_core,
+            "native_core_start": item.core_start,
+            "native_core_end": item.core_end,
+            "analysis_core_start": analysis_start.isoformat(),
+            "analysis_core_end_exclusive": analysis_end.isoformat(),
+            "time_axis": {
+                **axis.record(),
+                "path": str(axis_path),
+                "sha256": sha256(axis_path),
+            },
             "standard_months": full_standard_months,
             "next_auxiliary_boundary": boundary_timestamp,
             "paths": {
@@ -184,8 +226,9 @@ def build_plan(
                 "link_periods": len(link_rows),
             },
             "method": (
-                "All calendar months; full previous-month field halo; full or single-frame next-month "
-                "auxiliary halo; frozen v5.6 detector/linker; annual overlapping link blocks."
+                "All native calendar months on an invertible continuous analysis clock; full "
+                "previous-month field halo; full or single-frame next-month auxiliary halo; "
+                "frozen v5.6 detector/linker; annual overlapping link blocks."
             ),
         },
     )
@@ -269,6 +312,34 @@ def mri_paired_periods(*, canary: bool = False) -> list[PeriodPlan]:
     ]
 
 
+def hadgem_ll_paired_periods(*, canary: bool = False) -> list[PeriodPlan]:
+    historical_start, historical_end = ("199006", "199009") if canary else ("198101", "201012")
+    future_start, future_end = ("208006", "208009") if canary else ("207001", "209912")
+    return [
+        PeriodPlan(
+            RunSpec("CMIP", "MOHC", "HadGEM3-GC31-LL", "historical", "r1i1p1f3", "gn"),
+            historical_start,
+            historical_end,
+            "full",
+            "360_day",
+        ),
+        PeriodPlan(
+            RunSpec(
+                "ScenarioMIP",
+                "MOHC",
+                "HadGEM3-GC31-LL",
+                "ssp245",
+                "r1i1p1f3",
+                "gn",
+            ),
+            future_start,
+            future_end,
+            "full",
+            "360_day",
+        ),
+    ]
+
+
 PRESETS = {
     "mpi-paired": mpi_paired_periods,
     "miroc6-paired": miroc6_paired_periods,
@@ -277,6 +348,8 @@ PRESETS = {
     "mpi-lr-canary": lambda: mpi_lr_paired_periods(canary=True),
     "mri-paired": mri_paired_periods,
     "mri-canary": lambda: mri_paired_periods(canary=True),
+    "hadgem-ll-paired": hadgem_ll_paired_periods,
+    "hadgem-ll-canary": lambda: hadgem_ll_paired_periods(canary=True),
 }
 
 

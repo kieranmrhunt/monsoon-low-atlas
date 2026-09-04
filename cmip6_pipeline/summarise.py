@@ -49,6 +49,9 @@ EVENT_COLUMNS = (
     "track_id",
     "start",
     "end",
+    "model_start",
+    "model_end",
+    "model_calendar",
     "genesis_year",
     "genesis_month",
     "duration_hours",
@@ -113,13 +116,29 @@ def event_summary(frame: pd.DataFrame) -> pd.DataFrame:
         group = group.sort_values("time")
         lon = pd.to_numeric(group.lon, errors="coerce").to_numpy(float)
         lat = pd.to_numeric(group.lat, errors="coerce").to_numpy(float)
+        has_native_time = {"model_time", "model_year", "model_month"}.issubset(group.columns)
+        if has_native_time:
+            genesis_year = int(group.model_year.iloc[0])
+            genesis_month = int(group.model_month.iloc[0])
+            model_start = str(group.model_time.iloc[0])
+            model_end = str(group.model_time.iloc[-1])
+            model_calendar = str(group.model_calendar.iloc[0]) if "model_calendar" in group else None
+        else:
+            genesis_year = int(group.time.iloc[0].year)
+            genesis_month = int(group.time.iloc[0].month)
+            model_start = group.time.iloc[0].isoformat()
+            model_end = group.time.iloc[-1].isoformat()
+            model_calendar = "proleptic_gregorian"
         records.append(
             {
                 "track_id": int(track_id),
                 "start": group.time.iloc[0],
                 "end": group.time.iloc[-1],
-                "genesis_year": int(group.time.iloc[0].year),
-                "genesis_month": int(group.time.iloc[0].month),
+                "model_start": model_start,
+                "model_end": model_end,
+                "model_calendar": model_calendar,
+                "genesis_year": genesis_year,
+                "genesis_month": genesis_month,
                 "duration_hours": int(len(group)),
                 "path_length_km": float(np.nansum(haversine_steps(lon, lat))),
                 "genesis_lon": float(lon[0]),
@@ -256,8 +275,8 @@ def summarise_run(
     if frame.empty:
         raise ValueError("cannot summarise an empty CMIP6 catalogue")
     events = event_summary(frame)
-    observed_start_year = int(frame.time.min().year)
-    observed_end_year = int(frame.time.max().year)
+    observed_start_year = int(events.genesis_year.min())
+    observed_end_year = int(events.genesis_year.max())
     start_year = observed_start_year if start_year is None else int(start_year)
     end_year = observed_end_year if end_year is None else int(end_year)
     if start_year > observed_start_year or end_year < observed_end_year or start_year > end_year:
@@ -305,6 +324,14 @@ def summarise_run(
             "catalogue_filename": catalogue.name,
             "catalogue_sha256": sha256(catalogue),
             "intensity_method": sorted(frame.intensity_method.astype(str).unique().tolist()),
+            "model_calendars": (
+                sorted(frame.model_calendar.astype(str).unique().tolist())
+                if "model_calendar" in frame else ["proleptic_gregorian"]
+            ),
+            "time_basis": (
+                sorted(frame.time_basis.astype(str).unique().tolist())
+                if "time_basis" in frame else ["civil_gregorian"]
+            ),
         },
         "qa": qa,
     }
