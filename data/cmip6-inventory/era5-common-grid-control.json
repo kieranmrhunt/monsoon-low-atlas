@@ -1,0 +1,46 @@
+{
+  "schema": "lps-atlas-era5-common-grid-control-record-v1",
+  "generated_utc": "2026-09-04T12:00:21Z",
+  "source": "ERA5-derived LPS v5.6",
+  "period": "1981-2010",
+  "months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  "method": "ERA5 sampled to the CMIP6 common 1-degree grid before the frozen v5.6 detector, continuity linker and physical-event gate; unchanged v5.5.1 intensity thresholds.",
+  "qa_status": "passed",
+  "structural_qa": {
+    "duplicate_track_times": 0,
+    "non_hourly_steps": 0,
+    "short_events": 0,
+    "boundary_censored_events": 0,
+    "physics_complete_fraction": 1.0,
+    "maximum_hourly_step_km": 144.5575346122345,
+    "maximum_allowed_hourly_step_km": 150.0
+  },
+  "all_months": {
+    "common_grid_events": 738,
+    "native_era5_events": 706,
+    "event_frequency_ratio": 1.045325779036827,
+    "system_days_ratio": 1.0513058298661586,
+    "median_duration_ratio": 1.040133779264214,
+    "monthly_cycle_correlation": 0.9956072121266131,
+    "track_density_pattern_correlation": 0.9716352103477424,
+    "track_density_probability_overlap": 0.8886762877835892,
+    "depression_or_stronger_frequency_ratio": 0.6435986159169551,
+    "deep_depression_or_stronger_frequency_ratio": 0.575,
+    "cyclonic_storm_or_stronger_frequency_ratio": 0.35714285714285715
+  },
+  "jjas": {
+    "common_grid_events": 472,
+    "native_era5_events": 434,
+    "event_frequency_ratio": 1.087557603686636,
+    "system_days_ratio": 1.080853694594522,
+    "median_duration_ratio": 0.996742671009772,
+    "monthly_cycle_correlation": 0.988585029310169,
+    "track_density_pattern_correlation": 0.9815280048581979,
+    "track_density_probability_overlap": 0.8797318513163731,
+    "depression_or_stronger_frequency_ratio": 0.549618320610687,
+    "deep_depression_or_stronger_frequency_ratio": 0.3055555555555555,
+    "cyclonic_storm_or_stronger_frequency_ratio": 0.0
+  },
+  "catalogue_sha256": "ec9281b7261f1c751728722ae6dbdc186e0625318560be2092965cad36cea6c4",
+  "period_plan_sha256": "29f9c17cef6c6cd5b625f7a9b5f6d6d8a0e7efb39dc9a596dfb61708d831e078"
+}

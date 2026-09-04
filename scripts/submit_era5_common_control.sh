@@ -3,7 +3,7 @@ set -euo pipefail
 
 ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_ROOT="${LPS_ERA5_CONTROL_ROOT:-$ATLAS_ROOT/.cmip6-runs/era5-common-grid-control}"
-CONCURRENCY="${LPS_ERA5_CONTROL_CONCURRENCY:-40}"
+CONCURRENCY="${LPS_ERA5_CONTROL_CONCURRENCY:-120}"
 PYTHON="${LPS_CMIP6_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 STATIC_FILE="$ATLAS_ROOT/data/cmip6-inventory/era5-common-static-1deg.nc"
 mkdir -p "$RUN_ROOT" "$ATLAS_ROOT/hpc-logs"

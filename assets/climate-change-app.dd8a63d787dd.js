@@ -54,6 +54,7 @@
 	const cache = new Map();
 	let index = null;
 	let current = null;
+	let resolutionControls = [];
 	let geography = null;
 	let loadingPromise = null;
 	let pairSerial = 0;
@@ -158,6 +159,16 @@
 			throw new Error('Climate precipitation asset uses an unsupported schema.');
 		}
 		return {pair, historical, future, change, impact};
+	}
+
+	async function loadResolutionControls() {
+		return Promise.all((index.resolution_controls || []).map(async control => {
+			const summary = await fetchJson(assetUrl(control.summary.url));
+			if (summary.schema !== 'lps-atlas-cmip6-climate-summary-v2' || !summary.qa || !summary.qa.historical_screen) {
+				throw new Error('ERA5 common-grid control uses an unsupported schema.');
+			}
+			return {...control, summary};
+		}));
 	}
 
 	function populateControls() {
@@ -468,9 +479,24 @@
 	}
 
 	function historicalScreenRecords() {
-		if (current.pair.kind === 'multi-model') return (current.historical.qa && current.historical.qa.historical_screening) || [];
-		const screen = current.historical.qa && current.historical.qa.historical_screen;
-		return screen ? [{id: current.pair.id, source_label: current.pair.source_label, ...screen}] : [];
+		let records;
+		if (current.pair.kind === 'multi-model') {
+			records = [...((current.historical.qa && current.historical.qa.historical_screening) || [])];
+		} else {
+			const screen = current.historical.qa && current.historical.qa.historical_screen;
+			records = screen ? [{id: current.pair.id, source_label: current.pair.source_label, ...screen}] : [];
+		}
+		for (const control of resolutionControls) {
+			const screen = control.summary.qa.historical_screen;
+			records.push({
+				id: control.id,
+				source_label: control.label,
+				is_resolution_control: true,
+				...screen,
+				jjas: (screen.seasonal || {}).jjas
+			});
+		}
+		return records;
 	}
 
 	function screenForSeason(record) {
@@ -511,7 +537,7 @@
 		const data = $('#mlaClimateHistoricalSkillData');
 		const records = historicalScreenRecords().map((record, ordinal) => {
 			const screen = screenForSeason(record);
-			return {id: record.id, label: record.source_label || modelLabel(record.id), value: historicalRatio(screen), colour: modelColour(record.id, ordinal)};
+			return {id: record.id, label: record.source_label || modelLabel(record.id), value: historicalRatio(screen), colour: record.is_resolution_control ? '#111111' : modelColour(record.id, ordinal), isControl: record.is_resolution_control};
 		}).filter(record => Number.isFinite(record.value));
 		if (!records.length) {
 			context.fillStyle = css('--mla-muted', '#5f6574');
@@ -540,10 +566,12 @@
 			context.fillStyle = record.colour; context.beginPath(); context.arc(x(record.value), y, 5, 0, Math.PI * 2); context.fill();
 		});
 		context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText('model / ERA5', (left + right) / 2, height - 2);
-		const within = records.filter(record => record.value >= .5 && record.value <= 2).length;
+		const modelRecords = records.filter(record => !record.isControl);
+		const within = modelRecords.filter(record => record.value >= .5 && record.value <= 2).length;
+		const control = records.find(record => record.isControl);
 		const continuous = state.metric.startsWith('mean_');
-		status.textContent = `${within}/${records.length} within a factor of two${continuous ? ' · historical comparison uses event medians' : ''}`;
-		data.innerHTML = `<table><thead><tr><th>Model</th><th>Model / ERA5</th><th>Within factor two</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${record.value.toFixed(2)}</td><td>${record.value >= .5 && record.value <= 2 ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table>`;
+		status.textContent = `${within}/${modelRecords.length} models within a factor of two${control ? ` · ERA5 at 1°: ${control.value.toFixed(2)}` : ''}${continuous ? ' · event medians' : ''}`;
+		data.innerHTML = `<table><thead><tr><th>Dataset</th><th>Dataset / ERA5</th><th>Within factor two</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${record.value.toFixed(2)}</td><td>${record.value >= .5 && record.value <= 2 ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table>`;
 	}
 
 	function rainfallRecords() {
@@ -990,6 +1018,7 @@
 				if (!index) {
 					$('#mlaClimateLoading').textContent = 'Opening CMIP6 comparisons…';
 					index = await loadIndex();
+					resolutionControls = await loadResolutionControls();
 					populateControls();
 				}
 				if (!current || current.pair.id !== state.pair) await selectPair();
