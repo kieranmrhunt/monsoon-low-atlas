@@ -15,7 +15,7 @@ import pandas as pd
 
 from reanalysis_pipeline.common import sha256
 
-from .summarise import event_summary
+from .summarise import density, event_summary
 
 
 SCHEMA = "lps-atlas-cmip6-catalogue-qa-v1"
@@ -119,10 +119,70 @@ def _catalogue_metrics(frame: pd.DataFrame, months: list[int], years: int) -> di
         "peak_pressure_deficit_hpa": _quantiles(selected.peak_pressure_deficit_hpa),
         "peak_24h_precipitation_mm": _quantiles(selected.peak_24h_precipitation_mm),
         "class_counts": {str(int(key)): int(value) for key, value in class_counts.items()},
+        "depressions_or_stronger_per_year": float(selected.peak_category.ge(2).sum() / years),
+        "deep_depressions_or_stronger_per_year": float(selected.peak_category.ge(3).sum() / years),
+        "cyclonic_storms_or_stronger_per_year": float(selected.peak_category.ge(4).sum() / years),
         "depression_or_stronger_fraction": (
             float(selected.peak_category.ge(2).mean()) if len(selected) else None
         ),
         "monthly_genesis_counts": [int(value) for value in month_counts.to_numpy()],
+    }
+
+
+def _positions_for_genesis_months(frame: pd.DataFrame, months: list[int]) -> pd.DataFrame:
+    genesis = frame.groupby("track_id", sort=False).time.min()
+    selected = genesis.loc[genesis.dt.month.isin(months)].index
+    return frame.loc[frame.track_id.isin(selected)]
+
+
+def _track_density_comparison(
+    model: pd.DataFrame,
+    reference: pd.DataFrame,
+    months: list[int],
+) -> dict[str, float | int | None]:
+    """Compare unique-track density shape without allowing empty cells to inflate r."""
+
+    model_positions = _positions_for_genesis_months(model, months)
+    reference_positions = _positions_for_genesis_months(reference, months)
+    model_counts = np.asarray(density(model_positions)["unique_track_counts"], dtype=float)
+    reference_counts = np.asarray(
+        density(reference_positions)["unique_track_counts"], dtype=float
+    )
+    model_occupied = model_counts > 0
+    reference_occupied = reference_counts > 0
+    occupied_union = model_occupied | reference_occupied
+    occupied_intersection = model_occupied & reference_occupied
+    model_total = float(model_counts.sum())
+    reference_total = float(reference_counts.sum())
+    dot = float(np.dot(model_counts.ravel(), reference_counts.ravel()))
+    norm = float(
+        np.sqrt(
+            np.dot(model_counts.ravel(), model_counts.ravel())
+            * np.dot(reference_counts.ravel(), reference_counts.ravel())
+        )
+    )
+    correlation: float | None = None
+    if int(occupied_union.sum()) >= 3:
+        model_union = model_counts[occupied_union]
+        reference_union = reference_counts[occupied_union]
+        if np.std(model_union) > 0 and np.std(reference_union) > 0:
+            correlation = float(np.corrcoef(model_union, reference_union)[0, 1])
+    probability_overlap: float | None = None
+    if model_total > 0 and reference_total > 0:
+        probability_overlap = float(
+            np.minimum(model_counts / model_total, reference_counts / reference_total).sum()
+        )
+    return {
+        "pattern_correlation_nonempty_union": correlation,
+        "cosine_similarity": float(dot / norm) if norm > 0 else None,
+        "probability_overlap": probability_overlap,
+        "occupied_cell_jaccard": (
+            float(occupied_intersection.sum() / occupied_union.sum())
+            if occupied_union.any()
+            else None
+        ),
+        "model_occupied_cells": int(model_occupied.sum()),
+        "reference_occupied_cells": int(reference_occupied.sum()),
     }
 
 
@@ -193,6 +253,21 @@ def historical_screen(
         "monthly_cycle_correlation": _safe_correlation(
             model_metrics["monthly_genesis_counts"], reference_metrics["monthly_genesis_counts"], months
         ),
+        "depression_or_stronger_frequency_ratio": _safe_ratio(
+            model_metrics["depressions_or_stronger_per_year"],
+            reference_metrics["depressions_or_stronger_per_year"],
+        ),
+        "deep_depression_or_stronger_frequency_ratio": _safe_ratio(
+            model_metrics["deep_depressions_or_stronger_per_year"],
+            reference_metrics["deep_depressions_or_stronger_per_year"],
+        ),
+        "cyclonic_storm_or_stronger_frequency_ratio": _safe_ratio(
+            model_metrics["cyclonic_storms_or_stronger_per_year"],
+            reference_metrics["cyclonic_storms_or_stronger_per_year"],
+        ),
+        "track_density_shape": _track_density_comparison(
+            model, selected_reference, months
+        ),
     }
     frequency = comparisons["event_frequency_ratio"]
     duration = comparisons["median_duration_ratio"]
@@ -201,6 +276,12 @@ def historical_screen(
         "event_frequency_within_factor_two": frequency is not None and 0.5 <= frequency <= 2.0,
         "median_duration_within_factor_two": duration is not None and 0.5 <= duration <= 2.0,
         "median_peak_wind_within_factor_two": wind is not None and 0.5 <= wind <= 2.0,
+    }
+    depression_ratio = comparisons["depression_or_stronger_frequency_ratio"]
+    classification_flags = {
+        "depression_or_stronger_frequency_within_factor_two": (
+            depression_ratio is not None and 0.5 <= depression_ratio <= 2.0
+        )
     }
     return {
         "reference": "ERA5-derived LPS v5.6",
@@ -215,6 +296,30 @@ def historical_screen(
         "reference_metrics": reference_metrics,
         "comparisons": comparisons,
         "diagnostic_flags": diagnostic_flags,
+        "classification_screen": {
+            "comparisons": {
+                key: comparisons[key]
+                for key in (
+                    "depression_or_stronger_frequency_ratio",
+                    "deep_depression_or_stronger_frequency_ratio",
+                    "cyclonic_storm_or_stronger_frequency_ratio",
+                )
+            },
+            "diagnostic_flags": classification_flags,
+            "screening_status": (
+                "engineering-sample-only"
+                if years < 10
+                else (
+                    "passes-basic-classification-screen"
+                    if all(classification_flags.values())
+                    else "review-classification-bias"
+                )
+            ),
+            "interpretation": (
+                "Absolute v5.5.1 category-frequency screen. It is reported separately from "
+                "all-system track realism because threshold classes are resolution-sensitive."
+            ),
+        },
         "screening_status": (
             "engineering-sample-only"
             if years < 10
@@ -222,7 +327,8 @@ def historical_screen(
         ),
         "interpretation": (
             "Historical-performance screen only. Flags diagnose model and resolution bias; "
-            "they do not retune the detector or intensity thresholds."
+            "they do not retune the detector or intensity thresholds. Track-density shape uses "
+            "unique tracks per 1-degree cell; its correlation excludes cells empty in both sources."
         ),
     }
 
@@ -369,6 +475,14 @@ def validate_catalogue(
                 "all_months": all_month_status,
                 "jjas": jjas_screen["screening_status"],
             }
+            classification = screen["classification_screen"]
+            jjas_classification = jjas_screen["classification_screen"]
+            all_month_classification_status = classification["screening_status"]
+            classification["seasonal"] = {"jjas": jjas_classification}
+            classification["screening_components"] = {
+                "all_months": all_month_classification_status,
+                "jjas": jjas_classification["screening_status"],
+            }
             if years >= 10:
                 screen["screening_status"] = (
                     "passes-basic-historical-screen"
@@ -378,9 +492,18 @@ def validate_catalogue(
                     )
                     else "review-model-bias"
                 )
+                classification["screening_status"] = (
+                    "passes-basic-classification-screen"
+                    if all(
+                        status == "passes-basic-classification-screen"
+                        for status in classification["screening_components"].values()
+                    )
+                    else "review-classification-bias"
+                )
             screen["interpretation"] = (
-                "Historical-performance screen for both all months and JJAS. Flags diagnose "
-                "model and resolution bias; they do not retune the detector or intensity thresholds."
+                "Historical-performance screens for both all months and JJAS. Track realism and "
+                "absolute intensity-class realism are reported separately; neither screen retunes "
+                "the detector or intensity thresholds."
             )
             record["historical_screen"] = screen
     return record

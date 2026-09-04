@@ -122,7 +122,7 @@
 			throw new Error('Climate run assets use an unsupported schema.');
 		}
 		const expectedChangeSchema = pair.kind === 'multi-model'
-			? 'lps-atlas-cmip6-multimodel-change-v1'
+			? 'lps-atlas-cmip6-multimodel-change-v2'
 			: 'lps-atlas-cmip6-paired-change-v2';
 		if (change.schema !== expectedChangeSchema) {
 			throw new Error('Climate change asset uses an unsupported schema.');

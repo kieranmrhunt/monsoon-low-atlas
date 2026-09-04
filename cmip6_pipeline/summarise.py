@@ -21,7 +21,7 @@ from reanalysis_pipeline.common import sha256
 
 SCHEMA = "lps-atlas-cmip6-climate-summary-v2"
 PAIR_SCHEMA = "lps-atlas-cmip6-paired-change-v2"
-ENSEMBLE_SCHEMA = "lps-atlas-cmip6-multimodel-change-v1"
+ENSEMBLE_SCHEMA = "lps-atlas-cmip6-multimodel-change-v2"
 INDEX_SCHEMA = "lps-atlas-cmip6-climate-index-v1"
 REVIEW_SCHEMA = "lps-atlas-cmip6-ensemble-review-v1"
 LAT_EDGES = np.arange(-15.0, 46.0, 1.0)
@@ -542,8 +542,10 @@ def aggregate_change_payloads(
         metrics: dict[str, Any] = {}
         for metric_index, metric in enumerate(CHANGE_METRICS):
             model_values: list[dict[str, Any]] = []
+            bootstrap_historical: list[np.ndarray] = []
+            bootstrap_future: list[np.ndarray] = []
             bootstrap_differences: list[np.ndarray] = []
-            bootstrap_percentages: list[np.ndarray] = []
+            bootstrap_model_percentages: list[np.ndarray] = []
             rng = np.random.default_rng(1913 + season_index * 100 + metric_index)
             for model_id, historical, future in zip(
                 model_ids, historical_payloads, future_payloads, strict=True
@@ -578,12 +580,14 @@ def aggregate_change_payloads(
                 )
                 left_draw = left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1)
                 right_draw = right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1)
+                bootstrap_historical.append(left_draw)
+                bootstrap_future.append(right_draw)
                 bootstrap_differences.append(right_draw - left_draw)
                 if historical_mean != 0:
                     percentages = np.full(samples, np.nan, dtype=float)
                     nonzero = left_draw != 0
                     percentages[nonzero] = (right_draw[nonzero] / left_draw[nonzero] - 1.0) * 100.0
-                    bootstrap_percentages.append(percentages)
+                    bootstrap_model_percentages.append(percentages)
             if not model_values:
                 metrics[metric] = {
                     "historical": None,
@@ -594,33 +598,53 @@ def aggregate_change_payloads(
                     "ci95": None,
                     "percent_ci05": None,
                     "percent_ci95": None,
+                    "mean_model_percent_change": None,
+                    "mean_model_percent_ci05": None,
+                    "mean_model_percent_ci95": None,
                     "model_spread05": None,
                     "model_spread95": None,
                     "model_count": 0,
                     "models": [],
                 }
                 continue
+            historical_mean = _finite_mean(
+                [value["historical"] for value in model_values]
+            )
+            future_mean = _finite_mean([value["future"] for value in model_values])
             combined = np.mean(np.stack(bootstrap_differences), axis=0)
-            if bootstrap_percentages:
-                percentage_stack = np.stack(bootstrap_percentages)
-                percentage_count = np.isfinite(percentage_stack).sum(axis=0)
-                percentage_draws = np.divide(
-                    np.nansum(percentage_stack, axis=0),
-                    percentage_count,
+            historical_draws = np.mean(np.stack(bootstrap_historical), axis=0)
+            future_draws = np.mean(np.stack(bootstrap_future), axis=0)
+            percentage_draws = np.full(samples, np.nan, dtype=float)
+            nonzero = historical_draws != 0
+            percentage_draws[nonzero] = (
+                future_draws[nonzero] / historical_draws[nonzero] - 1.0
+            ) * 100.0
+            percentage_draws = percentage_draws[np.isfinite(percentage_draws)]
+            if bootstrap_model_percentages:
+                model_percentage_stack = np.stack(bootstrap_model_percentages)
+                model_percentage_count = np.isfinite(model_percentage_stack).sum(axis=0)
+                model_percentage_draws = np.divide(
+                    np.nansum(model_percentage_stack, axis=0),
+                    model_percentage_count,
                     out=np.full(samples, np.nan, dtype=float),
-                    where=percentage_count > 0,
+                    where=model_percentage_count > 0,
                 )
             else:
-                percentage_draws = np.asarray([], dtype=float)
-            percentage_draws = percentage_draws[np.isfinite(percentage_draws)]
+                model_percentage_draws = np.asarray([], dtype=float)
+            model_percentage_draws = model_percentage_draws[
+                np.isfinite(model_percentage_draws)
+            ]
             absolute_values = np.asarray(
                 [value["absolute_change"] for value in model_values], dtype=float
             )
             metrics[metric] = {
-                "historical": _finite_mean([value["historical"] for value in model_values]),
-                "future": _finite_mean([value["future"] for value in model_values]),
-                "absolute_change": float(absolute_values.mean()),
-                "percent_change": _finite_mean([value["percent_change"] for value in model_values]),
+                "historical": historical_mean,
+                "future": future_mean,
+                "absolute_change": future_mean - historical_mean,
+                "percent_change": (
+                    (future_mean / historical_mean - 1.0) * 100.0
+                    if historical_mean != 0 else None
+                ),
                 "ci05": float(np.quantile(combined, 0.05)),
                 "ci95": float(np.quantile(combined, 0.95)),
                 "percent_ci05": (
@@ -628,6 +652,17 @@ def aggregate_change_payloads(
                 ),
                 "percent_ci95": (
                     float(np.quantile(percentage_draws, 0.95)) if len(percentage_draws) else None
+                ),
+                "mean_model_percent_change": _finite_mean(
+                    [value["percent_change"] for value in model_values]
+                ),
+                "mean_model_percent_ci05": (
+                    float(np.quantile(model_percentage_draws, 0.05))
+                    if len(model_percentage_draws) else None
+                ),
+                "mean_model_percent_ci95": (
+                    float(np.quantile(model_percentage_draws, 0.95))
+                    if len(model_percentage_draws) else None
                 ),
                 "model_spread05": float(np.quantile(absolute_values, 0.05)),
                 "model_spread95": float(np.quantile(absolute_values, 0.95)),
@@ -646,7 +681,15 @@ def aggregate_change_payloads(
         "seasonal_changes": seasonal_changes,
         "uncertainty": (
             "5th--95th percentile of 5,000 within-model year-resampling draws; "
-            "models retain equal weight in every draw"
+            "models retain equal weight in every draw. Percent-change intervals compare "
+            "the equally weighted future and historical means"
+        ),
+        "percent_change_definition": (
+            "100 * (equal-weight future model mean / equal-weight historical model mean - 1)"
+        ),
+        "mean_model_percent_change_definition": (
+            "arithmetic mean of each model's paired percentage change; retained as a "
+            "secondary diagnostic"
         ),
         "model_spread": "5th--95th percentile across equally weighted model mean changes",
         "interpretation": "Multi-model paired change with one source model, one vote.",
@@ -980,6 +1023,7 @@ def assemble_ensemble(
                 "status": screen.get("screening_status"),
                 "diagnostic_flags": screen.get("diagnostic_flags"),
                 "comparisons": screen.get("comparisons"),
+                "classification": screen.get("classification_screen"),
                 "jjas": {
                     "status": (screen.get("seasonal", {}).get("jjas") or {}).get(
                         "screening_status"

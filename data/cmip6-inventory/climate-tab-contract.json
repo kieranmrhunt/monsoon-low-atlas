@@ -61,8 +61,23 @@
     "historical": "1981-2010, all months",
     "future": "2071-2100, all months, SSP2-4.5",
     "common_grid_degrees": 1.0,
-    "status": "running",
-    "publication_gate": "The browser tab remains hidden until both complete windows, their paired summary and the staging bundle pass."
+    "status": "complete and staged for scientific review",
+    "publication_gate": "The browser tab remains hidden until the multi-model scientific review is explicitly approved."
+  },
+  "initial_multi_model_review": {
+    "reviewed_utc": "2026-09-04T00:00:00Z",
+    "scenario": "ssp245",
+    "historical_window": "1981-2010",
+    "future_windows": "2071-2100, except MRI-ESM2-0 2070-2099",
+    "models": [
+      "MPI-ESM1-2-HR",
+      "MPI-ESM1-2-LR",
+      "MIROC6",
+      "MRI-ESM2-0"
+    ],
+    "status": "hold-publication",
+    "finding": "MIROC6 alone passes the conservative all-LPS historical screen; no model passes the all-month plus JJAS absolute classification screen.",
+    "next_gate": "Add at least one independent historically credible model and keep absolute D/DD/CS changes out of headline inference until category realism improves."
   },
   "prepublication_gates": [
     "Run at least the 1981-2010 and 2071-2100 windows for every admitted model/scenario pair.",

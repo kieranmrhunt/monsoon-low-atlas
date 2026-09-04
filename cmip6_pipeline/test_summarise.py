@@ -14,6 +14,7 @@ from cmip6_pipeline.summarise import (
     INDEX_SCHEMA,
     SCHEMA,
     annual_summary,
+    aggregate_change_payloads,
     assemble_ensemble,
     bootstrap_change,
     event_summary,
@@ -25,6 +26,43 @@ from reanalysis_pipeline.common import sha256
 
 
 class SummariseTest(unittest.TestCase):
+    def test_multimodel_percent_change_matches_displayed_ensemble_means(self) -> None:
+        def payload(historical: float, future: float, role: str) -> dict:
+            value = historical if role == "historical" else future
+            annual = [{metric: value for metric in (
+                "systems",
+                "depressions_or_stronger",
+                "deep_depressions_or_stronger",
+                "cyclonic_storms_or_stronger",
+                "system_days",
+                "mean_duration_hours",
+                "mean_peak_wind_ms",
+                "mean_peak_pressure_deficit_hpa",
+                "mean_peak_24h_precipitation_mm",
+            )}]
+            return {
+                "seasonal": {
+                    season: {"annual": annual}
+                    for season in ("all", "jjas", "mam", "ond", "djf")
+                }
+            }
+
+        historical = [payload(1.0, 2.0, "historical"), payload(9.0, 10.0, "historical")]
+        future = [payload(1.0, 2.0, "future"), payload(9.0, 10.0, "future")]
+        result = aggregate_change_payloads(
+            historical,
+            future,
+            model_ids=["small-baseline", "large-baseline"],
+            samples=20,
+        )
+        systems = result["seasonal_changes"]["jjas"]["systems"]
+        self.assertEqual(result["schema"], ENSEMBLE_SCHEMA)
+        self.assertAlmostEqual(systems["historical"], 5.0)
+        self.assertAlmostEqual(systems["future"], 6.0)
+        self.assertAlmostEqual(systems["absolute_change"], 1.0)
+        self.assertAlmostEqual(systems["percent_change"], 20.0)
+        self.assertAlmostEqual(systems["mean_model_percent_change"], 55.5555555556)
+
     def test_event_summary_uses_complete_track_geometry(self) -> None:
         frame = pd.DataFrame(
             {
@@ -180,6 +218,12 @@ class SummariseTest(unittest.TestCase):
                                         "screening_status": "passes-basic-historical-screen",
                                         "diagnostic_flags": [],
                                         "comparisons": {"event_frequency_ratio": 0.9},
+                                        "classification_screen": {
+                                            "screening_status": "review-classification-bias",
+                                            "comparisons": {
+                                                "depression_or_stronger_frequency_ratio": 0.3
+                                            },
+                                        },
                                         "seasonal": {
                                             "jjas": {
                                                 "screening_status": "review-model-bias",
@@ -220,6 +264,10 @@ class SummariseTest(unittest.TestCase):
             self.assertEqual(index["ensemble"]["model_count"], 2)
             screen = index["ensemble"]["historical_screening"][0]
             self.assertEqual(screen["comparisons"]["event_frequency_ratio"], 0.9)
+            self.assertEqual(
+                screen["classification"]["screening_status"],
+                "review-classification-bias",
+            )
             self.assertEqual(screen["jjas"]["status"], "review-model-bias")
             self.assertEqual(
                 screen["jjas"]["comparisons"]["event_frequency_ratio"], 0.5
