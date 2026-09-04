@@ -104,32 +104,33 @@ class CatalogueQaTest(unittest.TestCase):
             )
 
     def test_historical_screen_reports_jjas_separately(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source, plan = self.write_inputs(root, catalogue())
-            metadata = json.loads(plan.read_text())
-            metadata["run"]["experiment_id"] = "historical"
-            plan.write_text(json.dumps(metadata))
-            reference = root / "reference.parquet"
-            catalogue().assign(track_id=9).to_parquet(reference, index=False)
-            result = validate_catalogue(source, plan, reference=reference)
-        screen = result["historical_screen"]
-        self.assertIn("jjas", screen["seasonal"])
-        self.assertEqual(screen["screening_components"]["all_months"], "engineering-sample-only")
-        self.assertEqual(screen["screening_components"]["jjas"], "engineering-sample-only")
-        spatial = screen["comparisons"]["track_density_shape"]
-        self.assertAlmostEqual(spatial["cosine_similarity"], 1.0)
-        self.assertAlmostEqual(spatial["probability_overlap"], 1.0)
-        self.assertAlmostEqual(spatial["occupied_cell_jaccard"], 1.0)
-        classification = screen["classification_screen"]
-        self.assertEqual(classification["screening_status"], "engineering-sample-only")
-        self.assertEqual(
-            classification["screening_components"]["jjas"], "engineering-sample-only"
-        )
-        self.assertAlmostEqual(
-            classification["comparisons"]["depression_or_stronger_frequency_ratio"],
-            1.0,
-        )
+        for experiment in ("historical", "hist-1950"):
+            with self.subTest(experiment=experiment), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, plan = self.write_inputs(root, catalogue())
+                metadata = json.loads(plan.read_text())
+                metadata["run"]["experiment_id"] = experiment
+                plan.write_text(json.dumps(metadata))
+                reference = root / "reference.parquet"
+                catalogue().assign(track_id=9).to_parquet(reference, index=False)
+                result = validate_catalogue(source, plan, reference=reference)
+                screen = result["historical_screen"]
+                self.assertIn("jjas", screen["seasonal"])
+                self.assertEqual(screen["screening_components"]["all_months"], "engineering-sample-only")
+                self.assertEqual(screen["screening_components"]["jjas"], "engineering-sample-only")
+                spatial = screen["comparisons"]["track_density_shape"]
+                self.assertAlmostEqual(spatial["cosine_similarity"], 1.0)
+                self.assertAlmostEqual(spatial["probability_overlap"], 1.0)
+                self.assertAlmostEqual(spatial["occupied_cell_jaccard"], 1.0)
+                classification = screen["classification_screen"]
+                self.assertEqual(classification["screening_status"], "engineering-sample-only")
+                self.assertEqual(
+                    classification["screening_components"]["jjas"], "engineering-sample-only"
+                )
+                self.assertAlmostEqual(
+                    classification["comparisons"]["depression_or_stronger_frequency_ratio"],
+                    1.0,
+                )
 
 
 if __name__ == "__main__":

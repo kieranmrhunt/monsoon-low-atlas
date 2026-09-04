@@ -879,6 +879,7 @@ def aggregate_run_payloads(
         }
         for model_id, payload in zip(model_ids, payloads, strict=True)
     ]
+    period_labels = {window["period_label"] for window in windows}
     return {
         "schema": SCHEMA,
         "run": {
@@ -886,7 +887,11 @@ def aggregate_run_payloads(
             "source_label": "Multi-model mean",
             "experiment_id": experiments[0],
             "member_id": "one-model-one-vote",
-            "period_label": "Historical model windows" if role == "historical" else "Future model windows",
+            "period_label": (
+                next(iter(period_labels))
+                if len(period_labels) == 1
+                else ("Historical model windows" if role == "historical" else "Future model windows")
+            ),
         },
         "coverage": {
             "start_year": min(window["start_year"] for window in windows),
@@ -1519,8 +1524,8 @@ def assemble_ensemble(
         "model_ids": production_ids,
         "comparison": {
             "basis": "time-slice",
-            "baseline": "model-specific 1981–2010 windows",
-            "future": "model-specific late-century windows",
+            "baseline": historical["run"]["period_label"],
+            "future": future["run"]["period_label"],
             "scenario": scenario,
         },
         "capabilities": {

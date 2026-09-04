@@ -771,12 +771,14 @@ def build_task_plan(run_root: Path, pair_roots: list[Path], geometry_asset: Path
             if experiment in by_experiment:
                 raise ValueError(f"duplicate {experiment} plan below {pair_root}")
             by_experiment[experiment] = plan_path
-        if "historical" not in by_experiment or len(by_experiment) != 2:
-            raise ValueError(f"{pair_root} must contain one historical and one future period")
-        future_experiment = next(value for value in by_experiment if value != "historical")
+        baseline_keys = [key for key in ("historical", "hist-1950") if key in by_experiment]
+        if len(baseline_keys) != 1 or len(by_experiment) != 2:
+            raise ValueError(f"{pair_root} must contain one historical baseline and one future period")
+        baseline_experiment = baseline_keys[0]
+        future_experiment = next(value for value in by_experiment if value != baseline_experiment)
         manifests: dict[str, Path] = {}
         pair_record = {"pair_root": str(pair_root), "future_experiment": future_experiment, "runs": {}}
-        for experiment in ("historical", future_experiment):
+        for experiment in (baseline_experiment, future_experiment):
             plan_path = by_experiment[experiment]
             period_root = plan_path.parent
             catalogue = period_root / "physics" / "cmip6-physical-events.parquet"
@@ -797,7 +799,7 @@ def build_task_plan(run_root: Path, pair_roots: list[Path], geometry_asset: Path
             }
         pair_output = pair_root / "climate-impact"
         pair_rows.append(
-            [len(pair_rows) + 1, manifests["historical"], manifests[future_experiment], pair_output]
+            [len(pair_rows) + 1, manifests[baseline_experiment], manifests[future_experiment], pair_output]
         )
         pair_record["output"] = str(pair_output)
         records.append(pair_record)

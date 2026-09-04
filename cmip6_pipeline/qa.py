@@ -510,7 +510,7 @@ def validate_catalogue(
         "diagnostics": _catalogue_metrics(frame, months, years),
         "failures": failures,
     }
-    if plan.get("run", {}).get("experiment_id") == "historical" and reference is not None:
+    if plan.get("run", {}).get("experiment_id") in {"historical", "hist-1950"} and reference is not None:
         if not reference.is_file():
             failures.append(f"historical reference is absent: {reference}")
             record["status"] = "failed"

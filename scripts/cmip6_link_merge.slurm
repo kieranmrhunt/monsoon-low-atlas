@@ -3,7 +3,7 @@
 #SBATCH --partition=standard
 #SBATCH --qos=standard
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64G
+#SBATCH --mem=8G
 #SBATCH --time=06:00:00
 #SBATCH --job-name=mla-cmip6-link-merge
 #SBATCH --output=hpc-logs/mla-cmip6-link-merge-%j.out

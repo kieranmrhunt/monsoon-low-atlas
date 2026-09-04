@@ -25,7 +25,18 @@
 	const CLASSES = ['L', 'D', 'DD', 'CS', 'SCS', 'VSCS+'];
 	const HISTORICAL_COLOUR = '#243665';
 	const FUTURE_COLOUR = '#c6473b';
-	const MODEL_COLOURS = ['#00629b', '#d55e00', '#009e73', '#8f3b76', '#6f4c9b', '#e69f00', '#0072b2', '#cc79a7'];
+	const MODEL_COLOURS = ['#0072b2', '#d55e00', '#009e73', '#8f3b76', '#e69f00', '#cc79a7', '#8c6d1f', '#00a6a6', '#b2182b', '#6f4c9b', '#56b4e9', '#4d4d4d'];
+	const MODEL_SOURCE_COLOURS = {
+		'HadGEM3-GC31-LL': '#0072b2',
+		'HadGEM3-GC31-MM': '#d55e00',
+		'MIROC6': '#009e73',
+		'MPI-ESM1-2-HR': '#8f3b76',
+		'MPI-ESM1-2-LR': '#e69f00',
+		'MRI-ESM2-0': '#cc79a7',
+		'CNRM-CM6-1': '#8c6d1f',
+		'EC-Earth3P': '#00a6a6',
+		'EC-Earth3P-HR': '#b2182b'
+	};
 	const GWL_COLOURS = {'1.5': '#e69f00', '2': '#d55e00', '3': '#c33149', '4': '#6f4c9b'};
 	let METRICS = {
 		systems: {label: 'Systems', unit: 'yr⁻¹', digits: 1, zero: true},
@@ -208,7 +219,8 @@
 		if (comparisonBasis(pair) === 'gwl') {
 			return `+${Number(pair.comparison.level_c).toFixed(Number(pair.comparison.level_c) % 1 ? 1 : 0)} °C · ${String(pair.comparison.scenario).toUpperCase()}`;
 		}
-		const scenario = String(pair.future.run.experiment_id).toUpperCase();
+		const experiment = String(pair.future.run.experiment_id).toLowerCase();
+		const scenario = experiment === 'highres-future' ? 'HighResMIP future' : experiment.toUpperCase();
 		const windows = new Set(index.pairs.filter(item => comparisonKey(item) === comparisonKey(pair)).map(item => item.future.run.period_label));
 		return `${scenario} · ${windows.size === 1 ? [...windows][0] : 'late-century windows'}`;
 	}
@@ -575,9 +587,10 @@
 
 	function modelColour(modelId, ordinal) {
 		const source = modelPair(modelId) && modelPair(modelId).source_label;
-		const sources = [...new Set(index.pairs.filter(pair => pair.kind !== 'multi-model').map(pair => pair.source_label))];
-		const position = sources.indexOf(source);
-		return MODEL_COLOURS[(position >= 0 ? position : ordinal) % MODEL_COLOURS.length];
+		if (source && MODEL_SOURCE_COLOURS[source]) return MODEL_SOURCE_COLOURS[source];
+		let sourceHash = 0;
+		for (const character of String(source || modelId)) sourceHash = ((sourceHash << 5) - sourceHash + character.charCodeAt(0)) | 0;
+		return MODEL_COLOURS[(Math.abs(sourceHash) || ordinal) % MODEL_COLOURS.length];
 	}
 
 	function selectedModelChanges() {
@@ -1426,7 +1439,10 @@
 		const changed = Number(summary.cells_with_any_change || 0);
 		const robust = Number(summary.cells_at_least_80_percent_agreement || 0);
 		const unanimous = Number(summary.cells_unanimous || 0);
-		$('#mlaClimateDensityAgreementStatus').textContent = `${threshold}/${agreement.model_count} or more models agree on the sign in ${robust.toLocaleString()} of ${changed.toLocaleString()} cells with any projected change.`;
+		const agreementLead = threshold === Number(agreement.model_count)
+			? `All ${agreement.model_count} models agree on the sign`
+			: `At least ${threshold}/${agreement.model_count} models agree on the sign`;
+		$('#mlaClimateDensityAgreementStatus').textContent = `${agreementLead} in ${robust.toLocaleString()} of ${changed.toLocaleString()} cells with any projected change.`;
 		$('#mlaClimateDensityAgreementData').innerHTML = `<table><thead><tr><th>Diagnostic</th><th>Cells</th></tr></thead><tbody><tr><td>Any model changes</td><td>${changed.toLocaleString()}</td></tr><tr><td>At least ${threshold}/${agreement.model_count} agree</td><td>${robust.toLocaleString()}</td></tr><tr><td>All ${agreement.model_count} agree</td><td>${unanimous.toLocaleString()}</td></tr></tbody></table>`;
 	}
 
@@ -1614,12 +1630,19 @@
 			const pair = preferredPair(pairs);
 			const models = pair.kind === 'multi-model' ? pair.model_ids.length : pairs.filter(item => item.kind !== 'multi-model').length;
 			const capability = pair.capabilities || {};
-			return {pair, models, metricCount: Number(capability.metric_count || (capability.available_metrics || []).length), rain: Boolean(pair.impact || capability.precipitation_impacts)};
+			const sourcePairs = pair.kind === 'multi-model' ? pairs.filter(item => item.kind !== 'multi-model') : [pair];
+			const completeFractions = sourcePairs.flatMap(item => ['historical', 'future'].map(role => Number(item[role] && item[role].qa && item[role].qa.checks && item[role].qa.checks.physics_complete_fraction))).filter(Number.isFinite);
+			const completeness = completeFractions.length ? {minimum: Math.min(...completeFractions), maximum: Math.max(...completeFractions)} : null;
+			return {pair, models, metricCount: Number(capability.metric_count || (capability.available_metrics || []).length), rain: Boolean(pair.impact || capability.precipitation_impacts), completeness};
 		}).sort((left, right) => comparisonBasis(left.pair).localeCompare(comparisonBasis(right.pair)) || comparisonLabel(left.pair).localeCompare(comparisonLabel(right.pair)));
-		const cells = ['<strong role="columnheader">Comparison</strong>', '<strong role="columnheader">Models</strong>', '<strong role="columnheader">Track measures</strong>', '<strong role="columnheader">India rain</strong>'];
+		const cells = ['<strong role="columnheader">Comparison</strong>', '<strong role="columnheader">Models</strong>', '<strong role="columnheader">Track measures</strong>', '<strong role="columnheader">All-physics rows</strong>', '<strong role="columnheader">India rain</strong>'];
 		for (const row of rows) {
 			const selected = comparisonKey(row.pair) === state.comparison;
-			cells.push(`<span${selected ? ' aria-current="true"' : ''}>${esc(comparisonLabel(row.pair))}</span>`, `<span>${row.models}</span>`, `<span class="${row.metricCount ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.metricCount}/${Object.keys(METRICS).length}</span>`, `<span class="${row.rain ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.rain ? 'Available' : 'Processing'}</span>`);
+			const completeText = row.completeness
+				? `${Math.round(100 * row.completeness.minimum)}${Math.round(100 * row.completeness.maximum) !== Math.round(100 * row.completeness.minimum) ? `–${Math.round(100 * row.completeness.maximum)}` : ''}%`
+				: 'Unavailable';
+			const completeClass = !row.completeness ? 'mla-climate-capability-no' : row.completeness.minimum >= .99 ? 'mla-climate-capability-yes' : 'mla-climate-capability-partial';
+			cells.push(`<span${selected ? ' aria-current="true"' : ''}>${esc(comparisonLabel(row.pair))}</span>`, `<span>${row.models}</span>`, `<span class="${row.metricCount ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.metricCount}/${Object.keys(METRICS).length}</span>`, `<span class="${completeClass}">${completeText}</span>`, `<span class="${row.rain ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.rain ? 'Available' : 'Processing'}</span>`);
 		}
 		container.innerHTML = cells.join('');
 		$('#mlaClimateAvailabilityStatus').textContent = `${rows.length} source-backed comparison${rows.length === 1 ? '' : 's'} currently published. Missing diagnostics remain disabled rather than estimated.`;

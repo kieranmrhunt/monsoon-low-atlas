@@ -444,7 +444,7 @@
 .mla-climate-view-notice { margin: 0 0 12px; padding: 11px 13px; border: 1px dashed var(--mla-line); border-radius: 10px; color: var(--mla-muted); background: color-mix(in srgb, var(--mla-card) 88%, var(--mla-sea)); font-size: 13px; }
 .mla-climate-card-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .mla-climate-card-head .mla-field { min-width: 190px; }
-.mla-climate-capability-grid { display: grid; grid-template-columns: minmax(150px, .6fr) repeat(3, minmax(110px, .45fr)); gap: 1px; overflow: auto; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-line); font-size: 12px; }
+.mla-climate-capability-grid { display: grid; grid-template-columns: minmax(150px, .68fr) repeat(4, minmax(100px, .42fr)); gap: 1px; overflow: auto; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-line); font-size: 12px; }
 .mla-climate-capability-grid > * { min-width: 0; padding: 7px 9px; background: var(--mla-card-strong); }
 .mla-climate-capability-grid strong { font-weight: 650; }
 .mla-climate-capability-yes { color: #14725b; }
@@ -674,7 +674,7 @@
 	.mla-climate-controls .mla-field { grid-column: 1 / -1; }
 	.mla-climate-card-head { display: block; }
 	.mla-climate-card-head .mla-field { margin-top: 8px; min-width: 0; }
-	.mla-climate-capability-grid { grid-template-columns: minmax(130px, .8fr) repeat(3, minmax(100px, .6fr)); }
+	.mla-climate-capability-grid { grid-template-columns: minmax(130px, .8fr) repeat(4, minmax(96px, .55fr)); }
 	.mla-climate-map-grid { grid-template-columns: 1fr; }
 	.mla-climate-map-grid.mla-climate-density-grid { grid-template-columns: 1fr; }
 	.mla-download-grid { grid-template-columns: 1fr; }
@@ -1071,7 +1071,7 @@
 					<section class="mla-card mla-chart-card mla-chart-wide" id="mlaClimateRainDriversCard" hidden><h3>Rainfall-share drivers</h3><p>Log-change decomposition into LPS occurrence, exposed footprint, rain intensity and the all-India background.</p><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateRainDrivers" role="img" aria-label="Decomposition of projected LPS rainfall share change"></canvas><p class="mla-chart-status" id="mlaClimateRainDriversStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Rainfall-share decomposition values</summary><div id="mlaClimateRainDriversData"></div></details></section>
 					<section class="mla-card mla-chart-card mla-chart-wide" id="mlaClimateVerticalProfileCard"><div class="mla-climate-card-head"><div><h3>Storm-centred vertical profile</h3><p>Lifecycle-mean track-centred values at the common 850, 700 and 500 hPa levels.</p></div><label class="mla-field" for="mlaClimateProfileMetric"><span class="mla-label">Profile</span><select class="mla-select" id="mlaClimateProfileMetric"><option value="vorticity">Relative vorticity</option><option value="rh">Relative humidity</option><option value="q">Specific humidity</option><option value="temperature">Temperature</option><option value="core_temperature">Core temperature anomaly</option></select></label></div><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateVerticalProfile" role="img" aria-label="Historical and future storm-centred vertical profiles"></canvas><p class="mla-chart-status" id="mlaClimateVerticalProfileStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Vertical profile values</summary><div id="mlaClimateVerticalProfileData"></div></details></section>
 					<section class="mla-card mla-prose mla-chart-wide" id="mlaClimateCompositeExpansionCard"><h3>Composite expansion</h3><p>Pressure-level cross-sections of vorticity, relative humidity and θₑ, lifecycle-stage composites and model-resolution stratification are being processed. The scalar profiles above are available now from the same track-centred catalogue rows.</p></section>
-					<section class="mla-card mla-chart-card mla-chart-wide" id="mlaClimateAvailabilityCard"><h3>Data availability</h3><p>Capability is shown per comparison; N is repeated on every diagnostic because model coverage differs by variable and experiment.</p><div class="mla-climate-capability-grid" id="mlaClimateAvailability" role="table" aria-label="CMIP6 climate diagnostic availability"></div><p class="mla-chart-status" id="mlaClimateAvailabilityStatus"></p></section>
+					<section class="mla-card mla-chart-card mla-chart-wide" id="mlaClimateAvailabilityCard"><h3>Data availability</h3><p>Capability and all-physics row completeness are shown per comparison; N is repeated on every diagnostic.</p><div class="mla-climate-capability-grid" id="mlaClimateAvailability" role="table" aria-label="CMIP6 climate diagnostic availability"></div><p class="mla-chart-status" id="mlaClimateAvailabilityStatus"></p></section>
 					<section class="mla-card mla-prose mla-chart-wide" id="mlaClimateInterpretationCard"><h3>Interpretation</h3><p>Model years are resampled within each paired window; source models receive equal weight. Across-model spread and within-model sampling uncertainty are shown separately. Atlas-derived intensity classes and compact-core quantities are resolution-sensitive, so continuous circulation, pressure, moisture and rainfall measures should lead interpretation.</p></section>
 				</div>
 			</div>
@@ -1127,7 +1127,7 @@
 
 <script src="assets/atlas-app.3681542b6718.js"></script>
 <script src="assets/forecast-app.b231200b0f62.js"></script>
-<script src="assets/climate-change-app.292182c962bb.js"></script>
+<script src="assets/climate-change-app.074acee66563.js"></script>
 
 </body>
 </html>

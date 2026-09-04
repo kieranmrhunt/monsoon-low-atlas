@@ -3,7 +3,7 @@
 #SBATCH --partition=standard
 #SBATCH --qos=standard
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=24G
+#SBATCH --mem=8G
 #SBATCH --time=04:00:00
 #SBATCH --job-name=mla-cmip6-physics
 #SBATCH --output=hpc-logs/mla-cmip6-physics-%A_%a.out
