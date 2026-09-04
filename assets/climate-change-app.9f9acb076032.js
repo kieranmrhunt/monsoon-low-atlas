@@ -34,6 +34,7 @@
 		mean_peak_24h_precipitation_mm: {label: 'Mean peak 24 h precipitation', unit: 'mm', digits: 1}
 	};
 	const VALID_SEASONS = new Set(['all', 'jjas', 'mam', 'ond', 'djf']);
+	const PUBLISHED_STATUSES = new Set(['validated-production-window', 'multi-model-awaiting-review']);
 	const state = {pair: '', season: 'jjas', metric: 'systems'};
 	const cache = new Map();
 	let index = null;
@@ -96,7 +97,11 @@
 	function pairLabel(pair) {
 		if (pair.label) return pair.label;
 		const future = pair.future.run;
-		return `${pair.source_label} · ${future.experiment_id.toUpperCase()} · ${pair.member_id}`;
+		const screening = pair.historical && pair.historical.qa && pair.historical.qa.historical_screen
+			? pair.historical.qa.historical_screen.screening_status
+			: '';
+		const review = screening === 'passes-basic-historical-screen' ? ' · passes historical screen' : screening === 'review-model-bias' ? ' · model bias' : '';
+		return `${pair.source_label} · ${future.experiment_id.toUpperCase()} · ${pair.member_id}${review}`;
 	}
 
 	async function loadIndex() {
@@ -106,8 +111,8 @@
 			throw new Error('Climate manifest does not match this atlas.');
 		}
 		const loaded = await fetchJson(assetUrl(manifest.index.path));
-		if (loaded.schema !== manifest.schema || loaded.status !== 'validated-production-window' || !Array.isArray(loaded.pairs) || !loaded.pairs.length) {
-			throw new Error('No validated climate experiment pairs are available.');
+		if (loaded.schema !== manifest.schema || loaded.status !== manifest.status || !PUBLISHED_STATUSES.has(loaded.status) || !Array.isArray(loaded.pairs) || !loaded.pairs.length) {
+			throw new Error('No compatible climate experiment pairs are available.');
 		}
 		return loaded;
 	}
@@ -138,7 +143,12 @@
 			option.textContent = pairLabel(pair);
 			return option;
 		}));
-		if (!index.pairs.some(pair => pair.id === state.pair)) state.pair = index.defaults && index.defaults.pair || index.pairs[0].id;
+		if (!index.pairs.some(pair => pair.id === state.pair)) {
+			const screened = index.status === 'multi-model-awaiting-review'
+				? index.pairs.find(pair => pair.historical && pair.historical.qa && pair.historical.qa.historical_screen && pair.historical.qa.historical_screen.screening_status === 'passes-basic-historical-screen')
+				: null;
+			state.pair = screened && screened.id || index.defaults && index.defaults.pair || index.pairs[0].id;
+		}
 		pairControl.value = state.pair;
 		$('#mlaClimateSeason').value = state.season;
 		const metricControl = $('#mlaClimateMetric');
@@ -507,9 +517,12 @@
 		if (!current || panel.hidden) return;
 		const metric = METRICS[state.metric];
 		$('#mlaClimateAnnualHeading').textContent = `Annual ${metric.label.toLowerCase()}`;
-		$('#mlaClimateScope').textContent = current.pair.kind === 'multi-model'
+		const scope = $('#mlaClimateScope');
+		const preview = index.status === 'multi-model-awaiting-review';
+		scope.dataset.tone = preview ? 'review' : '';
+		scope.textContent = (current.pair.kind === 'multi-model'
 			? `${current.change.model_count} models · equal weight`
-			: `${current.pair.source_label} · single model`;
+			: `${current.pair.source_label} · single model`) + (preview ? ' · research preview' : '');
 		$('#mlaClimateHistoricalMapHeading').textContent = current.historical.run.period_label;
 		$('#mlaClimateFutureMapHeading').textContent = current.future.run.period_label;
 		renderStats();
@@ -551,7 +564,7 @@
 		loadingPromise = (async () => {
 			try {
 				if (!index) {
-					$('#mlaClimateLoading').textContent = 'Opening validated CMIP6 comparisons…';
+					$('#mlaClimateLoading').textContent = 'Opening CMIP6 comparisons…';
 					index = await loadIndex();
 					populateControls();
 				}

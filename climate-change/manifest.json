@@ -1,0 +1,19 @@
+{
+  "generated_utc": "2026-09-04T07:14:37Z",
+  "included_pair_ids": [
+    "202d09fe9eb81efb",
+    "3aaf90618e6e5382",
+    "c14b32487da8587e",
+    "cd2cf54dc5ded1df"
+  ],
+  "index": {
+    "bytes": 9215,
+    "path": "climate-index.62c685ca4e72.json.gz",
+    "sha256": "a64a15850488822ba981a80e3548c80ec8e31a56fc07f401b3cf2cef9c527daa"
+  },
+  "models": 4,
+  "pairs": 5,
+  "review_sha256": null,
+  "schema": "lps-atlas-cmip6-climate-index-v1",
+  "status": "multi-model-awaiting-review"
+}

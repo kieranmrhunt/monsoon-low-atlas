@@ -53,7 +53,7 @@
 		fullPayloads: new Map(), fullLoads: new Map(), fullFailures: new Set(), archiveEntriesCache: null,
 		archiveColourIndexes: new Map(), archiveManifestLoaded: false, archiveManifestLoad: null,
 		systemGroupsCache: null, systemGroupsCacheKey: '',
-		selectedSystem: null, isolateSystem: false, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
+		selectedSystem: null, hoveredSystemKey: '', isolateSystem: false, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
 		archiveDate: /^\d{4}-\d{2}-\d{2}$/.test(storedPreferences.archiveDate || '') ? storedPreferences.archiveDate : DEFAULT_ARCHIVE_DATE,
 		archiveHour: ['00', '06', '12', '18'].includes(storedPreferences.archiveHour) ? storedPreferences.archiveHour : '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
@@ -1422,6 +1422,7 @@
 		if (mode === 'tigge') mode = 'archive';
 		const changed = state.mode !== mode;
 		state.mode = mode;
+		clearForecastHover(false);
 		syncModeControls();
 		persistPreferences();
 		if (!state.initialised) { if (!panel.hidden) initialise(); return; }
@@ -2013,6 +2014,7 @@
 		const selectedKeys = new Set(selectedGroup ? selectedGroup.items.map(systemItemKey) : []);
 		const visibleSystemKeys = state.isolateSystem ? selectedKeys : null;
 		const analysisCounts = Object.fromEntries([...state.analysisSources].map(source => [source, 0]));
+		let hoveredItem = null;
 		for (const entry of displayEntries()) {
 			const {model, payload, runKey} = entry;
 			const current = stepForPayload(payload);
@@ -2020,7 +2022,9 @@
 			for (const system of payload.systems || []) {
 				if (visibleSystemKeys && !visibleSystemKeys.has(`${runKey}:${system.id}`)) continue;
 				const tracks = tracksForSystem(payload, system);
-				const selected = selectedKeys.has(`${runKey}:${system.id}`);
+				const key = `${runKey}:${system.id}`;
+				const selected = selectedKeys.has(key);
+				if (state.mode === 'latest' && state.hoveredSystemKey === key && !selected) hoveredItem = {entry, system};
 				if (state.showMembers && payload.model.kind === 'ensemble') {
 					for (const track of tracks) drawPath(target.context, target.projection, track.points, colour, 1, selected ? .48 : .24);
 				}
@@ -2047,6 +2051,22 @@
 					target.context.beginPath(); target.context.arc(xy[0], xy[1], selected ? 7 : 5.3, 0, Math.PI * 2);
 					target.context.fillStyle = colour; target.context.fill(); target.context.lineWidth = selected ? 3 : 2; target.context.strokeStyle = '#fffdf6'; target.context.stroke();
 				}
+			}
+		}
+		if (hoveredItem) {
+			const {entry, system} = hoveredItem;
+			const colour = runColour(entry);
+			const mean = meanTrack(entry.payload, system);
+			const stitched = stitchedTrack(entry.payload, system, entry.model.id);
+			drawPath(target.context, target.projection, stitched.history, '#fffdf6', 4.4, .96);
+			drawPath(target.context, target.projection, mean, '#fffdf6', 7.2, .98);
+			drawPath(target.context, target.projection, stitched.history, colour, 2.2, 1);
+			drawPath(target.context, target.projection, mean, colour, 4.2, 1);
+			const marker = pointAt(mean, stepForPayload(entry.payload));
+			if (marker) {
+				const xy = target.projection.project(marker[2], marker[1]);
+				target.context.beginPath(); target.context.arc(xy[0], xy[1], 7.2, 0, Math.PI * 2);
+				target.context.fillStyle = colour; target.context.fill(); target.context.lineWidth = 2.5; target.context.strokeStyle = '#fffdf6'; target.context.stroke();
 			}
 		}
 		if (state.mode !== 'latest' && state.analysisSources.size) {
@@ -2390,7 +2410,15 @@
 		if (!panel.hidden) render();
 	}
 
-	function selectSystemAt(event) {
+	function pointSegmentDistanceSquared(px, py, x1, y1, x2, y2) {
+		const dx = x2 - x1, dy = y2 - y1;
+		const lengthSquared = dx * dx + dy * dy;
+		if (!lengthSquared) return (px - x1) ** 2 + (py - y1) ** 2;
+		const fraction = clamp(((px - x1) * dx + (py - y1) * dy) / lengthSquared, 0, 1);
+		return (px - (x1 + fraction * dx)) ** 2 + (py - (y1 + fraction * dy)) ** 2;
+	}
+
+	function forecastSystemAt(clientX, clientY, touch, maximumDistance) {
 		if (!displayEntries().length) return;
 		const canvas = $('#mlaForecastTracks');
 		const rectangle = canvas.getBoundingClientRect();
@@ -2398,14 +2426,7 @@
 		let best = null;
 		const focusedGroup = state.isolateSystem ? selectedForecastGroup() : null;
 		const permitted = focusedGroup ? new Set(focusedGroup.items.map(systemItemKey)) : null;
-		const pointSegmentDistanceSquared = (px, py, x1, y1, x2, y2) => {
-			const dx = x2 - x1, dy = y2 - y1;
-			const lengthSquared = dx * dx + dy * dy;
-			if (!lengthSquared) return (px - x1) ** 2 + (py - y1) ** 2;
-			const fraction = clamp(((px - x1) * dx + (py - y1) * dy) / lengthSquared, 0, 1);
-			return (px - (x1 + fraction * dx)) ** 2 + (py - (y1 + fraction * dy)) ** 2;
-		};
-		const clickX = event.clientX - rectangle.left, clickY = event.clientY - rectangle.top;
+		const clickX = clientX - rectangle.left, clickY = clientY - rectangle.top;
 		for (const entry of displayEntries()) {
 			const {model, payload, runKey} = entry;
 			for (const system of payload.systems || []) {
@@ -2418,12 +2439,52 @@
 					pointSegmentDistanceSquared(clickX, clickY, points[index - 1][0], points[index - 1][1], points[index][0], points[index][1])
 				);
 				const distance = Math.sqrt(distanceSquared);
-				if (!best || distance < best.distance) best = {model, runKey, system, distance};
+				if (!best || distance < best.distance) best = {model, payload, runKey, system, distance};
 			}
 		}
-		if (best && best.distance <= (event.pointerType === 'touch' ? 25 : 18)) {
+		const threshold = Number.isFinite(maximumDistance) ? maximumDistance : touch ? 25 : 18;
+		return best && best.distance <= threshold ? best : null;
+	}
+
+	function clearForecastHover(redraw) {
+		const changed = Boolean(state.hoveredSystemKey);
+		state.hoveredSystemKey = '';
+		const canvas = $('#mlaForecastTracks');
+		canvas.style.cursor = 'grab';
+		$('#mlaForecastMapTip').dataset.visible = 'false';
+		if (changed && redraw) drawTracks(forecastSystemGroups());
+	}
+
+	function updateForecastHover(event) {
+		if (state.mode !== 'latest' || event.pointerType === 'touch') { clearForecastHover(true); return; }
+		const best = forecastSystemAt(event.clientX, event.clientY, false, 14);
+		const key = best ? `${best.runKey}:${best.system.id}` : '';
+		const changed = key !== state.hoveredSystemKey;
+		state.hoveredSystemKey = key;
+		const canvas = $('#mlaForecastTracks');
+		canvas.style.cursor = best ? 'pointer' : 'grab';
+		const tip = $('#mlaForecastMapTip');
+		if (!best) {
+			tip.dataset.visible = 'false';
+		} else {
+			const systemLabel = best.system.label || 'Forecast system';
+			const members = Number(best.system.member_count || 1);
+			tip.innerHTML = `<strong>${esc(systemLabel)}</strong><br>${esc(best.model.label)} · ${esc(compactCycleLabel(best.payload.cycle_utc))} initialization${members > 1 ? `<br>${members} ensemble members` : ''}`;
+			const rectangle = $('#mlaForecastMapStack').getBoundingClientRect();
+			tip.style.left = `${clamp(event.clientX - rectangle.left, 140, rectangle.width - 140)}px`;
+			tip.style.top = `${clamp(event.clientY - rectangle.top, 60, rectangle.height - 18)}px`;
+			tip.dataset.visible = 'true';
+		}
+		if (changed) drawTracks(forecastSystemGroups());
+	}
+
+	function selectSystemAt(event) {
+		const best = forecastSystemAt(event.clientX, event.clientY, event.pointerType === 'touch');
+		if (best) {
 			state.selectedSystem = {runKey: best.runKey, systemId: best.system.id};
 			state.isolateSystem = true;
+			state.hoveredSystemKey = '';
+			writeForecastUrl();
 			render();
 		}
 	}
@@ -2465,6 +2526,8 @@
 			return {distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y), x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2};
 		}
 		canvas.addEventListener('pointerdown', event => {
+			clearForecastHover(false);
+			canvas.style.cursor = 'grabbing';
 			pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
 			if (pointers.size === 1) drag = {x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false};
 			if (pointers.size === 2) {
@@ -2484,7 +2547,7 @@
 				setMapZoom(pinch.zoom * metrics.distance / pinch.distance, metrics.x - rectangle.left, metrics.y - rectangle.top);
 				return;
 			}
-			if (!drag) return;
+			if (!drag) { updateForecastHover(event); return; }
 			const dx = event.clientX - drag.x;
 			const dy = event.clientY - drag.y;
 			if (Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) > 5) drag.moved = true;
@@ -2506,15 +2569,17 @@
 				suppressTap = true; pinch = null;
 				const remaining = [...pointers.values()][0];
 				drag = remaining ? {x: remaining.x, y: remaining.y, startX: remaining.x, startY: remaining.y, moved: false} : null;
-				if (!pointers.size) canvas.classList.remove('is-dragging');
+				if (!pointers.size) { canvas.classList.remove('is-dragging'); canvas.style.cursor = 'grab'; }
 				return;
 			}
 			drag = null;
 			canvas.classList.remove('is-dragging');
+			canvas.style.cursor = 'grab';
 			if (suppressTap) { suppressTap = false; return; }
 			if (!moved) selectSystemAt(event);
 		});
-		canvas.addEventListener('pointercancel', event => { pointers.delete(event.pointerId); drag = null; pinch = null; canvas.classList.remove('is-dragging'); });
+		canvas.addEventListener('pointercancel', event => { pointers.delete(event.pointerId); drag = null; pinch = null; canvas.classList.remove('is-dragging'); canvas.style.cursor = 'grab'; });
+		canvas.addEventListener('pointerleave', () => { if (!drag) clearForecastHover(true); });
 		canvas.addEventListener('wheel', event => {
 			event.preventDefault();
 			const rectangle = canvas.getBoundingClientRect();
@@ -2567,6 +2632,7 @@
 		if (anchor) {
 			state.selectedSystem = {runKey: anchor.runKey, systemId: anchor.system.id};
 			state.isolateSystem = true;
+			writeForecastUrl();
 		}
 		render();
 	});
