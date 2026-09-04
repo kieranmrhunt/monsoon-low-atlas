@@ -433,6 +433,74 @@ def _aggregate_density(payloads: list[dict[str, Any]], season: str, years: int) 
     }
 
 
+def _density_agreement(
+    historical_payloads: list[dict[str, Any]],
+    future_payloads: list[dict[str, Any]],
+    season: str,
+) -> dict[str, Any]:
+    historical_densities = [
+        payload["seasonal"][season]["track_density"] for payload in historical_payloads
+    ]
+    future_densities = [
+        payload["seasonal"][season]["track_density"] for payload in future_payloads
+    ]
+    latitude_edges = historical_densities[0]["latitude_edges"]
+    longitude_edges = historical_densities[0]["longitude_edges"]
+    differences: list[np.ndarray] = []
+    for historical, future, historical_density, future_density in zip(
+        historical_payloads,
+        future_payloads,
+        historical_densities,
+        future_densities,
+        strict=True,
+    ):
+        if any(
+            density["latitude_edges"] != latitude_edges
+            or density["longitude_edges"] != longitude_edges
+            for density in (historical_density, future_density)
+        ):
+            raise ValueError("CMIP6 density grids do not match for sign agreement")
+        historical_rate = np.asarray(
+            historical_density["unique_track_counts"], dtype=float
+        ) / int(historical["coverage"]["years"])
+        future_rate = np.asarray(
+            future_density["unique_track_counts"], dtype=float
+        ) / int(future["coverage"]["years"])
+        differences.append(future_rate - historical_rate)
+    stack = np.stack(differences)
+    positive = (stack > 1e-12).sum(axis=0)
+    negative = (stack < -1e-12).sum(axis=0)
+    unchanged = len(stack) - positive - negative
+    dominant = np.maximum(positive, negative)
+    sign = np.where(positive > negative, 1, np.where(negative > positive, -1, 0))
+    agreement = dominant / len(stack)
+    signed_agreement = sign * agreement
+    any_change = dominant > 0
+    robust_threshold = int(np.ceil(0.8 * len(stack)))
+    return {
+        "latitude_edges": latitude_edges,
+        "longitude_edges": longitude_edges,
+        "model_count": len(stack),
+        "positive_models": positive.astype(int).tolist(),
+        "negative_models": negative.astype(int).tolist(),
+        "unchanged_models": unchanged.astype(int).tolist(),
+        "signed_agreement_fraction": np.round(signed_agreement, 4).tolist(),
+        "mean_change_per_year": np.round(np.mean(stack, axis=0), 6).tolist(),
+        "summary": {
+            "cells_with_any_change": int(any_change.sum()),
+            "cells_at_least_80_percent_agreement": int(
+                (any_change & (dominant >= robust_threshold)).sum()
+            ),
+            "cells_unanimous": int((any_change & (dominant == len(stack))).sum()),
+            "robust_model_threshold": robust_threshold,
+        },
+        "definition": (
+            "sign gives the dominant future-minus-historical direction; magnitude is the "
+            "fraction of equally weighted models with that sign, with unchanged models retained"
+        ),
+    }
+
+
 def aggregate_run_payloads(
     payloads: list[dict[str, Any]],
     *,
@@ -582,7 +650,11 @@ def aggregate_change_payloads(
     if not (len(historical_payloads) == len(future_payloads) == len(model_ids)):
         raise ValueError("historical, future and model lists do not align")
     seasonal_changes: dict[str, Any] = {}
+    density_agreement: dict[str, Any] = {}
     for season_index, season in enumerate(SEASONS):
+        density_agreement[season] = _density_agreement(
+            historical_payloads, future_payloads, season
+        )
         metrics: dict[str, Any] = {}
         for metric_index, metric in enumerate(CHANGE_METRICS):
             model_values: list[dict[str, Any]] = []
@@ -737,6 +809,7 @@ def aggregate_change_payloads(
         "season_definitions": {key: list(months) for key, months in SEASONS.items()},
         "changes": seasonal_changes["all"],
         "seasonal_changes": seasonal_changes,
+        "track_density_agreement": density_agreement,
         "uncertainty": (
             "5th--95th percentile of 5,000 within-model year-resampling draws; "
             "models retain equal weight in every draw. Percent-change intervals compare "

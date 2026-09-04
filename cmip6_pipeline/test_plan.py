@@ -14,7 +14,14 @@ from cmip6_pipeline.source import RunSpec
 
 class PlanTest(unittest.TestCase):
     def test_next_wave_canaries_are_small_like_for_like_pairs(self) -> None:
-        for name in ("miroc6-canary", "mpi-lr-canary", "mri-canary", "hadgem-ll-canary"):
+        for name in (
+            "miroc6-canary",
+            "mpi-lr-canary",
+            "mri-canary",
+            "hadgem-ll-canary",
+            "hadgem-mm-ssp126-canary",
+            "hadgem-mm-ssp585-canary",
+        ):
             periods = PRESETS[name]()
             self.assertEqual(len(periods), 2)
             self.assertEqual(periods[0].spec.source_id, periods[1].spec.source_id)
@@ -26,6 +33,15 @@ class PlanTest(unittest.TestCase):
         periods = PRESETS["hadgem-ll-paired"]()
         self.assertEqual([period.calendar for period in periods], ["360_day", "360_day"])
         self.assertEqual((periods[1].core_start, periods[1].core_end), ("207001", "209912"))
+
+    def test_hadgem_mm_scenario_pairs_are_like_for_like(self) -> None:
+        for scenario in ("ssp126", "ssp585"):
+            periods = PRESETS[f"hadgem-mm-{scenario}-paired"]()
+            self.assertEqual([period.calendar for period in periods], ["360_day", "360_day"])
+            self.assertEqual([period.spec.source_id for period in periods], ["HadGEM3-GC31-MM"] * 2)
+            self.assertEqual([period.spec.member_id for period in periods], ["r1i1p1f3"] * 2)
+            self.assertEqual(periods[1].spec.experiment_id, scenario)
+            self.assertEqual((periods[1].core_start, periods[1].core_end), ("207001", "209912"))
 
     def test_mri_full_pair_uses_complete_late_century_boundary(self) -> None:
         periods = PRESETS["mri-paired"]()

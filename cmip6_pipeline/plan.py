@@ -340,6 +340,40 @@ def hadgem_ll_paired_periods(*, canary: bool = False) -> list[PeriodPlan]:
     ]
 
 
+def hadgem_mm_paired_periods(
+    scenario: str,
+    *,
+    canary: bool = False,
+) -> list[PeriodPlan]:
+    if scenario not in {"ssp126", "ssp585"}:
+        raise ValueError(f"unsupported HadGEM3-GC31-MM scenario: {scenario}")
+    historical_start, historical_end = ("199006", "199009") if canary else ("198101", "201012")
+    future_start, future_end = ("208006", "208009") if canary else ("207001", "209912")
+    return [
+        PeriodPlan(
+            RunSpec("CMIP", "MOHC", "HadGEM3-GC31-MM", "historical", "r1i1p1f3", "gn"),
+            historical_start,
+            historical_end,
+            "full",
+            "360_day",
+        ),
+        PeriodPlan(
+            RunSpec(
+                "ScenarioMIP",
+                "MOHC",
+                "HadGEM3-GC31-MM",
+                scenario,
+                "r1i1p1f3",
+                "gn",
+            ),
+            future_start,
+            future_end,
+            "full",
+            "360_day",
+        ),
+    ]
+
+
 PRESETS = {
     "mpi-paired": mpi_paired_periods,
     "miroc6-paired": miroc6_paired_periods,
@@ -350,6 +384,10 @@ PRESETS = {
     "mri-canary": lambda: mri_paired_periods(canary=True),
     "hadgem-ll-paired": hadgem_ll_paired_periods,
     "hadgem-ll-canary": lambda: hadgem_ll_paired_periods(canary=True),
+    "hadgem-mm-ssp126-paired": lambda: hadgem_mm_paired_periods("ssp126"),
+    "hadgem-mm-ssp126-canary": lambda: hadgem_mm_paired_periods("ssp126", canary=True),
+    "hadgem-mm-ssp585-paired": lambda: hadgem_mm_paired_periods("ssp585"),
+    "hadgem-mm-ssp585-canary": lambda: hadgem_mm_paired_periods("ssp585", canary=True),
 }
 
 

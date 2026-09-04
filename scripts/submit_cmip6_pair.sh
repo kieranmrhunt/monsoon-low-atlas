@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PRESET="${1:?use miroc6-canary, mpi-lr-canary, mri-canary, hadgem-ll-canary, miroc6-paired, mpi-lr-paired, mri-paired or hadgem-ll-paired}"
+PRESET="${1:?provide a supported CMIP6 pair preset}"
 case "$PRESET" in
-  miroc6-canary|mpi-lr-canary|mri-canary|hadgem-ll-canary|miroc6-paired|mpi-lr-paired|mri-paired|hadgem-ll-paired) ;;
+  miroc6-canary|mpi-lr-canary|mri-canary|hadgem-ll-canary|miroc6-paired|mpi-lr-paired|mri-paired|hadgem-ll-paired|hadgem-mm-ssp126-canary|hadgem-mm-ssp126-paired|hadgem-mm-ssp585-canary|hadgem-mm-ssp585-paired) ;;
   *) printf 'Unsupported CMIP6 pair preset: %s\n' "$PRESET" >&2; exit 2 ;;
 esac
 RUN_ROOT="${LPS_CMIP6_RUN_ROOT:-$ATLAS_ROOT/.cmip6-runs/$PRESET}"

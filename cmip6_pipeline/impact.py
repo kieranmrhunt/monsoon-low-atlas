@@ -53,6 +53,52 @@ INDIA_METRICS = (
     "active_lps",
     "genesis_lps",
 )
+REGIONAL_RAIN_METRICS = (
+    "rainfall_share",
+    "climatological_excess_share",
+    "month_control_excess_share",
+    "exposed_area_day_fraction",
+    "exposed_to_all_rain_ratio",
+    "regional_mean_mm_day",
+    "exposed_mean_mm_day",
+    "heavy_20mm_exposed_cell_day_share",
+    "heavy_50mm_exposed_cell_day_share",
+)
+INDIA_REGIONS = {
+    "northwest": {
+        "label": "Northwest",
+        "state_ids": (
+            "jammu_and_kashmir", "himachal_pradesh", "punjab", "chandigarh",
+            "haryana", "nct_of_delhi", "rajasthan", "gujarat",
+        ),
+    },
+    "north_central": {
+        "label": "North-central",
+        "state_ids": ("uttar_pradesh", "uttarakhand", "madhya_pradesh", "chhattisgarh"),
+    },
+    "east": {
+        "label": "East",
+        "state_ids": ("bihar", "jharkhand", "odisha", "west_bengal"),
+    },
+    "northeast": {
+        "label": "Northeast",
+        "state_ids": (
+            "arunachal_pradesh", "assam", "meghalaya", "nagaland", "manipur",
+            "mizoram", "tripura", "sikkim",
+        ),
+    },
+    "west_coast": {
+        "label": "West coast",
+        "state_ids": (
+            "maharashtra", "goa", "karnataka", "kerala",
+            "dadra_and_nagar_haveli", "daman_and_diu",
+        ),
+    },
+    "south_peninsula": {
+        "label": "South peninsula",
+        "state_ids": ("telangana", "andhra_pradesh", "tamil_nadu", "puducherry"),
+    },
+}
 
 
 def utc_now() -> str:
@@ -225,10 +271,12 @@ def precipitation_footprints(frame: pd.DataFrame, data_root: Path, axis: TimeAxi
     }
 
 
-def india_mask(geometry_asset: Path) -> tuple[np.ndarray, dict[str, Any]]:
+def india_masks(
+    geometry_asset: Path,
+) -> tuple[np.ndarray, dict[str, np.ndarray], dict[str, Any]]:
     payload = _load_json(geometry_asset)
     states = payload.get("geo", {}).get("states", [])
-    polygons = []
+    state_polygons: dict[str, list[Any]] = defaultdict(list)
     ring_count = 0
     for state in states:
         for ring in state.get("rings", []):
@@ -236,22 +284,63 @@ def india_mask(geometry_asset: Path) -> tuple[np.ndarray, dict[str, Any]]:
                 continue
             polygon = make_valid(Polygon(ring))
             if not polygon.is_empty:
-                polygons.append(polygon)
+                state_polygons[str(state["id"])].append(polygon)
                 ring_count += 1
-    if not polygons:
+    if not state_polygons:
         raise ValueError(f"no state/UT polygons found in {geometry_asset}")
+    polygons = [polygon for values in state_polygons.values() for polygon in values]
     geometry = union_all(polygons)
     longitude, latitude = np.meshgrid(TARGET_LONS, TARGET_LATS)
     mask = np.asarray(intersects_xy(geometry, longitude, latitude), dtype=bool)
     if int(mask.sum()) < 100:
         raise ValueError(f"India mask has only {int(mask.sum())} one-degree cells")
-    return mask, {
+
+    missing = sorted(
+        state_id
+        for region in INDIA_REGIONS.values()
+        for state_id in region["state_ids"]
+        if state_id not in state_polygons
+    )
+    if missing:
+        raise ValueError(f"regional India masks refer to missing state/UT geometry: {missing}")
+    regional_masks: dict[str, np.ndarray] = {}
+    regional_metadata: dict[str, Any] = {}
+    for region_id, definition in INDIA_REGIONS.items():
+        region_geometry = union_all(
+            [
+                polygon
+                for state_id in definition["state_ids"]
+                for polygon in state_polygons[state_id]
+            ]
+        )
+        region_mask = np.asarray(intersects_xy(region_geometry, longitude, latitude), dtype=bool)
+        region_mask &= mask
+        if int(region_mask.sum()) < 3:
+            raise ValueError(f"{region_id} mask has only {int(region_mask.sum())} one-degree cells")
+        regional_masks[region_id] = region_mask
+        regional_metadata[region_id] = {
+            "label": definition["label"],
+            "state_ids": list(definition["state_ids"]),
+            "grid_cells": int(region_mask.sum()),
+        }
+    regional_union = np.logical_or.reduce(list(regional_masks.values()))
+    return mask, regional_masks, {
         "source": str(geometry_asset),
         "source_sha256": sha256(geometry_asset),
         "state_or_ut_features": len(states),
         "polygon_rings": ring_count,
         "grid_cells": int(mask.sum()),
+        "regional_definition": "six fixed mainland macro-regions assembled from the atlas state/UT polygons",
+        "regional_grid_cells": int(regional_union.sum()),
+        "regional_unassigned_grid_cells": int((mask & ~regional_union).sum()),
+        "regions": regional_metadata,
     }
+
+
+def india_mask(geometry_asset: Path) -> tuple[np.ndarray, dict[str, Any]]:
+    """Retain the original national-mask API for downstream callers."""
+    mask, _regional_masks, metadata = india_masks(geometry_asset)
+    return mask, metadata
 
 
 def _daily_india_precipitation(
@@ -350,6 +439,58 @@ def _monthly_control_excess(
     return value
 
 
+def _rainfall_record(
+    rainfall: np.ndarray,
+    exposed: np.ndarray,
+    months: np.ndarray,
+    weights: np.ndarray,
+    daily_climatology: np.ndarray,
+) -> dict[str, float | None]:
+    valid = np.isfinite(rainfall)
+    weighted = np.where(valid, rainfall * weights[None, :], 0.0)
+    total = float(weighted.sum())
+    attributed = float(np.where(exposed, weighted, 0.0).sum())
+    valid_weight = float(np.where(valid, weights[None, :], 0.0).sum())
+    exposure_weight = float(np.where(exposed & valid, weights[None, :], 0.0).sum())
+    anomaly = rainfall - daily_climatology
+    climatological_excess = float(
+        np.nansum(np.where(exposed, anomaly * weights[None, :], 0.0))
+    )
+    month_control_excess = _monthly_control_excess(rainfall, exposed, months, weights)
+    record: dict[str, float | None] = {
+        "rainfall_share": attributed / total if total else None,
+        "climatological_excess_share": climatological_excess / total if total else None,
+        "month_control_excess_share": month_control_excess / total if total else None,
+        "exposed_area_day_fraction": exposure_weight / valid_weight if valid_weight else None,
+        "exposed_to_all_rain_ratio": (
+            (attributed / exposure_weight) / (total / valid_weight)
+            if exposure_weight and total else None
+        ),
+        "regional_mean_mm_day": total / valid_weight if valid_weight else None,
+        "exposed_mean_mm_day": attributed / exposure_weight if exposure_weight else None,
+    }
+    for threshold in (20.0, 50.0):
+        heavy = valid & (rainfall >= threshold)
+        denominator = float(np.where(heavy, weights[None, :], 0.0).sum())
+        numerator = float(np.where(heavy & exposed, weights[None, :], 0.0).sum())
+        record[f"heavy_{int(threshold)}mm_exposed_cell_day_share"] = (
+            numerator / denominator if denominator else None
+        )
+    return record
+
+
+def _metric_means(records: list[dict[str, Any]], metrics: Iterable[str]) -> dict[str, float | None]:
+    result: dict[str, float | None] = {}
+    for metric in metrics:
+        values = np.asarray(
+            [record[metric] for record in records if record.get(metric) is not None],
+            dtype=float,
+        )
+        values = values[np.isfinite(values)]
+        result[metric] = float(values.mean()) if len(values) else None
+    return result
+
+
 def india_rainfall_diagnostics(
     frame: pd.DataFrame,
     data_root: Path,
@@ -357,6 +498,7 @@ def india_rainfall_diagnostics(
     mask: np.ndarray,
     start_year: int,
     end_year: int,
+    regional_masks: dict[str, np.ndarray] | None = None,
 ) -> dict[str, Any]:
     daily = _daily_india_precipitation(data_root, axis, mask, start_year, end_year)
     keys = sorted(daily)
@@ -386,51 +528,61 @@ def india_rainfall_diagnostics(
     }
 
     records: list[dict[str, Any]] = []
+    regional_records: dict[str, list[dict[str, Any]]] = {
+        region_id: [] for region_id in (regional_masks or {})
+    }
+    regional_indexes = {
+        region_id: np.asarray(region_mask[mask], dtype=bool)
+        for region_id, region_mask in (regional_masks or {}).items()
+    }
     genesis = tracks.sort_values(["track_id", "time"], kind="mergesort").groupby("track_id", sort=False).first()
     for year in expected_years:
         year_keys = [key for key in keys if key[0] == year]
         rainfall = np.stack([daily[key] for key in year_keys]).astype(np.float64)
         exposed = np.stack([exposure[key] for key in year_keys])
         months = np.asarray([key[1] for key in year_keys], dtype=int)
-        valid = np.isfinite(rainfall)
-        weighted = np.where(valid, rainfall * weights[None, :], 0.0)
-        total = float(weighted.sum())
-        attributed = float(np.where(exposed, weighted, 0.0).sum())
-        valid_weight = float(np.where(valid, weights[None, :], 0.0).sum())
-        exposure_weight = float(np.where(exposed & valid, weights[None, :], 0.0).sum())
-        climatological_excess = 0.0
-        for index, (_, month, day) in enumerate(year_keys):
-            anomaly = rainfall[index] - climatology[(month, day)]
-            climatological_excess += float(np.nansum(np.where(exposed[index], anomaly * weights, 0.0)))
-        month_control_excess = _monthly_control_excess(rainfall, exposed, months, weights)
+        daily_climatology = np.stack([climatology[(month, day)] for _, month, day in year_keys])
         active_ids = tracks.loc[
             tracks.year.eq(year) & tracks.month.isin(SEASONS["jjas"]), "track_id"
         ].nunique()
         genesis_ids = genesis.loc[
             genesis.year.eq(year) & genesis.month.isin(SEASONS["jjas"])
         ].index.nunique()
+        national = _rainfall_record(rainfall, exposed, months, weights, daily_climatology)
+        all_india_mean = national.pop("regional_mean_mm_day")
         record: dict[str, Any] = {
             "year": year,
             "days": len(year_keys),
-            "rainfall_share": attributed / total if total else None,
-            "climatological_excess_share": climatological_excess / total if total else None,
-            "month_control_excess_share": month_control_excess / total if total else None,
-            "exposed_area_day_fraction": exposure_weight / valid_weight if valid_weight else None,
-            "exposed_to_all_rain_ratio": (attributed / exposure_weight) / (total / valid_weight) if exposure_weight and total else None,
-            "all_india_mean_mm_day": total / valid_weight if valid_weight else None,
-            "exposed_mean_mm_day": attributed / exposure_weight if exposure_weight else None,
+            **national,
+            "all_india_mean_mm_day": all_india_mean,
             "active_lps": int(active_ids),
             "genesis_lps": int(genesis_ids),
         }
-        for threshold in (20.0, 50.0):
-            heavy = valid & (rainfall >= threshold)
-            denominator = float(np.where(heavy, weights[None, :], 0.0).sum())
-            numerator = float(np.where(heavy & exposed, weights[None, :], 0.0).sum())
-            record[f"heavy_{int(threshold)}mm_exposed_cell_day_share"] = numerator / denominator if denominator else None
         records.append(record)
-    summary = {
-        metric: float(np.nanmean([record[metric] for record in records if record.get(metric) is not None]))
-        for metric in INDIA_METRICS
+        for region_id, selected in regional_indexes.items():
+            regional_records[region_id].append(
+                {
+                    "year": year,
+                    "days": len(year_keys),
+                    **_rainfall_record(
+                        rainfall[:, selected],
+                        exposed[:, selected],
+                        months,
+                        weights[selected],
+                        daily_climatology[:, selected],
+                    ),
+                }
+            )
+    summary = _metric_means(records, INDIA_METRICS)
+    regions = {
+        region_id: {
+            "label": INDIA_REGIONS[region_id]["label"],
+            "state_ids": list(INDIA_REGIONS[region_id]["state_ids"]),
+            "grid_cells": int(regional_indexes[region_id].sum()),
+            "years": values,
+            "mean": _metric_means(values, REGIONAL_RAIN_METRICS),
+        }
+        for region_id, values in regional_records.items()
     }
     return {
         "radius_km": EXPOSURE_RADIUS_KM,
@@ -440,6 +592,7 @@ def india_rainfall_diagnostics(
         "climatology": "within-run 30-year model-calendar day climatology",
         "years": records,
         "mean": summary,
+        "regions": regions,
     }
 
 
@@ -454,7 +607,7 @@ def build_run(
     frame = pd.read_parquet(catalogue)
     frame["time"] = pd.to_datetime(frame.time, errors="raise")
     axis = _axis(plan)
-    mask, geometry = india_mask(geometry_asset)
+    mask, regional_masks, geometry = india_masks(geometry_asset)
     start_year, end_year = int(plan["core_start"][:4]), int(plan["core_end"][:4])
     payload = {
         "schema": RUN_SCHEMA,
@@ -463,7 +616,9 @@ def build_run(
         "coverage": {"start_year": start_year, "end_year": end_year, "years": end_year - start_year + 1},
         "storm_centred_precipitation": precipitation_footprints(frame, data_root, axis),
         "india_geometry": geometry,
-        "india_jjas_rainfall": india_rainfall_diagnostics(frame, data_root, axis, mask, start_year, end_year),
+        "india_jjas_rainfall": india_rainfall_diagnostics(
+            frame, data_root, axis, mask, start_year, end_year, regional_masks
+        ),
         "provenance": {
             "catalogue": {"path": str(catalogue), "sha256": sha256(catalogue)},
             "period_plan": {"path": str(period_plan), "sha256": sha256(period_plan)},
@@ -508,6 +663,40 @@ def build_pair(historical_manifest: Path, future_manifest: Path, output_dir: Pat
             metrics[metric] = None
             continue
         metrics[metric] = bootstrap_change(left, right, seed=1901 + index)
+    historical_regions = historical["india_jjas_rainfall"].get("regions", {})
+    future_regions = future["india_jjas_rainfall"].get("regions", {})
+    if set(historical_regions) != set(future_regions):
+        raise ValueError("historical and future regional India masks do not match")
+    regional_changes: dict[str, Any] = {}
+    for region_index, (region_id, historical_region) in enumerate(historical_regions.items()):
+        future_region = future_regions[region_id]
+        if historical_region["state_ids"] != future_region["state_ids"]:
+            raise ValueError(f"historical and future definitions differ for {region_id}")
+        changes: dict[str, Any] = {}
+        for metric_index, metric in enumerate(REGIONAL_RAIN_METRICS):
+            left = np.asarray(
+                [record.get(metric, np.nan) for record in historical_region["years"]],
+                dtype=float,
+            )
+            right = np.asarray(
+                [record.get(metric, np.nan) for record in future_region["years"]],
+                dtype=float,
+            )
+            left, right = left[np.isfinite(left)], right[np.isfinite(right)]
+            changes[metric] = (
+                bootstrap_change(
+                    left,
+                    right,
+                    seed=2901 + region_index * 100 + metric_index,
+                )
+                if len(left) and len(right) else None
+            )
+        regional_changes[region_id] = {
+            "label": historical_region["label"],
+            "state_ids": historical_region["state_ids"],
+            "grid_cells": historical_region["grid_cells"],
+            "changes": changes,
+        }
     footprints: dict[str, Any] = {}
     for season in SEASONS:
         left = historical["storm_centred_precipitation"]["seasons"][season]
@@ -538,6 +727,7 @@ def build_pair(historical_manifest: Path, future_manifest: Path, output_dir: Pat
         "historical": historical["run"],
         "future": future["run"],
         "india_jjas_changes": metrics,
+        "regional_india_jjas_changes": regional_changes,
         "storm_centred_precipitation": {
             "relative_longitude_deg": historical["storm_centred_precipitation"]["relative_longitude_deg"],
             "relative_latitude_deg": historical["storm_centred_precipitation"]["relative_latitude_deg"],
@@ -710,6 +900,87 @@ def aggregate_impact_payloads(
             "models": model_records,
         }
 
+    available_region_sets = [
+        set(entry["pair"].get("regional_india_jjas_changes", {})) for entry in entries
+    ]
+    if any(available_region_sets) and any(
+        region_set != available_region_sets[0] for region_set in available_region_sets[1:]
+    ):
+        raise ValueError("impact pairs do not use the same regional India definitions")
+    regional_changes: dict[str, Any] = {}
+    region_ids = list(entries[0]["pair"].get("regional_india_jjas_changes", {}))
+    for region_index, region_id in enumerate(region_ids):
+        first_region = entries[0]["pair"]["regional_india_jjas_changes"][region_id]
+        metric_changes: dict[str, Any] = {}
+        for metric_index, metric in enumerate(REGIONAL_RAIN_METRICS):
+            model_records: list[dict[str, Any]] = []
+            historical_draws: list[np.ndarray] = []
+            future_draws: list[np.ndarray] = []
+            rng = np.random.default_rng(9421 + region_index * 100 + metric_index)
+            for entry in entries:
+                pair_region = entry["pair"]["regional_india_jjas_changes"][region_id]
+                change = pair_region["changes"].get(metric)
+                if change is None:
+                    continue
+                historical_region = entry["historical"]["india_jjas_rainfall"]["regions"][region_id]
+                future_region = entry["future"]["india_jjas_rainfall"]["regions"][region_id]
+                left = np.asarray(
+                    [record.get(metric, np.nan) for record in historical_region["years"]],
+                    dtype=float,
+                )
+                right = np.asarray(
+                    [record.get(metric, np.nan) for record in future_region["years"]],
+                    dtype=float,
+                )
+                left, right = left[np.isfinite(left)], right[np.isfinite(right)]
+                if not len(left) or not len(right):
+                    continue
+                historical_draws.append(
+                    left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1)
+                )
+                future_draws.append(
+                    right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1)
+                )
+                model_records.append(
+                    {"id": entry["id"], "source_label": entry["source_label"], **change}
+                )
+            if not model_records:
+                metric_changes[metric] = None
+                continue
+            historical_mean = float(np.mean([record["historical"] for record in model_records]))
+            future_mean = float(np.mean([record["future"] for record in model_records]))
+            historical_bootstrap = np.mean(np.stack(historical_draws), axis=0)
+            future_bootstrap = np.mean(np.stack(future_draws), axis=0)
+            difference = future_bootstrap - historical_bootstrap
+            percentage = np.divide(
+                difference * 100.0,
+                historical_bootstrap,
+                out=np.full(difference.shape, np.nan),
+                where=historical_bootstrap != 0,
+            )
+            percentage = percentage[np.isfinite(percentage)]
+            metric_changes[metric] = {
+                "historical": historical_mean,
+                "future": future_mean,
+                "absolute_change": future_mean - historical_mean,
+                "percent_change": (
+                    (future_mean / historical_mean - 1.0) * 100.0
+                    if historical_mean else None
+                ),
+                "ci05": float(np.quantile(difference, .05)),
+                "ci95": float(np.quantile(difference, .95)),
+                "percent_ci05": float(np.quantile(percentage, .05)) if len(percentage) else None,
+                "percent_ci95": float(np.quantile(percentage, .95)) if len(percentage) else None,
+                "model_count": len(model_records),
+                "models": model_records,
+            }
+        regional_changes[region_id] = {
+            "label": first_region["label"],
+            "state_ids": first_region["state_ids"],
+            "grid_cells": first_region["grid_cells"],
+            "changes": metric_changes,
+        }
+
     footprints: dict[str, Any] = {}
     for season in SEASONS:
         historical_maps, future_maps, model_records = [], [], []
@@ -750,6 +1021,7 @@ def aggregate_impact_payloads(
         "model_count": len(entries),
         "model_ids": [entry["id"] for entry in entries],
         "india_jjas_changes": changes,
+        "regional_india_jjas_changes": regional_changes,
         "storm_centred_precipitation": {
             "relative_longitude_deg": first["relative_longitude_deg"],
             "relative_latitude_deg": first["relative_latitude_deg"],

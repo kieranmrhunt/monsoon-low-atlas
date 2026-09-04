@@ -38,15 +38,15 @@
 		mean_peak_24h_precipitation_mm: {label: 'Mean peak 24 h precipitation', unit: 'mm', digits: 1}
 	};
 	const RAIN_METRICS = {
-		exposed_mean_mm_day: {label: 'Rain within 800 km of LPS', unit: 'mm day⁻¹', digits: 1},
-		all_india_mean_mm_day: {label: 'All-India mean rain', unit: 'mm day⁻¹', digits: 1},
-		rainfall_share: {label: 'Rainfall on LPS-exposed cell-days', unit: '%', digits: 1, fraction: true},
-		climatological_excess_share: {label: 'LPS-day excess above climatology', unit: '%', digits: 1, fraction: true},
-		month_control_excess_share: {label: 'LPS-day excess above same-month control', unit: '%', digits: 1, fraction: true},
-		exposed_area_day_fraction: {label: 'LPS-exposed area-days', unit: '%', digits: 1, fraction: true},
-		exposed_to_all_rain_ratio: {label: 'Exposed / all-day rain ratio', unit: '×', digits: 2},
-		heavy_20mm_exposed_cell_day_share: {label: '20 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true},
-		heavy_50mm_exposed_cell_day_share: {label: '50 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true}
+		exposed_mean_mm_day: {label: 'Rain within 800 km of LPS', unit: 'mm day⁻¹', digits: 1, changeMode: 'percent'},
+		all_india_mean_mm_day: {label: 'All-India mean rain', unit: 'mm day⁻¹', digits: 1, changeMode: 'percent', regionalKey: 'regional_mean_mm_day'},
+		rainfall_share: {label: 'Rainfall on LPS-exposed cell-days', unit: '%', digits: 1, fraction: true, changeMode: 'points'},
+		climatological_excess_share: {label: 'LPS-day excess above climatology', unit: '%', digits: 1, fraction: true, changeMode: 'points'},
+		month_control_excess_share: {label: 'LPS-day excess above same-month control', unit: '%', digits: 1, fraction: true, changeMode: 'points'},
+		exposed_area_day_fraction: {label: 'LPS-exposed area-days', unit: '%', digits: 1, fraction: true, changeMode: 'points'},
+		exposed_to_all_rain_ratio: {label: 'Exposed / all-day rain ratio', unit: '×', digits: 2, changeMode: 'percent'},
+		heavy_20mm_exposed_cell_day_share: {label: '20 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true, changeMode: 'points'},
+		heavy_50mm_exposed_cell_day_share: {label: '50 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true, changeMode: 'points'}
 	};
 	const VALID_SEASONS = new Set(['all', 'jjas', 'mam', 'ond', 'djf']);
 	const PUBLISHED_STATUSES = new Set(['validated-production-window', 'multi-model-awaiting-review']);
@@ -594,13 +594,35 @@
 		return metric.unit === '×' ? `${number.toFixed(metric.digits)}×` : `${number.toFixed(metric.digits)} ${metric.unit}`;
 	}
 
+	function rainChangeNumber(record, metric, position = 'change') {
+		const fields = metric.changeMode === 'points'
+			? {change: 'absolute_change', low: 'ci05', high: 'ci95'}
+			: {change: 'percent_change', low: 'percent_ci05', high: 'percent_ci95'};
+		const raw = record && record[fields[position]];
+		if (raw === null || raw === '' || raw === undefined) return NaN;
+		const value = Number(raw);
+		return Number.isFinite(value) ? value * (metric.changeMode === 'points' ? 100 : 1) : NaN;
+	}
+
+	function rainChangeText(value, metric) {
+		if (!Number.isFinite(Number(value))) return '—';
+		const number = Number(value);
+		return `${number > 0 ? '+' : ''}${number.toFixed(1)}${metric.changeMode === 'points' ? ' pp' : '%'}`;
+	}
+
 	function drawRainfallChanges() {
 		const card = $('#mlaClimateRainfallCard');
 		card.hidden = !current.impact;
 		if (!current.impact) return;
 		const canvas = $('#mlaClimateRainfallChange');
 		const {context, width, height} = setupCanvas(canvas);
-		const records = rainfallRecords().filter(record => numberAvailable(record.percent_change));
+		const metric = RAIN_METRICS[state.rainMetric];
+		const records = rainfallRecords().map(record => ({
+			...record,
+			plotChange: rainChangeNumber(record, metric),
+			plotLow: rainChangeNumber(record, metric, 'low'),
+			plotHigh: rainChangeNumber(record, metric, 'high')
+		})).filter(record => numberAvailable(record.plotChange));
 		const status = $('#mlaClimateRainfallStatus');
 		const data = $('#mlaClimateRainfallData');
 		const change = current.impact.india_jjas_changes[state.rainMetric];
@@ -612,8 +634,8 @@
 			data.textContent = '';
 			return;
 		}
-		const intervalValues = finite(records.flatMap(record => [record.percent_ci05, record.percent_change, record.percent_ci95]));
-		const scale = Math.max(5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
+		const intervalValues = finite(records.flatMap(record => [record.plotLow, record.plotChange, record.plotHigh]));
+		const scale = Math.max(metric.changeMode === 'points' ? 1 : 5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
 		const left = Math.min(158, Math.max(108, width * .25)), right = width - 31, top = 28, bottom = height - 40;
 		const rowGap = (bottom - top) / Math.max(1, records.length);
 		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
@@ -638,27 +660,99 @@
 			context.textAlign = 'right';
 			context.textBaseline = 'middle';
 			context.fillText(record.label, left - 9, y);
-			if (numberAvailable(record.percent_ci05) && numberAvailable(record.percent_ci95)) {
-				const low = Number(record.percent_ci05), high = Number(record.percent_ci95);
+			if (numberAvailable(record.plotLow) && numberAvailable(record.plotHigh)) {
+				const low = Number(record.plotLow), high = Number(record.plotHigh);
 				context.strokeStyle = record.colour;
 				context.lineWidth = 2;
 				context.beginPath(); context.moveTo(x(low), y); context.lineTo(x(high), y); context.stroke();
 				for (const value of [low, high]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
 			}
 			context.fillStyle = record.colour;
-			context.beginPath(); context.arc(x(record.percent_change), y, 5, 0, Math.PI * 2); context.fill();
+			context.beginPath(); context.arc(x(record.plotChange), y, 5, 0, Math.PI * 2); context.fill();
 		});
 		context.fillStyle = muted;
 		context.textAlign = 'center';
 		context.textBaseline = 'bottom';
-		context.fillText('future − historical (%)', (left + right) / 2, height - 2);
-		const positive = records.filter(record => Number(record.percent_change) > 0).length;
-		const robust = records.filter(record => Number(record.percent_ci05) > 0 || Number(record.percent_ci95) < 0).length;
+		context.fillText(metric.changeMode === 'points' ? 'future − historical (percentage points)' : 'future − historical (%)', (left + right) / 2, height - 2);
+		const positive = records.filter(record => record.plotChange > 0).length;
+		const robust = records.filter(record => record.plotLow > 0 || record.plotHigh < 0).length;
+		const plotChange = rainChangeNumber(change, metric);
+		const plotLow = rainChangeNumber(change, metric, 'low');
+		const plotHigh = rainChangeNumber(change, metric, 'high');
 		status.textContent = current.pair.kind === 'multi-model'
-			? `${signedPercent(change.percent_change)} equal-model mean (${signedPercent(change.percent_ci05)} to ${signedPercent(change.percent_ci95)}) · ${positive}/${records.length} models increase · ${robust}/${records.length} individual intervals exclude zero`
-			: `${signedPercent(change.percent_change)} (${signedPercent(change.percent_ci05)} to ${signedPercent(change.percent_ci95)})`;
+			? `${rainChangeText(plotChange, metric)} equal-model mean (${rainChangeText(plotLow, metric)} to ${rainChangeText(plotHigh, metric)}) · ${positive}/${records.length} models increase · ${robust}/${records.length} individual intervals exclude zero`
+			: `${rainChangeText(plotChange, metric)} (${rainChangeText(plotLow, metric)} to ${rainChangeText(plotHigh, metric)})`;
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(rainValueText(record.historical, metric))}</td><td>${esc(rainValueText(record.future, metric))}</td><td>${esc(rainChangeText(record.plotChange, metric))}</td><td>${esc(numberAvailable(record.plotLow) ? `${rainChangeText(record.plotLow, metric)} to ${rainChangeText(record.plotHigh, metric)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function regionalRainfallRecords() {
+		if (!current.impact || !current.impact.regional_india_jjas_changes) return [];
 		const metric = RAIN_METRICS[state.rainMetric];
-		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(rainValueText(record.historical, metric))}</td><td>${esc(rainValueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(numberAvailable(record.percent_ci05) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+		const metricKey = metric.regionalKey || state.rainMetric;
+		return Object.values(current.impact.regional_india_jjas_changes).map(region => {
+			const change = region.changes && region.changes[metricKey];
+			if (!change) return null;
+			const modelValues = Array.isArray(change.models)
+				? change.models.map(model => rainChangeNumber(model, metric)).filter(Number.isFinite)
+				: [];
+			const positiveModels = modelValues.filter(value => value > 0).length;
+			const negativeModels = modelValues.filter(value => value < 0).length;
+			return {
+				...region,
+				...change,
+				plotChange: rainChangeNumber(change, metric),
+				plotLow: rainChangeNumber(change, metric, 'low'),
+				plotHigh: rainChangeNumber(change, metric, 'high'),
+				positiveModels,
+				negativeModels,
+				modelValues
+			};
+		}).filter(record => record && numberAvailable(record.plotChange));
+	}
+
+	function drawRegionalRainfall() {
+		const card = $('#mlaClimateRegionalRainfallCard');
+		const records = regionalRainfallRecords();
+		card.hidden = !records.length;
+		if (!records.length) return;
+		const canvas = $('#mlaClimateRegionalRainfall');
+		const {context, width, height} = setupCanvas(canvas);
+		const metric = RAIN_METRICS[state.rainMetric];
+		const values = finite(records.flatMap(record => [record.plotLow, record.plotChange, record.plotHigh]));
+		const scale = Math.max(metric.changeMode === 'points' ? 1 : 5, Math.max(...values.map(Math.abs)) * 1.12);
+		const left = Math.min(150, Math.max(112, width * .22)), right = width - 30, top = 20, bottom = height - 40;
+		const rowGap = (bottom - top) / records.length;
+		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
+		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line; context.fillStyle = muted; context.lineWidth = 1; context.textAlign = 'center'; context.textBaseline = 'top';
+		for (const fraction of [-1, -.5, 0, .5, 1]) {
+			const value = fraction * scale, px = x(value);
+			context.beginPath(); context.moveTo(px, top - 6); context.lineTo(px, bottom + 4); context.stroke();
+			context.fillText(metric.changeMode === 'points' ? value.toFixed(1) : `${Math.round(value)}%`, px, bottom + 8);
+		}
+		context.strokeStyle = ink; context.lineWidth = 1.5; context.beginPath(); context.moveTo(x(0), top - 6); context.lineTo(x(0), bottom + 4); context.stroke();
+		records.forEach((record, ordinal) => {
+			const y = top + (ordinal + .5) * rowGap;
+			context.fillStyle = ink; context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(record.label, left - 9, y);
+			const colour = record.plotChange >= 0 ? '#2166ac' : '#b2182b';
+			if (numberAvailable(record.plotLow) && numberAvailable(record.plotHigh)) {
+				context.strokeStyle = colour; context.lineWidth = 2;
+				context.beginPath(); context.moveTo(x(record.plotLow), y); context.lineTo(x(record.plotHigh), y); context.stroke();
+				for (const value of [record.plotLow, record.plotHigh]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
+			}
+			context.fillStyle = colour; context.beginPath(); context.arc(x(record.plotChange), y, 5, 0, Math.PI * 2); context.fill();
+		});
+		context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'bottom';
+		context.fillText(metric.changeMode === 'points' ? 'future − historical (percentage points)' : 'future − historical (%)', (left + right) / 2, height - 2);
+		const increasing = records.filter(record => record.plotChange > 0).length;
+		const robustAgreement = records.filter(record => {
+			if (!record.modelValues.length) return false;
+			return Math.max(record.positiveModels, record.negativeModels) >= Math.ceil(.8 * record.modelValues.length);
+		}).length;
+		$('#mlaClimateRegionalRainfallStatus').textContent = current.pair.kind === 'multi-model'
+			? `${increasing}/${records.length} regions increase · at least 80% of models agree on the sign in ${robustAgreement}/${records.length}`
+			: `${increasing}/${records.length} regions increase in this model`;
+		$('#mlaClimateRegionalRainfallData').innerHTML = `<table><thead><tr><th>Region</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th><th>Model sign</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(rainValueText(record.historical, metric))}</td><td>${esc(rainValueText(record.future, metric))}</td><td>${esc(rainChangeText(record.plotChange, metric))}</td><td>${esc(`${rainChangeText(record.plotLow, metric)} to ${rainChangeText(record.plotHigh, metric)}`)}</td><td>${record.modelValues.length ? `${record.positiveModels} ↑ / ${record.negativeModels} ↓` : '—'}</td></tr>`).join('')}</tbody></table>`;
 	}
 
 	function matrixMean(matrix) {
@@ -840,6 +934,7 @@
 		const matrix = density.unique_track_counts;
 		const sequential = [[255, 255, 245], [255, 220, 121], [247, 139, 61], [192, 54, 92], [76, 26, 112]];
 		const diverging = [[178, 24, 43], [239, 138, 98], [255, 255, 255], [103, 169, 207], [33, 102, 172]];
+		const divergingMode = mode !== 'sequential';
 		for (let row = 0; row < matrix.length; row += 1) {
 			const south = latitudes[row], north = latitudes[row + 1];
 			if (north < bounds.south || south > bounds.north) continue;
@@ -848,8 +943,8 @@
 				if (east < bounds.west || west > bounds.east) continue;
 				const value = Number(matrix[row][column]) / years;
 				if (!Number.isFinite(value) || (mode === 'sequential' && value <= 0)) continue;
-				const fraction = mode === 'change' ? .5 + .5 * value / scale : Math.sqrt(Math.max(0, value) / scale);
-				context.fillStyle = interpolateColour(mode === 'change' ? diverging : sequential, fraction);
+				const fraction = divergingMode ? .5 + .5 * value / scale : Math.sqrt(Math.max(0, value) / scale);
+				context.fillStyle = interpolateColour(divergingMode ? diverging : sequential, fraction);
 				const [x0, y0] = project(west, north);
 				const [x1, y1] = project(east, south);
 				context.fillRect(x0, y0, Math.max(1, x1 - x0 + .35), Math.max(1, y1 - y0 + .35));
@@ -873,15 +968,19 @@
 		const legendX = plot.right - legendWidth;
 		const legendY = plot.top + 7;
 		for (let index = 0; index < legendWidth; index += 1) {
-			context.fillStyle = interpolateColour(mode === 'change' ? diverging : sequential, index / Math.max(1, legendWidth - 1));
+			context.fillStyle = interpolateColour(divergingMode ? diverging : sequential, index / Math.max(1, legendWidth - 1));
 			context.fillRect(legendX + index, legendY, 1.2, 7);
 		}
 		context.fillStyle = css('--mla-ink', '#202334');
 		context.textBaseline = 'top';
 		context.textAlign = 'left';
-		context.fillText(mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
+		context.fillText(mode === 'agreement' ? 'all fewer' : mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
+		if (mode === 'agreement') {
+			context.textAlign = 'center';
+			context.fillText('mixed', legendX + legendWidth / 2, legendY + 9);
+		}
 		context.textAlign = 'right';
-		context.fillText(mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
+		context.fillText(mode === 'agreement' ? 'all more' : mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
 	}
 
 	function differenceDensity(historical, future, historicalYears, futureYears) {
@@ -916,6 +1015,31 @@
 		drawDensityMap($('#mlaClimateHistoricalMap'), historical, historicalYears, 'sequential', sequentialScale);
 		drawDensityMap($('#mlaClimateFutureMap'), future, futureYears, 'sequential', sequentialScale);
 		drawDensityMap($('#mlaClimateChangeMap'), difference, 1, 'change', differenceScale);
+		const agreement = current.pair.kind === 'multi-model'
+			&& current.change.track_density_agreement
+			&& current.change.track_density_agreement[state.season];
+		const agreementPanel = $('#mlaClimateAgreementPanel');
+		const agreementDetails = $('#mlaClimateDensityAgreementDetails');
+		const densityGrid = $('#mlaClimateDensityGrid');
+		agreementPanel.hidden = !agreement;
+		agreementDetails.hidden = !agreement;
+		densityGrid.classList.toggle('mla-climate-density-grid', Boolean(agreement));
+		if (!agreement) {
+			$('#mlaClimateDensityAgreementStatus').textContent = '';
+			return;
+		}
+		drawDensityMap($('#mlaClimateAgreementMap'), {
+			latitude_edges: agreement.latitude_edges,
+			longitude_edges: agreement.longitude_edges,
+			unique_track_counts: agreement.signed_agreement_fraction
+		}, 1, 'agreement', 1);
+		const summary = agreement.summary || {};
+		const threshold = Number(summary.robust_model_threshold || Math.ceil(.8 * agreement.model_count));
+		const changed = Number(summary.cells_with_any_change || 0);
+		const robust = Number(summary.cells_at_least_80_percent_agreement || 0);
+		const unanimous = Number(summary.cells_unanimous || 0);
+		$('#mlaClimateDensityAgreementStatus').textContent = `${threshold}/${agreement.model_count} or more models agree on the sign in ${robust.toLocaleString()} of ${changed.toLocaleString()} cells with any projected change.`;
+		$('#mlaClimateDensityAgreementData').innerHTML = `<table><thead><tr><th>Diagnostic</th><th>Cells</th></tr></thead><tbody><tr><td>Any model changes</td><td>${changed.toLocaleString()}</td></tr><tr><td>At least ${threshold}/${agreement.model_count} agree</td><td>${robust.toLocaleString()}</td></tr><tr><td>All ${agreement.model_count} agree</td><td>${unanimous.toLocaleString()}</td></tr></tbody></table>`;
 	}
 
 	function valueText(value, metric, signed = false) {
@@ -978,6 +1102,7 @@
 			drawModelChanges();
 			drawHistoricalAgreement();
 			drawRainfallChanges();
+			drawRegionalRainfall();
 			drawFootprints();
 			drawAnnual();
 			drawMonthly();

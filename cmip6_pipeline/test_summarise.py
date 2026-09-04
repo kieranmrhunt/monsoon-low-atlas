@@ -61,8 +61,16 @@ class SummariseTest(unittest.TestCase):
                 "mean_peak_24h_precipitation_mm",
             )}]
             return {
+                "coverage": {"years": 1},
                 "seasonal": {
-                    season: {"annual": annual}
+                    season: {
+                        "annual": annual,
+                        "track_density": {
+                            "latitude_edges": [0.0, 1.0],
+                            "longitude_edges": [70.0, 71.0],
+                            "unique_track_counts": [[value]],
+                        },
+                    }
                     for season in ("all", "jjas", "mam", "ond", "djf")
                 }
             }
@@ -82,6 +90,10 @@ class SummariseTest(unittest.TestCase):
         self.assertAlmostEqual(systems["absolute_change"], 1.0)
         self.assertAlmostEqual(systems["percent_change"], 20.0)
         self.assertAlmostEqual(systems["mean_model_percent_change"], 55.5555555556)
+        agreement = result["track_density_agreement"]["jjas"]
+        self.assertEqual(agreement["positive_models"], [[2]])
+        self.assertEqual(agreement["negative_models"], [[0]])
+        self.assertEqual(agreement["signed_agreement_fraction"], [[1.0]])
         self.assertTrue(all(value["ci05"] <= value["absolute_change"] <= value["ci95"] for value in systems["models"]))
         self.assertTrue(all(value["percent_ci05"] <= value["percent_change"] <= value["percent_ci95"] for value in systems["models"]))
 

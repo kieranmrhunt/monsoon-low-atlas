@@ -6,6 +6,7 @@ import pandas as pd
 from .impact import (
     ENSEMBLE_SCHEMA,
     INDIA_METRICS,
+    REGIONAL_RAIN_METRICS,
     SEASONS,
     _monthly_control_excess,
     aggregate_impact_payloads,
@@ -43,6 +44,19 @@ class ImpactTests(unittest.TestCase):
                 }
                 for metric in INDIA_METRICS
             }
+            regional_changes = {
+                metric: {
+                    "historical": historical,
+                    "future": future,
+                    "absolute_change": future - historical,
+                    "percent_change": (future / historical - 1.0) * 100.0,
+                    "ci05": future - historical - 0.1,
+                    "ci95": future - historical + 0.1,
+                    "percent_ci05": (future / historical - 1.0) * 100.0 - 1.0,
+                    "percent_ci95": (future / historical - 1.0) * 100.0 + 1.0,
+                }
+                for metric in REGIONAL_RAIN_METRICS
+            }
             footprints = {
                 season: {
                     "historical_samples": 2,
@@ -54,19 +68,37 @@ class ImpactTests(unittest.TestCase):
             }
             years = [{metric: historical for metric in INDIA_METRICS} for _ in range(2)]
             future_years = [{metric: future for metric in INDIA_METRICS} for _ in range(2)]
+            region_years = [
+                {metric: historical for metric in REGIONAL_RAIN_METRICS} for _ in range(2)
+            ]
+            future_region_years = [
+                {metric: future for metric in REGIONAL_RAIN_METRICS} for _ in range(2)
+            ]
             return {
                 "id": model_id,
                 "source_label": model_id,
                 "pair": {
                     "india_jjas_changes": changes,
+                    "regional_india_jjas_changes": {
+                        "east": {
+                            "label": "East",
+                            "state_ids": ["odisha"],
+                            "grid_cells": 2,
+                            "changes": regional_changes,
+                        }
+                    },
                     "storm_centred_precipitation": {
                         "relative_longitude_deg": [-0.5, 0.5],
                         "relative_latitude_deg": [-0.5, 0.5],
                         "seasons": footprints,
                     },
                 },
-                "historical": {"india_jjas_rainfall": {"years": years}},
-                "future": {"india_jjas_rainfall": {"years": future_years}},
+                "historical": {"india_jjas_rainfall": {"years": years, "regions": {
+                    "east": {"years": region_years}
+                }}},
+                "future": {"india_jjas_rainfall": {"years": future_years, "regions": {
+                    "east": {"years": future_region_years}
+                }}},
             }
 
         result = aggregate_impact_payloads(
@@ -81,6 +113,13 @@ class ImpactTests(unittest.TestCase):
         self.assertAlmostEqual(rainfall["future"], 6.0)
         self.assertAlmostEqual(rainfall["percent_change"], 20.0)
         self.assertEqual(len(rainfall["models"]), 2)
+        regional = result["regional_india_jjas_changes"]["east"]
+        self.assertAlmostEqual(
+            regional["changes"]["regional_mean_mm_day"]["percent_change"], 20.0
+        )
+        self.assertEqual(
+            len(regional["changes"]["regional_mean_mm_day"]["models"]), 2
+        )
         self.assertEqual(footprint["model_count"], 2)
         self.assertAlmostEqual(footprint["historical_mean_mm"][0][0], 5.0)
         self.assertAlmostEqual(footprint["future_mean_mm"][0][0], 6.0)
