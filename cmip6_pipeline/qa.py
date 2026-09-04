@@ -352,7 +352,36 @@ def validate_catalogue(
                 months=months,
                 years=years,
             )
-            screen["reference_catalogue_sha256"] = sha256(reference)
+            reference_sha256 = sha256(reference)
+            screen["reference_catalogue_sha256"] = reference_sha256
+            jjas_screen = historical_screen(
+                frame,
+                reference_frame,
+                start=start,
+                end=end,
+                months=[6, 7, 8, 9],
+                years=years,
+            )
+            jjas_screen["reference_catalogue_sha256"] = reference_sha256
+            all_month_status = screen["screening_status"]
+            screen["seasonal"] = {"jjas": jjas_screen}
+            screen["screening_components"] = {
+                "all_months": all_month_status,
+                "jjas": jjas_screen["screening_status"],
+            }
+            if years >= 10:
+                screen["screening_status"] = (
+                    "passes-basic-historical-screen"
+                    if all(
+                        status == "passes-basic-historical-screen"
+                        for status in screen["screening_components"].values()
+                    )
+                    else "review-model-bias"
+                )
+            screen["interpretation"] = (
+                "Historical-performance screen for both all months and JJAS. Flags diagnose "
+                "model and resolution bias; they do not retune the detector or intensity thresholds."
+            )
             record["historical_screen"] = screen
     return record
 

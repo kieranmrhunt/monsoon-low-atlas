@@ -69,6 +69,21 @@ class CatalogueQaTest(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["checks"]["duplicate_track_times"], 1)
 
+    def test_historical_screen_reports_jjas_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, plan = self.write_inputs(root, catalogue())
+            metadata = json.loads(plan.read_text())
+            metadata["run"]["experiment_id"] = "historical"
+            plan.write_text(json.dumps(metadata))
+            reference = root / "reference.parquet"
+            catalogue().assign(track_id=9).to_parquet(reference, index=False)
+            result = validate_catalogue(source, plan, reference=reference)
+        screen = result["historical_screen"]
+        self.assertIn("jjas", screen["seasonal"])
+        self.assertEqual(screen["screening_components"]["all_months"], "engineering-sample-only")
+        self.assertEqual(screen["screening_components"]["jjas"], "engineering-sample-only")
+
 
 if __name__ == "__main__":
     unittest.main()
