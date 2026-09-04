@@ -1855,6 +1855,10 @@
 				}
 				return exact;
 			}
+			// Reanalysis metadata may trigger a render while the referenced
+			// forecast payload is still loading. Keep the URL-owned selection
+			// pending; loadSelectedModels will validate it once all runs settle.
+			if (state.loading || state.requestedSystem) return null;
 			clearForecastSelection();
 		}
 		let group = state.selectedSystem
