@@ -366,12 +366,27 @@ def bootstrap_change(
     left = left[np.isfinite(left)]
     right = right[np.isfinite(right)]
     if not len(left) or not len(right):
-        return {"historical": None, "future": None, "absolute_change": None, "percent_change": None, "ci05": None, "ci95": None}
+        return {
+            "historical": None,
+            "future": None,
+            "absolute_change": None,
+            "percent_change": None,
+            "ci05": None,
+            "ci95": None,
+            "percent_ci05": None,
+            "percent_ci95": None,
+        }
     rng = np.random.default_rng(seed)
-    differences = (
-        right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1)
-        - left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1)
+    future_draws = right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1)
+    historical_draws = left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1)
+    differences = future_draws - historical_draws
+    percentage_draws = np.divide(
+        differences * 100.0,
+        historical_draws,
+        out=np.full(differences.shape, np.nan),
+        where=historical_draws != 0,
     )
+    percentage_draws = percentage_draws[np.isfinite(percentage_draws)]
     historical_mean = float(left.mean())
     future_mean = float(right.mean())
     return {
@@ -381,6 +396,8 @@ def bootstrap_change(
         "percent_change": ((future_mean / historical_mean) - 1.0) * 100.0 if historical_mean != 0 else None,
         "ci05": float(np.quantile(differences, 0.05)),
         "ci95": float(np.quantile(differences, 0.95)),
+        "percent_ci05": float(np.quantile(percentage_draws, 0.05)) if len(percentage_draws) else None,
+        "percent_ci95": float(np.quantile(percentage_draws, 0.95)) if len(percentage_draws) else None,
     }
 
 

@@ -15,7 +15,7 @@ import pandas as pd
 
 from reanalysis_pipeline.common import sha256
 
-from .standardise_era5 import DEFAULT_BADC_ROOT, DEFAULT_SOURCE_ROOT, lnsp_path
+from .standardise_era5 import DEFAULT_BADC_ROOT, DEFAULT_SOURCE_ROOT
 
 
 SCHEMA = "lps-atlas-era5-common-grid-plan-v1"
@@ -47,7 +47,7 @@ def months(start: str, end: str) -> list[str]:
     return [period.strftime("%Y%m") for period in pd.period_range(start, end, freq="M")]
 
 
-def _verify_month(source_root: Path, badc_root: Path, month: str) -> None:
+def _verify_month(source_root: Path, month: str) -> None:
     period = pd.Period(month, freq="M")
     next_month = (period + 1).strftime("%Y%m")
     for path in (
@@ -56,12 +56,6 @@ def _verify_month(source_root: Path, badc_root: Path, month: str) -> None:
         source_root / "hourly_sfc_SA" / f"{month}.nc",
         source_root / "hourly_precip_SA" / f"{month}.nc",
     ):
-        if not path.is_file():
-            raise FileNotFoundError(path)
-    start = period.start_time
-    end = (period + 1).start_time - pd.Timedelta(hours=1)
-    for timestamp in (start, end):
-        path = lnsp_path(badc_root, timestamp)
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -87,7 +81,7 @@ def build_plan(
         (pd.Period(core_end, freq="M") + 1).strftime("%Y%m"),
     )
     for month in standard:
-        _verify_month(source_root, badc_root, month)
+        _verify_month(source_root, month)
 
     period_root = run_root / "era5-1deg-control-historical-analysis-common-1deg"
     data_root = period_root / "data"
@@ -127,7 +121,7 @@ def build_plan(
     _atomic_json(period_root / "period-plan.json", period_plan)
     _atomic_tsv(
         run_root / "standardise.tsv",
-        [[index, month, data_root, source_root, badc_root] for index, month in enumerate(standard, start=1)],
+        [[index, month, data_root, source_root, badc_root, static_file, "estimate"] for index, month in enumerate(standard, start=1)],
     )
     _atomic_tsv(
         run_root / "detect.tsv",
@@ -147,7 +141,8 @@ def build_plan(
             "tasks": {"standardise": len(standard), "detect": len(core), "link_periods": 1},
             "method": (
                 "ERA5 pressure-level and surface fields sampled to the exact common 1-degree "
-                "nodes; vorticity recomputed after spatial sampling; actual ERA5 surface pressure; "
+                "nodes; vorticity recomputed after spatial sampling; terrain-validity surface "
+                "pressure estimated consistently from hourly MSLP and fixed ERA5 orography; "
                 "frozen v5.6 detector, linker, event gate and v5.5.1 intensity classifier."
             ),
         },

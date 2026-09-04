@@ -1,0 +1,21 @@
+{
+  "schema": "lps-atlas-era5-surface-pressure-estimate-audit-v1",
+  "period": "1981-06",
+  "grid": "1 degree, 45--120E, 15S--45N",
+  "actual": "ERA5 exp(lnsp) from /badc/ecmwf-era5/data/oper/an_ml",
+  "estimate": "ERA5 MSLP multiplied by the standard-atmosphere elevation factor using fixed ERA5 orography",
+  "absolute_error_hpa": {
+    "mean_signed": -1.7371218,
+    "median_absolute": 0.18719482,
+    "p90_absolute": 7.08045044,
+    "p95_absolute": 10.92309875,
+    "p99_absolute": 16.87522095,
+    "maximum_absolute": 47.147766
+  },
+  "pressure_level_validity_mismatch_fraction": {
+    "850_hpa_with_20_hpa_buffer": 0.0060435840,
+    "700_hpa_with_20_hpa_buffer": 0.0024383448,
+    "500_hpa_with_20_hpa_buffer": 0.0029012079
+  },
+  "interpretation": "The estimate is a terrain-validity approximation, not a replacement meteorological surface-pressure field. It is used consistently across the ERA5 common-grid control to avoid mixing available and missing lnsp years."
+}

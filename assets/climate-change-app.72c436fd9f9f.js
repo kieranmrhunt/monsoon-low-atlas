@@ -37,9 +37,20 @@
 		mean_peak_pressure_deficit_hpa: {label: 'Mean peak pressure deficit', unit: 'hPa', digits: 1},
 		mean_peak_24h_precipitation_mm: {label: 'Mean peak 24 h precipitation', unit: 'mm', digits: 1}
 	};
+	const RAIN_METRICS = {
+		exposed_mean_mm_day: {label: 'Rain within 800 km of LPS', unit: 'mm day⁻¹', digits: 1},
+		all_india_mean_mm_day: {label: 'All-India mean rain', unit: 'mm day⁻¹', digits: 1},
+		rainfall_share: {label: 'Rainfall on LPS-exposed cell-days', unit: '%', digits: 1, fraction: true},
+		climatological_excess_share: {label: 'LPS-day excess above climatology', unit: '%', digits: 1, fraction: true},
+		month_control_excess_share: {label: 'LPS-day excess above same-month control', unit: '%', digits: 1, fraction: true},
+		exposed_area_day_fraction: {label: 'LPS-exposed area-days', unit: '%', digits: 1, fraction: true},
+		exposed_to_all_rain_ratio: {label: 'Exposed / all-day rain ratio', unit: '×', digits: 2},
+		heavy_20mm_exposed_cell_day_share: {label: '20 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true},
+		heavy_50mm_exposed_cell_day_share: {label: '50 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true}
+	};
 	const VALID_SEASONS = new Set(['all', 'jjas', 'mam', 'ond', 'djf']);
 	const PUBLISHED_STATUSES = new Set(['validated-production-window', 'multi-model-awaiting-review']);
-	const state = {pair: '', season: 'jjas', metric: 'systems'};
+	const state = {pair: '', season: 'jjas', metric: 'systems', rainMetric: 'exposed_mean_mm_day'};
 	const cache = new Map();
 	let index = null;
 	let current = null;
@@ -53,6 +64,7 @@
 			if (typeof stored.pair === 'string') state.pair = stored.pair;
 			if (VALID_SEASONS.has(stored.season)) state.season = stored.season;
 			if (Object.hasOwn(METRICS, stored.metric)) state.metric = stored.metric;
+			if (Object.hasOwn(RAIN_METRICS, stored.rainMetric)) state.rainMetric = stored.rainMetric;
 		} catch (_) {
 			// Private browsing can disable storage without disabling the atlas.
 		}
@@ -60,6 +72,7 @@
 		if (parameters.has('cmpair')) state.pair = parameters.get('cmpair');
 		if (VALID_SEASONS.has(parameters.get('cmseason'))) state.season = parameters.get('cmseason');
 		if (Object.hasOwn(METRICS, parameters.get('cmmetric'))) state.metric = parameters.get('cmmetric');
+		if (Object.hasOwn(RAIN_METRICS, parameters.get('cmrain'))) state.rainMetric = parameters.get('cmrain');
 	}
 
 	function writeState() {
@@ -72,6 +85,7 @@
 		url.searchParams.set('cmpair', state.pair);
 		url.searchParams.set('cmseason', state.season);
 		url.searchParams.set('cmmetric', state.metric);
+		url.searchParams.set('cmrain', state.rainMetric);
 		history.replaceState(null, '', url);
 	}
 
@@ -122,10 +136,11 @@
 	}
 
 	async function loadPair(pair) {
-		const [historical, future, change] = await Promise.all([
+		const [historical, future, change, impact] = await Promise.all([
 			fetchJson(assetUrl(pair.historical.url)),
 			fetchJson(assetUrl(pair.future.url)),
-			fetchJson(assetUrl(pair.change.url))
+			fetchJson(assetUrl(pair.change.url)),
+			pair.impact ? fetchJson(assetUrl(pair.impact.url)) : Promise.resolve(null)
 		]);
 		if (historical.schema !== 'lps-atlas-cmip6-climate-summary-v2' || future.schema !== historical.schema) {
 			throw new Error('Climate run assets use an unsupported schema.');
@@ -136,7 +151,13 @@
 		if (change.schema !== expectedChangeSchema) {
 			throw new Error('Climate change asset uses an unsupported schema.');
 		}
-		return {pair, historical, future, change};
+		const expectedImpactSchema = pair.kind === 'multi-model'
+			? 'lps-atlas-cmip6-precipitation-impact-ensemble-v1'
+			: 'lps-atlas-cmip6-precipitation-impact-pair-v1';
+		if (impact && impact.schema !== expectedImpactSchema) {
+			throw new Error('Climate precipitation asset uses an unsupported schema.');
+		}
+		return {pair, historical, future, change, impact};
 	}
 
 	function populateControls() {
@@ -160,6 +181,7 @@
 			return option;
 		}));
 		metricControl.value = state.metric;
+		$('#mlaClimateRainMetric').value = state.rainMetric;
 	}
 
 	function css(name, fallback) {
@@ -183,7 +205,11 @@
 	}
 
 	function finite(values) {
-		return values.filter(value => value !== null && value !== '' && value !== undefined).map(Number).filter(Number.isFinite);
+		return values.filter(numberAvailable).map(Number);
+	}
+
+	function numberAvailable(value) {
+		return value !== null && value !== '' && value !== undefined && Number.isFinite(Number(value));
 	}
 
 	function extent(values, includeZero) {
@@ -367,8 +393,8 @@
 			percent_change: change.percent_change,
 			ci05: change.ci05,
 			ci95: change.ci95,
-			percent_ci05: null,
-			percent_ci95: null
+			percent_ci05: change.percent_ci05,
+			percent_ci95: change.percent_ci95
 		}];
 	}
 
@@ -381,7 +407,7 @@
 	function drawModelChanges() {
 		const canvas = $('#mlaClimateModelChange');
 		const {context, width, height} = setupCanvas(canvas);
-		const records = selectedModelChanges().filter(record => Number.isFinite(Number(record.percent_change)));
+		const records = selectedModelChanges().filter(record => numberAvailable(record.percent_change));
 		const status = $('#mlaClimateModelChangeStatus');
 		const data = $('#mlaClimateModelChangeData');
 		if (!records.length) {
@@ -392,7 +418,7 @@
 			data.textContent = '';
 			return;
 		}
-		const intervalValues = records.flatMap(record => [record.percent_ci05, record.percent_change, record.percent_ci95]).map(Number).filter(Number.isFinite);
+		const intervalValues = finite(records.flatMap(record => [record.percent_ci05, record.percent_change, record.percent_ci95]));
 		const scale = Math.max(5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
 		const left = Math.min(132, Math.max(90, width * .29)), right = width - 31, top = 28, bottom = height - 40;
 		const rowGap = (bottom - top) / Math.max(1, records.length);
@@ -419,7 +445,7 @@
 			context.textBaseline = 'middle';
 			context.fillText(record.label, left - 9, y);
 			const low = Number(record.percent_ci05), high = Number(record.percent_ci95);
-			if (Number.isFinite(low) && Number.isFinite(high)) {
+			if (numberAvailable(record.percent_ci05) && numberAvailable(record.percent_ci95)) {
 				context.strokeStyle = record.colour;
 				context.lineWidth = 2;
 				context.beginPath(); context.moveTo(x(low), y); context.lineTo(x(high), y); context.stroke();
@@ -438,7 +464,7 @@
 		const robustNegative = records.filter(record => Number(record.percent_ci95) < 0).length;
 		status.textContent = `${positive}/${records.length} increase · ${negative}/${records.length} decrease · ${robustPositive + robustNegative} intervals exclude zero`;
 		const metric = METRICS[state.metric];
-		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(valueText(record.historical, metric))}</td><td>${esc(valueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(Number.isFinite(Number(record.percent_ci05)) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(valueText(record.historical, metric))}</td><td>${esc(valueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(numberAvailable(record.percent_ci05) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
 	}
 
 	function historicalScreenRecords() {
@@ -518,6 +544,208 @@
 		const continuous = state.metric.startsWith('mean_');
 		status.textContent = `${within}/${records.length} within a factor of two${continuous ? ' · historical comparison uses event medians' : ''}`;
 		data.innerHTML = `<table><thead><tr><th>Model</th><th>Model / ERA5</th><th>Within factor two</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${record.value.toFixed(2)}</td><td>${record.value >= .5 && record.value <= 2 ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function rainfallRecords() {
+		if (!current.impact) return [];
+		const change = current.impact.india_jjas_changes[state.rainMetric];
+		if (!change) return [];
+		if (current.pair.kind === 'multi-model' && Array.isArray(change.models)) {
+			return change.models.map((record, ordinal) => ({
+				...record,
+				label: record.source_label || modelLabel(record.id),
+				colour: modelColour(record.id, ordinal)
+			}));
+		}
+		return [{...change, id: current.pair.id, label: current.pair.source_label, colour: modelColour(current.pair.id, 0)}];
+	}
+
+	function rainValueText(value, metric) {
+		if (!numberAvailable(value)) return '—';
+		const number = Number(value) * (metric.fraction ? 100 : 1);
+		return metric.unit === '×' ? `${number.toFixed(metric.digits)}×` : `${number.toFixed(metric.digits)} ${metric.unit}`;
+	}
+
+	function drawRainfallChanges() {
+		const card = $('#mlaClimateRainfallCard');
+		card.hidden = !current.impact;
+		if (!current.impact) return;
+		const canvas = $('#mlaClimateRainfallChange');
+		const {context, width, height} = setupCanvas(canvas);
+		const records = rainfallRecords().filter(record => numberAvailable(record.percent_change));
+		const status = $('#mlaClimateRainfallStatus');
+		const data = $('#mlaClimateRainfallData');
+		const change = current.impact.india_jjas_changes[state.rainMetric];
+		if (!records.length || !change) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('This rainfall measure is unavailable.', width / 2, height / 2);
+			status.textContent = '';
+			data.textContent = '';
+			return;
+		}
+		const intervalValues = finite(records.flatMap(record => [record.percent_ci05, record.percent_change, record.percent_ci95]));
+		const scale = Math.max(5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
+		const left = Math.min(158, Math.max(108, width * .25)), right = width - 31, top = 28, bottom = height - 40;
+		const rowGap = (bottom - top) / Math.max(1, records.length);
+		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
+		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line;
+		context.fillStyle = muted;
+		context.lineWidth = 1;
+		context.textAlign = 'center';
+		context.textBaseline = 'top';
+		for (const fraction of [-1, -.5, 0, .5, 1]) {
+			const value = fraction * scale;
+			const px = x(value);
+			context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke();
+			context.fillText(`${Math.round(value)}%`, px, bottom + 8);
+		}
+		context.strokeStyle = ink;
+		context.lineWidth = 1.5;
+		context.beginPath(); context.moveTo(x(0), top - 8); context.lineTo(x(0), bottom + 4); context.stroke();
+		records.forEach((record, ordinal) => {
+			const y = top + (ordinal + .5) * rowGap;
+			context.fillStyle = ink;
+			context.textAlign = 'right';
+			context.textBaseline = 'middle';
+			context.fillText(record.label, left - 9, y);
+			if (numberAvailable(record.percent_ci05) && numberAvailable(record.percent_ci95)) {
+				const low = Number(record.percent_ci05), high = Number(record.percent_ci95);
+				context.strokeStyle = record.colour;
+				context.lineWidth = 2;
+				context.beginPath(); context.moveTo(x(low), y); context.lineTo(x(high), y); context.stroke();
+				for (const value of [low, high]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
+			}
+			context.fillStyle = record.colour;
+			context.beginPath(); context.arc(x(record.percent_change), y, 5, 0, Math.PI * 2); context.fill();
+		});
+		context.fillStyle = muted;
+		context.textAlign = 'center';
+		context.textBaseline = 'bottom';
+		context.fillText('future − historical (%)', (left + right) / 2, height - 2);
+		const positive = records.filter(record => Number(record.percent_change) > 0).length;
+		const robust = records.filter(record => Number(record.percent_ci05) > 0 || Number(record.percent_ci95) < 0).length;
+		status.textContent = current.pair.kind === 'multi-model'
+			? `${signedPercent(change.percent_change)} equal-model mean (${signedPercent(change.percent_ci05)} to ${signedPercent(change.percent_ci95)}) · ${positive}/${records.length} models increase · ${robust}/${records.length} individual intervals exclude zero`
+			: `${signedPercent(change.percent_change)} (${signedPercent(change.percent_ci05)} to ${signedPercent(change.percent_ci95)})`;
+		const metric = RAIN_METRICS[state.rainMetric];
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(rainValueText(record.historical, metric))}</td><td>${esc(rainValueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(numberAvailable(record.percent_ci05) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function matrixMean(matrix) {
+		const values = finite((matrix || []).flat());
+		return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : NaN;
+	}
+
+	function drawFootprintMap(canvas, matrix, mode, scale, longitudes, latitudes) {
+		const {context, width, height} = setupCanvas(canvas);
+		if (!Array.isArray(matrix) || !matrix.length) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('No footprint available', width / 2, height / 2);
+			return;
+		}
+		const left = 43, top = 10;
+		const size = Math.max(110, Math.min(width - left - 10, height - top - 72));
+		const plot = {left, right: left + size, top, bottom: top + size};
+		const west = Number(longitudes[0]) - .5, east = Number(longitudes.at(-1)) + .5;
+		const south = Number(latitudes[0]) - .5, north = Number(latitudes.at(-1)) + .5;
+		const project = (lon, lat) => [
+			plot.left + (lon - west) / (east - west) * size,
+			plot.bottom - (lat - south) / (north - south) * size
+		];
+		const sequential = [[255, 255, 245], [205, 239, 98], [254, 211, 76], [245, 121, 60], [181, 45, 109], [75, 20, 112]];
+		const diverging = [[178, 24, 43], [239, 138, 98], [255, 255, 255], [103, 169, 207], [33, 102, 172]];
+		context.fillStyle = '#fff';
+		context.fillRect(plot.left, plot.top, size, size);
+		for (let row = 0; row < matrix.length; row += 1) {
+			for (let column = 0; column < matrix[row].length; column += 1) {
+				if (!numberAvailable(matrix[row][column])) continue;
+				const value = Number(matrix[row][column]);
+				const fraction = mode === 'change' ? .5 + .5 * value / scale : Math.sqrt(Math.max(0, value) / scale);
+				context.fillStyle = interpolateColour(mode === 'change' ? diverging : sequential, fraction);
+				const [x0, y0] = project(Number(longitudes[column]) - .5, Number(latitudes[row]) + .5);
+				const [x1, y1] = project(Number(longitudes[column]) + .5, Number(latitudes[row]) - .5);
+				context.fillRect(x0, y0, Math.max(1, x1 - x0 + .4), Math.max(1, y1 - y0 + .4));
+			}
+		}
+		context.strokeStyle = 'rgba(32,35,52,.65)';
+		context.lineWidth = 1;
+		context.strokeRect(plot.left, plot.top, size, size);
+		const [centreX, centreY] = project(0, 0);
+		context.strokeStyle = '#111';
+		context.lineWidth = 1.5;
+		context.beginPath(); context.arc(centreX, centreY, 4.5, 0, Math.PI * 2); context.stroke();
+		context.fillStyle = css('--mla-muted', '#5f6574');
+		context.font = `11px ${FONT}`;
+		context.textAlign = 'center';
+		context.textBaseline = 'top';
+		for (const value of [-10, -5, 0, 5, 10]) {
+			const [x] = project(value, south);
+			context.fillText(String(value), x, plot.bottom + 5);
+		}
+		context.fillText('relative longitude (°)', (plot.left + plot.right) / 2, plot.bottom + 20);
+		context.textAlign = 'right';
+		context.textBaseline = 'middle';
+		for (const value of [-10, -5, 0, 5, 10]) {
+			const [, y] = project(west, value);
+			context.fillText(String(value), plot.left - 5, y);
+		}
+		context.save();
+		context.translate(11, (plot.top + plot.bottom) / 2);
+		context.rotate(-Math.PI / 2);
+		context.textAlign = 'center';
+		context.fillText('relative latitude (°)', 0, 0);
+		context.restore();
+		const legendWidth = Math.min(150, size * .62), legendX = plot.left + (size - legendWidth) / 2, legendY = plot.bottom + 42;
+		for (let index = 0; index < legendWidth; index += 1) {
+			context.fillStyle = interpolateColour(mode === 'change' ? diverging : sequential, index / Math.max(1, legendWidth - 1));
+			context.fillRect(legendX + index, legendY, 1.2, 7);
+		}
+		context.fillStyle = css('--mla-ink', '#202334');
+		context.textBaseline = 'top';
+		context.textAlign = 'left';
+		context.fillText(mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
+		context.textAlign = 'center';
+		context.fillText('mm / 24 h', legendX + legendWidth / 2, legendY + 9);
+		context.textAlign = 'right';
+		context.fillText(mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
+	}
+
+	function drawFootprints() {
+		const card = $('#mlaClimateFootprintCard');
+		card.hidden = !current.impact;
+		if (!current.impact) return;
+		const footprint = current.impact.storm_centred_precipitation;
+		const season = footprint.seasons[state.season];
+		const status = $('#mlaClimateFootprintStatus');
+		if (!season || !Array.isArray(season.historical_mean_mm)) {
+			for (const selector of ['#mlaClimateFootprintHistorical', '#mlaClimateFootprintFuture', '#mlaClimateFootprintChange']) {
+				drawFootprintMap($(selector), null, 'sequential', 1, [], []);
+			}
+			status.textContent = 'No storm-centred precipitation samples are available for this season.';
+			return;
+		}
+		const historicalValues = finite(season.historical_mean_mm.flat());
+		const futureValues = finite(season.future_mean_mm.flat());
+		const changeValues = finite(season.change_mm.flat());
+		const sequentialScale = Math.max(.1, quantile([...historicalValues, ...futureValues], .98));
+		const changeScale = Math.max(.1, quantile(changeValues.map(Math.abs), .98));
+		const longitudes = footprint.relative_longitude_deg, latitudes = footprint.relative_latitude_deg;
+		drawFootprintMap($('#mlaClimateFootprintHistorical'), season.historical_mean_mm, 'sequential', sequentialScale, longitudes, latitudes);
+		drawFootprintMap($('#mlaClimateFootprintFuture'), season.future_mean_mm, 'sequential', sequentialScale, longitudes, latitudes);
+		drawFootprintMap($('#mlaClimateFootprintChange'), season.change_mm, 'change', changeScale, longitudes, latitudes);
+		const row = latitudes.reduce((best, value, index) => Math.abs(value) < Math.abs(latitudes[best]) ? index : best, 0);
+		const column = longitudes.reduce((best, value, index) => Math.abs(value) < Math.abs(longitudes[best]) ? index : best, 0);
+		const domain = (matrixMean(season.future_mean_mm) / matrixMean(season.historical_mean_mm) - 1) * 100;
+		const centre = (Number(season.future_mean_mm[row][column]) / Number(season.historical_mean_mm[row][column]) - 1) * 100;
+		const seasonLabel = state.season === 'all' ? 'All months' : state.season.toUpperCase();
+		if (current.pair.kind === 'multi-model') {
+			status.textContent = `${season.model_count} models · ${seasonLabel} domain mean ${signedPercent(domain)} · centre ${signedPercent(centre)}`;
+		} else {
+			status.textContent = `${season.historical_samples} historical and ${season.future_samples} future systems · ${seasonLabel} domain mean ${signedPercent(domain)} · centre ${signedPercent(centre)}`;
+		}
 	}
 
 	function interpolateColour(stops, fraction) {
@@ -721,6 +949,8 @@
 		requestAnimationFrame(() => {
 			drawModelChanges();
 			drawHistoricalAgreement();
+			drawRainfallChanges();
+			drawFootprints();
 			drawAnnual();
 			drawMonthly();
 			drawClasses();
@@ -786,6 +1016,11 @@
 	});
 	$('#mlaClimateMetric').addEventListener('change', event => {
 		state.metric = event.target.value;
+		writeState();
+		render();
+	});
+	$('#mlaClimateRainMetric').addEventListener('change', event => {
+		state.rainMetric = event.target.value;
 		writeState();
 		render();
 	});

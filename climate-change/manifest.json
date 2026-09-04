@@ -1,5 +1,7 @@
 {
-  "generated_utc": "2026-09-04T10:26:29Z",
+  "generated_utc": "2026-09-04T11:05:45Z",
+  "impact_models": 5,
+  "impact_schema": "lps-atlas-cmip6-precipitation-impact-ensemble-v1",
   "included_pair_ids": [
     "202d09fe9eb81efb",
     "3aaf90618e6e5382",
@@ -8,9 +10,9 @@
     "cd2cf54dc5ded1df"
   ],
   "index": {
-    "bytes": 19433,
-    "path": "climate-index.92323dfc8ba6.json.gz",
-    "sha256": "aa73e5d78e982edfc0c5df11940f1b9b42e41249cbfa7bf90637716d7bcf244f"
+    "bytes": 19832,
+    "path": "climate-index.372c9ce9b248.json.gz",
+    "sha256": "95d149a31588470d7e826390d65c758af8f5db6d5d8e6854b5d9169f09a7ad0a"
   },
   "models": 5,
   "pairs": 6,

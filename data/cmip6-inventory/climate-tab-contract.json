@@ -97,7 +97,7 @@
     "Run at least the 1981-2010 and 2071-2100 windows for every admitted model/scenario pair.",
     "Apply common-grid final-centre wind, pressure-deficit and actual closed-isobar intensity classification using a common land mask.",
     "Quantify 1-degree versus native-grid sensitivity for a representative high-resolution model.",
-    "Run ERA5 itself through the common 1-degree input contract to isolate detector resolution effects.",
+    "Run ERA5 itself through the common 1-degree input contract to isolate detector resolution effects; use one documented MSLP-orography surface-pressure estimate across the control because the migrated CEDA/BADC lnsp tree is incomplete.",
     "Validate Gregorian, no-leap and 360-day calendar identity without mapping nonexistent dates into civil time.",
     "Report historical frequency and intensity biases against ERA5 separately from projected paired changes."
   ],

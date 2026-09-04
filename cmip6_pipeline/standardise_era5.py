@@ -4,8 +4,9 @@
 This is the resolution-control experiment for the climate-change tab.  ERA5
 pressure-level winds are sampled at the exact 1-degree target nodes before
 vorticity is recomputed, so the detector sees the same spatial grid and file
-contract as every CMIP6 model.  Actual hourly ERA5 surface pressure is restored
-from the logarithmic surface-pressure analysis in the CEDA archive.
+contract as every CMIP6 model.  Surface pressure is estimated reproducibly from
+hourly MSLP and fixed ERA5 orography because the CEDA logarithmic-pressure tree
+is incomplete for the control period; an actual-lnsp option remains for audits.
 """
 
 from __future__ import annotations
@@ -37,6 +38,9 @@ from .standardise import validate_month
 SCHEMA = "lps-atlas-era5-common-grid-month-v1"
 DEFAULT_SOURCE_ROOT = Path("/home/users/kieran/ncas/data/era5-incompass")
 DEFAULT_BADC_ROOT = Path("/badc/ecmwf-era5/data")
+STANDARD_GRAVITY_MS2 = 9.80665
+STANDARD_LAPSE_PRESSURE_COEFFICIENT_M1 = 2.25577e-5
+STANDARD_LAPSE_PRESSURE_EXPONENT = 5.25588
 
 
 def utc_now() -> str:
@@ -151,7 +155,7 @@ def lnsp_path(badc_root: Path, timestamp: pd.Timestamp) -> Path:
     )
 
 
-def surface_pressure(badc_root: Path, times: pd.DatetimeIndex) -> tuple[xr.DataArray, list[Path]]:
+def surface_pressure_from_badc(badc_root: Path, times: pd.DatetimeIndex) -> tuple[xr.DataArray, list[Path]]:
     values = np.empty((len(times), len(TARGET_LATS), len(TARGET_LONS)), dtype=np.float32)
     paths: list[Path] = []
     for index, timestamp in enumerate(times):
@@ -173,10 +177,40 @@ def surface_pressure(badc_root: Path, times: pd.DatetimeIndex) -> tuple[xr.DataA
     return result, paths
 
 
+def estimated_surface_pressure(msl: xr.DataArray, static_file: Path) -> xr.DataArray:
+    with xr.open_dataset(static_file) as source:
+        if "z" not in source:
+            raise ValueError(f"{static_file} does not contain surface geopotential z")
+        static = _sample_exact_nodes(_normalise(source[["z"]])).load()
+    units = str(static.z.attrs.get("units", "")).lower().replace(" ", "")
+    if "m**2" not in units and "m2s-2" not in units:
+        raise ValueError(f"{static_file}: cannot interpret z units {static.z.attrs.get('units')!r}")
+    orography = np.asarray(static.z.values, dtype=np.float32) / np.float32(STANDARD_GRAVITY_MS2)
+    pressure_hpa = np.asarray(msl.values, dtype=np.float32) / np.float32(100.0)
+    base = np.float32(1.0) - np.float32(STANDARD_LAPSE_PRESSURE_COEFFICIENT_M1) * orography
+    if np.any(base <= 0.0):
+        raise ValueError("static orography is outside the standard-atmosphere pressure range")
+    estimate_pa = pressure_hpa * np.power(base[None, :, :], np.float32(STANDARD_LAPSE_PRESSURE_EXPONENT)) * np.float32(100.0)
+    result = xr.DataArray(
+        estimate_pa.astype(np.float32),
+        dims=("time", "latitude", "longitude"),
+        coords={"time": msl.time, "latitude": TARGET_LATS, "longitude": TARGET_LONS},
+        name="sp",
+    )
+    result.attrs.update(
+        {
+            "long_name": "estimated surface pressure for pressure-level validity",
+            "units": "Pa",
+            "source": "standard-atmosphere reduction of ERA5 MSLP using fixed ERA5 orography",
+        }
+    )
+    return result
+
+
 def _attrs(month: str, temporal_basis: str) -> dict[str, str]:
     return {
         "title": f"ERA5 sampled to the common CMIP6 LPS grid, {month}",
-        "source": "ECMWF ERA5; local regional extracts plus CEDA/BADC logarithmic surface pressure",
+        "source": "ECMWF ERA5 local regional extracts and fixed ERA5 orography",
         "grid": "1 degree, 45--120E, 15S--45N",
         "temporal_basis": temporal_basis,
         "processing": "exact-node 1-degree spatial sampling; vorticity recomputed from sampled winds; frozen v5.6 detector input contract",
@@ -196,12 +230,19 @@ def standardise_month(
     source_root: Path,
     badc_root: Path,
     month: str,
+    *,
+    static_file: Path,
+    surface_pressure_source: str = "estimate",
 ) -> dict[str, Any]:
     paths = standard_paths(output_root, month)
     provenance = paths["provenance"]
     if provenance.is_file():
         try:
             cached = json.loads(provenance.read_text(encoding="utf-8"))
+            if cached.get("surface_pressure_source") != surface_pressure_source:
+                raise ValueError("cached standard month uses a different surface-pressure source")
+            if surface_pressure_source == "estimate" and cached.get("static_sha256") != sha256(static_file):
+                raise ValueError("cached standard month uses a different static field")
             validate_month(output_root, month)
             return cached
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
@@ -213,7 +254,26 @@ def standardise_month(
     pressure, pressure_paths = _open_pressure(source_root, month)
     surface, surface_path = _open_monthly_surface(source_root, month)
     precipitation, precipitation_path = _open_monthly_precipitation(source_root, month)
-    surface_pressure_values, surface_pressure_paths = surface_pressure(badc_root, hourly)
+    if surface_pressure_source == "actual-lnsp":
+        surface_pressure_values, surface_pressure_paths = surface_pressure_from_badc(badc_root, hourly)
+        surface_pressure_record: dict[str, Any] = {
+            "method": "actual ERA5 exp(lnsp)",
+            "archive": str(badc_root),
+            "variable": "lnsp",
+            "files": len(surface_pressure_paths),
+            "first": str(surface_pressure_paths[0]),
+            "last": str(surface_pressure_paths[-1]),
+        }
+    elif surface_pressure_source == "estimate":
+        surface_pressure_values = estimated_surface_pressure(surface.msl, static_file)
+        surface_pressure_record = {
+            "method": "standard-atmosphere estimate from hourly ERA5 MSLP and fixed orography",
+            "static_file": str(static_file),
+            "static_sha256": sha256(static_file),
+            "audit": "data/cmip6-inventory/era5-surface-pressure-estimate-canary.json",
+        }
+    else:
+        raise ValueError(f"unsupported surface-pressure source {surface_pressure_source!r}")
     for value, expected, label in (
         (surface, hourly, "surface"),
         (precipitation, hourly, "precipitation"),
@@ -290,6 +350,8 @@ def standardise_month(
         "created_utc": utc_now(),
         "month": month,
         "experiment_role": "ERA5-as-model spatial-resolution control",
+        "surface_pressure_source": surface_pressure_source,
+        "static_sha256": sha256(static_file) if surface_pressure_source == "estimate" else None,
         "source_files": {
             "pressure_level": [
                 {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256(path)}
@@ -297,19 +359,14 @@ def standardise_month(
             ],
             "surface": {"path": str(surface_path), "bytes": surface_path.stat().st_size, "sha256": sha256(surface_path)},
             "precipitation": {"path": str(precipitation_path), "bytes": precipitation_path.stat().st_size, "sha256": sha256(precipitation_path)},
-            "surface_pressure": {
-                "archive": str(badc_root),
-                "variable": "lnsp",
-                "files": len(surface_pressure_paths),
-                "first": str(surface_pressure_paths[0]),
-                "last": str(surface_pressure_paths[-1]),
-            },
+            "surface_pressure": surface_pressure_record,
         },
         "outputs": {},
         "method": (
             "ERA5 values at the common 1-degree nodes; three-hourly pressure-level winds "
             "interpolated to hourly before spherical vorticity is recomputed; native hourly "
-            "surface and precipitation fields; actual surface pressure exp(lnsp)."
+            "surface and precipitation fields; surface pressure from the explicitly recorded "
+            f"{surface_pressure_source} method."
         ),
     }
     for name in ("vorticity", "surface", "precipitation", "auxiliary"):
@@ -325,13 +382,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument("--badc-root", type=Path, default=DEFAULT_BADC_ROOT)
+    parser.add_argument("--static-file", type=Path, required=True)
+    parser.add_argument("--surface-pressure-source", choices=("estimate", "actual-lnsp"), default="estimate")
     parser.add_argument("--month", required=True)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    report = standardise_month(args.output_root, args.source_root, args.badc_root, args.month)
+    report = standardise_month(
+        args.output_root,
+        args.source_root,
+        args.badc_root,
+        args.month,
+        static_file=args.static_file,
+        surface_pressure_source=args.surface_pressure_source,
+    )
     print(json.dumps({"month": report["month"], "schema": report["schema"], "status": "complete"}))
 
 

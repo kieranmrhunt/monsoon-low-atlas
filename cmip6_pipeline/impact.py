@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from .summarise import atomic_gzip_json, bootstrap_change
 
 RUN_SCHEMA = "lps-atlas-cmip6-precipitation-impact-v1"
 PAIR_SCHEMA = "lps-atlas-cmip6-precipitation-impact-pair-v1"
+ENSEMBLE_SCHEMA = "lps-atlas-cmip6-precipitation-impact-ensemble-v1"
 EARTH_RADIUS_KM = 6371.0088
 EXPOSURE_RADIUS_KM = 800.0
 FOOTPRINT_OFFSETS = np.arange(-10.0, 10.01, 1.0, dtype=np.float32)
@@ -626,6 +628,227 @@ def build_task_plan(run_root: Path, pair_roots: list[Path], geometry_asset: Path
     return manifest
 
 
+def _manifest_payload(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    asset = Path(manifest["asset"]["path"])
+    if not asset.is_absolute():
+        asset = manifest_path.resolve().parent / asset
+    if sha256(asset) != manifest["asset"]["sha256"]:
+        raise ValueError(f"asset checksum does not match {manifest_path}")
+    return manifest, _load_json(asset), asset
+
+
+def _run_payload(manifest_path: Path) -> dict[str, Any]:
+    _, payload, _ = _manifest_payload(manifest_path)
+    if payload.get("schema") != RUN_SCHEMA:
+        raise ValueError(f"unsupported impact run schema in {manifest_path}")
+    return payload
+
+
+def aggregate_impact_payloads(
+    entries: list[dict[str, Any]],
+    *,
+    samples: int = 5000,
+) -> dict[str, Any]:
+    if len(entries) < 2:
+        raise ValueError("impact ensemble requires at least two models")
+    changes: dict[str, Any] = {}
+    for metric_index, metric in enumerate(INDIA_METRICS):
+        model_records: list[dict[str, Any]] = []
+        historical_draws: list[np.ndarray] = []
+        future_draws: list[np.ndarray] = []
+        rng = np.random.default_rng(8421 + metric_index)
+        for entry in entries:
+            change = entry["pair"]["india_jjas_changes"].get(metric)
+            if change is None:
+                continue
+            left = np.asarray(
+                [record.get(metric, np.nan) for record in entry["historical"]["india_jjas_rainfall"]["years"]],
+                dtype=float,
+            )
+            right = np.asarray(
+                [record.get(metric, np.nan) for record in entry["future"]["india_jjas_rainfall"]["years"]],
+                dtype=float,
+            )
+            left, right = left[np.isfinite(left)], right[np.isfinite(right)]
+            if not len(left) or not len(right):
+                continue
+            historical_draws.append(left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1))
+            future_draws.append(right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1))
+            model_records.append(
+                {
+                    "id": entry["id"],
+                    "source_label": entry["source_label"],
+                    **change,
+                }
+            )
+        if not model_records:
+            changes[metric] = None
+            continue
+        historical = float(np.mean([record["historical"] for record in model_records]))
+        future = float(np.mean([record["future"] for record in model_records]))
+        historical_bootstrap = np.mean(np.stack(historical_draws), axis=0)
+        future_bootstrap = np.mean(np.stack(future_draws), axis=0)
+        difference = future_bootstrap - historical_bootstrap
+        percentage = np.divide(
+            difference * 100.0,
+            historical_bootstrap,
+            out=np.full(difference.shape, np.nan),
+            where=historical_bootstrap != 0,
+        )
+        percentage = percentage[np.isfinite(percentage)]
+        changes[metric] = {
+            "historical": historical,
+            "future": future,
+            "absolute_change": future - historical,
+            "percent_change": (future / historical - 1.0) * 100.0 if historical else None,
+            "ci05": float(np.quantile(difference, .05)),
+            "ci95": float(np.quantile(difference, .95)),
+            "percent_ci05": float(np.quantile(percentage, .05)) if len(percentage) else None,
+            "percent_ci95": float(np.quantile(percentage, .95)) if len(percentage) else None,
+            "model_count": len(model_records),
+            "models": model_records,
+        }
+
+    footprints: dict[str, Any] = {}
+    for season in SEASONS:
+        historical_maps, future_maps, model_records = [], [], []
+        for entry in entries:
+            footprint = entry["pair"]["storm_centred_precipitation"]["seasons"][season]
+            if footprint.get("historical_mean_mm") is None or footprint.get("future_mean_mm") is None:
+                continue
+            left = np.asarray(footprint["historical_mean_mm"], dtype=float)
+            right = np.asarray(footprint["future_mean_mm"], dtype=float)
+            historical_maps.append(left)
+            future_maps.append(right)
+            model_records.append(
+                {
+                    "id": entry["id"],
+                    "source_label": entry["source_label"],
+                    "historical_samples": footprint["historical_samples"],
+                    "future_samples": footprint["future_samples"],
+                    "domain_mean_percent_change": float((np.nanmean(right) / np.nanmean(left) - 1.0) * 100.0),
+                }
+            )
+        if not historical_maps:
+            footprints[season] = {"model_count": 0, "historical_mean_mm": None, "future_mean_mm": None, "change_mm": None, "models": []}
+            continue
+        historical = np.nanmean(np.stack(historical_maps), axis=0)
+        future = np.nanmean(np.stack(future_maps), axis=0)
+        footprints[season] = {
+            "model_count": len(historical_maps),
+            "historical_mean_mm": _json_array(historical, 4),
+            "future_mean_mm": _json_array(future, 4),
+            "change_mm": _json_array(future - historical, 4),
+            "models": model_records,
+        }
+    first = entries[0]["pair"]["storm_centred_precipitation"]
+    return {
+        "schema": ENSEMBLE_SCHEMA,
+        "generated_utc": utc_now(),
+        "aggregation": "one_model_one_vote",
+        "model_count": len(entries),
+        "model_ids": [entry["id"] for entry in entries],
+        "india_jjas_changes": changes,
+        "storm_centred_precipitation": {
+            "relative_longitude_deg": first["relative_longitude_deg"],
+            "relative_latitude_deg": first["relative_latitude_deg"],
+            "seasons": footprints,
+        },
+        "uncertainty": "5th--95th percentile of 5,000 within-model year-resampling draws with one model, one vote",
+    }
+
+
+def _copy_atomic(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + f".part-{os.getpid()}")
+    shutil.copyfile(source, temporary)
+    os.replace(temporary, destination)
+
+
+def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path]) -> Path:
+    climate_manifest = climate_manifest.resolve()
+    output_dir = climate_manifest.parent
+    manifest = json.loads(climate_manifest.read_text(encoding="utf-8"))
+    index_path = output_dir / manifest["index"]["path"]
+    if sha256(index_path) != manifest["index"]["sha256"]:
+        raise ValueError(f"climate index checksum does not match {climate_manifest}")
+    index = _load_json(index_path)
+    pair_records = [pair for pair in index["pairs"] if pair.get("kind") != "multi-model"]
+    pairs_by_identity = {
+        (
+            pair["source_label"],
+            pair["member_id"],
+            pair["historical"]["run"]["experiment_id"],
+            pair["future"]["run"]["experiment_id"],
+        ): pair
+        for pair in pair_records
+    }
+    entries: list[dict[str, Any]] = []
+    assets_dir = output_dir / "assets"
+    for impact_manifest in impact_manifests:
+        impact_meta, impact_payload, impact_asset = _manifest_payload(impact_manifest)
+        if impact_payload.get("schema") != PAIR_SCHEMA:
+            raise ValueError(f"unsupported impact pair schema in {impact_manifest}")
+        identity = (
+            impact_payload["historical"]["source_id"],
+            impact_payload["historical"]["member_id"],
+            impact_payload["historical"]["experiment_id"],
+            impact_payload["future"]["experiment_id"],
+        )
+        if identity not in pairs_by_identity:
+            raise ValueError(f"impact pair {identity} is absent from the climate bundle")
+        pair = pairs_by_identity[identity]
+        destination = assets_dir / impact_asset.name
+        _copy_atomic(impact_asset, destination)
+        pair["impact"] = {
+            "url": f"assets/{destination.name}",
+            "sha256": impact_meta["asset"]["sha256"],
+            "bytes": destination.stat().st_size,
+        }
+        historical_path = Path(impact_meta["historical_manifest"])
+        future_path = Path(impact_meta["future_manifest"])
+        entries.append(
+            {
+                "id": pair["id"],
+                "source_label": pair["source_label"],
+                "pair": impact_payload,
+                "historical": _run_payload(historical_path),
+                "future": _run_payload(future_path),
+            }
+        )
+    if len(entries) != len(pair_records):
+        raise ValueError(f"received {len(entries)} impact pairs for {len(pair_records)} climate pairs")
+    order = {pair["id"]: position for position, pair in enumerate(pair_records)}
+    entries.sort(key=lambda entry: order[entry["id"]])
+    ensemble_payload = aggregate_impact_payloads(entries)
+    raw_ensemble = json.dumps(ensemble_payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ensemble_path = assets_dir / f"climate-impact-ensemble.{hashlib.sha256(raw_ensemble).hexdigest()[:12]}.json.gz"
+    atomic_gzip_json(ensemble_path, ensemble_payload)
+    multi = next((pair for pair in index["pairs"] if pair.get("kind") == "multi-model"), None)
+    if multi is None:
+        raise ValueError("climate bundle has no multi-model record")
+    multi["impact"] = {
+        "url": f"assets/{ensemble_path.name}",
+        "sha256": sha256(ensemble_path),
+        "bytes": ensemble_path.stat().st_size,
+    }
+    index["generated_utc"] = utc_now()
+    raw_index = json.dumps(index, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    new_index = output_dir / f"climate-index.{hashlib.sha256(raw_index).hexdigest()[:12]}.json.gz"
+    atomic_gzip_json(new_index, index)
+    manifest.update(
+        {
+            "generated_utc": index["generated_utc"],
+            "index": {"path": new_index.name, "sha256": sha256(new_index), "bytes": new_index.stat().st_size},
+            "impact_models": len(entries),
+            "impact_schema": ENSEMBLE_SCHEMA,
+        }
+    )
+    _atomic_json(climate_manifest, manifest)
+    return new_index
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -643,6 +866,9 @@ def parse_args() -> argparse.Namespace:
     pair.add_argument("--historical-manifest", type=Path, required=True)
     pair.add_argument("--future-manifest", type=Path, required=True)
     pair.add_argument("--output-dir", type=Path, required=True)
+    attach = subparsers.add_parser("attach")
+    attach.add_argument("--climate-manifest", type=Path, required=True)
+    attach.add_argument("--impact-manifest", type=Path, action="append", required=True)
     return parser.parse_args()
 
 
@@ -652,8 +878,10 @@ def main() -> None:
         result = build_task_plan(args.run_root, args.pair_root, args.geometry_asset)
     elif args.command == "run":
         result = build_run(args.period_plan, args.catalogue, args.data_root, args.geometry_asset, args.output_dir)
-    else:
+    elif args.command == "pair":
         result = build_pair(args.historical_manifest, args.future_manifest, args.output_dir)
+    else:
+        result = attach_to_climate_bundle(args.climate_manifest, args.impact_manifest)
     print(result)
 
 
