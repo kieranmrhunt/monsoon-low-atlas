@@ -17,11 +17,15 @@
 	tab.hidden = false;
 
 	const $ = selector => panel.querySelector(selector);
+	const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
+		'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+	}[character]));
 	const FONT = '"effra", Effra, Arial, sans-serif';
 	const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 	const CLASSES = ['L', 'D', 'DD', 'CS', 'SCS', 'VSCS+'];
 	const HISTORICAL_COLOUR = '#243665';
 	const FUTURE_COLOUR = '#c6473b';
+	const MODEL_COLOURS = ['#00629b', '#d55e00', '#009e73', '#8f3b76', '#6f4c9b', '#e69f00', '#0072b2', '#cc79a7'];
 	const METRICS = {
 		systems: {label: 'Systems', unit: 'yr⁻¹', digits: 1, zero: true},
 		depressions_or_stronger: {label: 'Depressions or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
@@ -144,10 +148,7 @@
 			return option;
 		}));
 		if (!index.pairs.some(pair => pair.id === state.pair)) {
-			const screened = index.status === 'multi-model-awaiting-review'
-				? index.pairs.find(pair => pair.historical && pair.historical.qa && pair.historical.qa.historical_screen && pair.historical.qa.historical_screen.screening_status === 'passes-basic-historical-screen')
-				: null;
-			state.pair = screened && screened.id || index.defaults && index.defaults.pair || index.pairs[0].id;
+			state.pair = index.defaults && index.defaults.pair || index.pairs[0].id;
 		}
 		pairControl.value = state.pair;
 		$('#mlaClimateSeason').value = state.season;
@@ -332,6 +333,193 @@
 		drawLegend(context, [{label: 'Historical', colour: HISTORICAL_COLOUR}, {label: 'Future', colour: FUTURE_COLOUR}], left, 16);
 	}
 
+	function modelPair(modelId) {
+		return index.pairs.find(pair => pair.kind !== 'multi-model' && pair.id === modelId) || null;
+	}
+
+	function modelLabel(modelId) {
+		const pair = modelPair(modelId);
+		return pair ? pair.source_label : String(modelId);
+	}
+
+	function modelColour(modelId, ordinal) {
+		const pairs = index.pairs.filter(pair => pair.kind !== 'multi-model');
+		const position = pairs.findIndex(pair => pair.id === modelId);
+		return MODEL_COLOURS[(position >= 0 ? position : ordinal) % MODEL_COLOURS.length];
+	}
+
+	function selectedModelChanges() {
+		const change = current.change.seasonal_changes[state.season][state.metric] || {};
+		if (current.pair.kind === 'multi-model' && Array.isArray(change.models)) {
+			return change.models.map((record, ordinal) => ({
+				...record,
+				label: modelLabel(record.id),
+				colour: modelColour(record.id, ordinal)
+			}));
+		}
+		return [{
+			id: current.pair.id,
+			label: current.pair.source_label,
+			colour: modelColour(current.pair.id, 0),
+			historical: change.historical,
+			future: change.future,
+			absolute_change: change.absolute_change,
+			percent_change: change.percent_change,
+			ci05: change.ci05,
+			ci95: change.ci95,
+			percent_ci05: null,
+			percent_ci95: null
+		}];
+	}
+
+	function signedPercent(value) {
+		if (!Number.isFinite(Number(value))) return '—';
+		const number = Number(value);
+		return `${number > 0 ? '+' : ''}${number.toFixed(1)}%`;
+	}
+
+	function drawModelChanges() {
+		const canvas = $('#mlaClimateModelChange');
+		const {context, width, height} = setupCanvas(canvas);
+		const records = selectedModelChanges().filter(record => Number.isFinite(Number(record.percent_change)));
+		const status = $('#mlaClimateModelChangeStatus');
+		const data = $('#mlaClimateModelChangeData');
+		if (!records.length) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('Percentage change is unavailable because the historical mean is zero.', width / 2, height / 2);
+			status.textContent = 'Use an absolute continuous measure for a stable comparison.';
+			data.textContent = '';
+			return;
+		}
+		const intervalValues = records.flatMap(record => [record.percent_ci05, record.percent_change, record.percent_ci95]).map(Number).filter(Number.isFinite);
+		const scale = Math.max(5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
+		const left = Math.min(132, Math.max(90, width * .29)), right = width - 31, top = 28, bottom = height - 40;
+		const rowGap = (bottom - top) / Math.max(1, records.length);
+		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
+		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line;
+		context.fillStyle = muted;
+		context.lineWidth = 1;
+		context.textAlign = 'center';
+		context.textBaseline = 'top';
+		for (const fraction of [-1, -.5, 0, .5, 1]) {
+			const value = fraction * scale;
+			const px = x(value);
+			context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke();
+			context.fillText(`${Math.round(value)}%`, px, bottom + 8);
+		}
+		context.strokeStyle = ink;
+		context.lineWidth = 1.5;
+		context.beginPath(); context.moveTo(x(0), top - 8); context.lineTo(x(0), bottom + 4); context.stroke();
+		records.forEach((record, ordinal) => {
+			const y = top + (ordinal + .5) * rowGap;
+			context.fillStyle = ink;
+			context.textAlign = 'right';
+			context.textBaseline = 'middle';
+			context.fillText(record.label, left - 9, y);
+			const low = Number(record.percent_ci05), high = Number(record.percent_ci95);
+			if (Number.isFinite(low) && Number.isFinite(high)) {
+				context.strokeStyle = record.colour;
+				context.lineWidth = 2;
+				context.beginPath(); context.moveTo(x(low), y); context.lineTo(x(high), y); context.stroke();
+				for (const value of [low, high]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
+			}
+			context.fillStyle = record.colour;
+			context.beginPath(); context.arc(x(record.percent_change), y, 5, 0, Math.PI * 2); context.fill();
+		});
+		context.fillStyle = muted;
+		context.textAlign = 'center';
+		context.textBaseline = 'bottom';
+		context.fillText('future − historical (%)', (left + right) / 2, height - 2);
+		const positive = records.filter(record => Number(record.percent_change) > 0).length;
+		const negative = records.filter(record => Number(record.percent_change) < 0).length;
+		const robustPositive = records.filter(record => Number(record.percent_ci05) > 0).length;
+		const robustNegative = records.filter(record => Number(record.percent_ci95) < 0).length;
+		status.textContent = `${positive}/${records.length} increase · ${negative}/${records.length} decrease · ${robustPositive + robustNegative} intervals exclude zero`;
+		const metric = METRICS[state.metric];
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(valueText(record.historical, metric))}</td><td>${esc(valueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(Number.isFinite(Number(record.percent_ci05)) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function historicalScreenRecords() {
+		if (current.pair.kind === 'multi-model') return (current.historical.qa && current.historical.qa.historical_screening) || [];
+		const screen = current.historical.qa && current.historical.qa.historical_screen;
+		return screen ? [{id: current.pair.id, source_label: current.pair.source_label, ...screen}] : [];
+	}
+
+	function screenForSeason(record) {
+		if (state.season === 'all') return record;
+		if (state.season !== 'jjas') return null;
+		return current.pair.kind === 'multi-model' ? record.jjas : (record.seasonal || {}).jjas;
+	}
+
+	function summaryMedianRatio(screen, key) {
+		const model = screen && screen.model && screen.model[key];
+		const reference = screen && screen.reference_metrics && screen.reference_metrics[key];
+		const numerator = model && Number(model.median), denominator = reference && Number(reference.median);
+		return Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0 ? numerator / denominator : null;
+	}
+
+	function historicalRatio(screen) {
+		if (!screen) return null;
+		const comparisons = screen.comparisons || {};
+		const keys = {
+			systems: 'event_frequency_ratio',
+			depressions_or_stronger: 'depression_or_stronger_frequency_ratio',
+			deep_depressions_or_stronger: 'deep_depression_or_stronger_frequency_ratio',
+			cyclonic_storms_or_stronger: 'cyclonic_storm_or_stronger_frequency_ratio',
+			system_days: 'system_days_ratio',
+			mean_duration_hours: 'median_duration_ratio',
+			mean_peak_wind_ms: 'median_peak_wind_ratio',
+			mean_peak_pressure_deficit_hpa: 'median_peak_pressure_deficit_ratio'
+		};
+		if (state.metric === 'mean_peak_24h_precipitation_mm') return summaryMedianRatio(screen, 'peak_24h_precipitation_mm');
+		const value = Number(comparisons[keys[state.metric]]);
+		return Number.isFinite(value) ? value : null;
+	}
+
+	function drawHistoricalAgreement() {
+		const canvas = $('#mlaClimateHistoricalSkill');
+		const {context, width, height} = setupCanvas(canvas);
+		const status = $('#mlaClimateHistoricalSkillStatus');
+		const data = $('#mlaClimateHistoricalSkillData');
+		const records = historicalScreenRecords().map((record, ordinal) => {
+			const screen = screenForSeason(record);
+			return {id: record.id, label: record.source_label || modelLabel(record.id), value: historicalRatio(screen), colour: modelColour(record.id, ordinal)};
+		}).filter(record => Number.isFinite(record.value));
+		if (!records.length) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('Historical comparison is available for all months and JJAS.', width / 2, height / 2);
+			status.textContent = 'Choose All months or JJAS.';
+			data.textContent = '';
+			return;
+		}
+		const maximum = Math.max(2, Math.max(...records.map(record => record.value)) * 1.1);
+		const left = Math.min(132, Math.max(90, width * .29)), right = width - 30, top = 28, bottom = height - 40;
+		const rowGap = (bottom - top) / Math.max(1, records.length);
+		const x = value => left + Number(value) / maximum * (right - left);
+		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.fillStyle = 'rgba(0, 158, 115, .10)';
+		context.fillRect(x(.5), top - 8, Math.max(0, x(Math.min(2, maximum)) - x(.5)), bottom - top + 12);
+		context.strokeStyle = line; context.lineWidth = 1; context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'top';
+		for (let value = 0; value <= maximum + .001; value += maximum / 4) {
+			const px = x(value); context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke(); context.fillText(value.toFixed(1), px, bottom + 8);
+		}
+		context.strokeStyle = ink; context.lineWidth = 1.5; context.beginPath(); context.moveTo(x(1), top - 8); context.lineTo(x(1), bottom + 4); context.stroke();
+		records.forEach((record, ordinal) => {
+			const y = top + (ordinal + .5) * rowGap;
+			context.fillStyle = ink; context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(record.label, left - 9, y);
+			context.strokeStyle = record.colour; context.globalAlpha = .35; context.lineWidth = 2; context.beginPath(); context.moveTo(x(0), y); context.lineTo(x(record.value), y); context.stroke(); context.globalAlpha = 1;
+			context.fillStyle = record.colour; context.beginPath(); context.arc(x(record.value), y, 5, 0, Math.PI * 2); context.fill();
+		});
+		context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText('model / ERA5', (left + right) / 2, height - 2);
+		const within = records.filter(record => record.value >= .5 && record.value <= 2).length;
+		const continuous = state.metric.startsWith('mean_');
+		status.textContent = `${within}/${records.length} within a factor of two${continuous ? ' · historical comparison uses event medians' : ''}`;
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Model / ERA5</th><th>Within factor two</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${record.value.toFixed(2)}</td><td>${record.value >= .5 && record.value <= 2 ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table>`;
+	}
+
 	function interpolateColour(stops, fraction) {
 		const value = Math.max(0, Math.min(1, fraction)) * (stops.length - 1);
 		const lower = Math.floor(value);
@@ -491,11 +679,15 @@
 			['90% bootstrap interval', `${valueText(change.ci05, metric, true)} to ${valueText(change.ci95, metric, true)}`, 'annual resampling']
 		];
 		if (current.pair.kind === 'multi-model') {
+			const models = Array.isArray(change.models) ? change.models : [];
+			const positive = models.filter(model => Number(model.absolute_change) > 0).length;
+			const negative = models.filter(model => Number(model.absolute_change) < 0).length;
 			cards = [
 				['Historical mean', valueText(change.historical, metric), 'one model, one vote'],
 				['Future mean', valueText(change.future, metric), 'one model, one vote'],
 				['Mean paired change', Number.isFinite(change.percent_change) ? `${change.percent_change > 0 ? '+' : ''}${change.percent_change.toFixed(1)}%` : '—', valueText(change.absolute_change, metric, true)],
-				['Across-model 90% range', `${valueText(change.model_spread05, metric, true)} to ${valueText(change.model_spread95, metric, true)}`, `${change.model_count} models`]
+				['Across-model 90% range', `${valueText(change.model_spread05, metric, true)} to ${valueText(change.model_spread95, metric, true)}`, `${change.model_count} models`],
+				['Model agreement', `${positive}/${models.length} increase`, `${negative}/${models.length} decrease`]
 			];
 		}
 		const container = $('#mlaClimateStats');
@@ -527,6 +719,8 @@
 		$('#mlaClimateFutureMapHeading').textContent = current.future.run.period_label;
 		renderStats();
 		requestAnimationFrame(() => {
+			drawModelChanges();
+			drawHistoricalAgreement();
 			drawAnnual();
 			drawMonthly();
 			drawClasses();

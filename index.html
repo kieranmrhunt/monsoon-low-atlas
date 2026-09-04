@@ -436,6 +436,10 @@
 .mla-climate-map-panel { min-width: 0; }
 .mla-climate-map-panel h4 { margin: 0 0 6px; font-size: 14px; font-weight: 500; text-align: center; }
 .mla-climate-map { display: block; width: 100%; height: auto; aspect-ratio: 1.24 / 1; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-sea); }
+.mla-climate-diagnostic { height: 320px; }
+.mla-climate-diagnostic-data table { width: 100%; border-collapse: collapse; }
+.mla-climate-diagnostic-data th, .mla-climate-diagnostic-data td { padding: 5px 7px; border-bottom: 1px solid var(--mla-line); text-align: right; }
+.mla-climate-diagnostic-data th:first-child, .mla-climate-diagnostic-data td:first-child { text-align: left; }
 .mla-climate-loading { padding: 28px; color: var(--mla-muted); text-align: center; }
 
 .mla-compare-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 12px; }
@@ -1017,8 +1021,10 @@
 			</section>
 			<div class="mla-climate-loading" id="mlaClimateLoading" role="status" aria-live="polite">Open this tab to load climate experiments.</div>
 			<div id="mlaClimateContent" hidden>
-				<div class="mla-stat-grid" id="mlaClimateStats"></div>
+				<div class="mla-stat-grid mla-climate-stats" id="mlaClimateStats"></div>
 				<div class="mla-chart-grid">
+					<section class="mla-card mla-chart-card"><h3>Model-by-model change</h3><p>Paired percentage change; whiskers show each model’s 90% resampling interval.</p><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateModelChange" role="img" aria-label="Paired climate change and uncertainty for each CMIP6 model"></canvas><p class="mla-chart-status" id="mlaClimateModelChangeStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Model change values</summary><div id="mlaClimateModelChangeData"></div></details></section>
+					<section class="mla-card mla-chart-card"><h3>Historical agreement with ERA5</h3><p>Model-to-ERA5 ratio for the selected measure; 1 is exact agreement.</p><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateHistoricalSkill" role="img" aria-label="Historical CMIP6 model agreement with ERA5"></canvas><p class="mla-chart-status" id="mlaClimateHistoricalSkillStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Historical agreement values</summary><div id="mlaClimateHistoricalSkillData"></div></details></section>
 					<section class="mla-card mla-chart-card mla-chart-wide"><h3 id="mlaClimateAnnualHeading">Annual comparison</h3><p>Each line shows successive years within its 30-year window.</p><canvas class="mla-chart" id="mlaClimateAnnualChart" role="img" aria-label="Annual historical and future LPS comparison"></canvas></section>
 					<section class="mla-card mla-chart-card"><h3>Genesis seasonal cycle</h3><p>Mean systems per year by genesis month.</p><canvas class="mla-chart" id="mlaClimateMonthlyChart" role="img" aria-label="Historical and future monthly LPS frequency"></canvas></section>
 					<section class="mla-card mla-chart-card"><h3>Peak-class mix</h3><p>Share of systems in each atlas-derived peak class.</p><canvas class="mla-chart" id="mlaClimateClassChart" role="img" aria-label="Historical and future LPS peak-class composition"></canvas></section>
@@ -1077,7 +1083,7 @@
 
 <script src="assets/atlas-app.3681542b6718.js"></script>
 <script src="assets/forecast-app.b231200b0f62.js"></script>
-<script src="assets/climate-change-app.9f9acb076032.js"></script>
+<script src="assets/climate-change-app.2c4d2b1916a0.js"></script>
 
 </body>
 </html>

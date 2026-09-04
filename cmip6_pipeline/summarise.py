@@ -596,6 +596,15 @@ def aggregate_change_payloads(
                     (future_mean / historical_mean - 1.0) * 100.0
                     if historical_mean != 0 else None
                 )
+                left_draw = left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1)
+                right_draw = right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1)
+                difference_draw = right_draw - left_draw
+                percent_draw = np.full(samples, np.nan, dtype=float)
+                nonzero_model = left_draw != 0
+                percent_draw[nonzero_model] = (
+                    right_draw[nonzero_model] / left_draw[nonzero_model] - 1.0
+                ) * 100.0
+                finite_percent_draw = percent_draw[np.isfinite(percent_draw)]
                 model_values.append(
                     {
                         "id": model_id,
@@ -603,18 +612,23 @@ def aggregate_change_payloads(
                         "future": future_mean,
                         "absolute_change": absolute,
                         "percent_change": percent,
+                        "ci05": float(np.quantile(difference_draw, 0.05)),
+                        "ci95": float(np.quantile(difference_draw, 0.95)),
+                        "percent_ci05": (
+                            float(np.quantile(finite_percent_draw, 0.05))
+                            if len(finite_percent_draw) else None
+                        ),
+                        "percent_ci95": (
+                            float(np.quantile(finite_percent_draw, 0.95))
+                            if len(finite_percent_draw) else None
+                        ),
                     }
                 )
-                left_draw = left[rng.integers(0, len(left), size=(samples, len(left)))].mean(axis=1)
-                right_draw = right[rng.integers(0, len(right), size=(samples, len(right)))].mean(axis=1)
                 bootstrap_historical.append(left_draw)
                 bootstrap_future.append(right_draw)
-                bootstrap_differences.append(right_draw - left_draw)
+                bootstrap_differences.append(difference_draw)
                 if historical_mean != 0:
-                    percentages = np.full(samples, np.nan, dtype=float)
-                    nonzero = left_draw != 0
-                    percentages[nonzero] = (right_draw[nonzero] / left_draw[nonzero] - 1.0) * 100.0
-                    bootstrap_model_percentages.append(percentages)
+                    bootstrap_model_percentages.append(percent_draw)
             if not model_values:
                 metrics[metric] = {
                     "historical": None,
@@ -1050,6 +1064,8 @@ def assemble_ensemble(
                 "status": screen.get("screening_status"),
                 "diagnostic_flags": screen.get("diagnostic_flags"),
                 "comparisons": screen.get("comparisons"),
+                "model": screen.get("model"),
+                "reference_metrics": screen.get("reference_metrics"),
                 "classification": screen.get("classification_screen"),
                 "jjas": {
                     "status": (screen.get("seasonal", {}).get("jjas") or {}).get(
@@ -1061,6 +1077,10 @@ def assemble_ensemble(
                     "comparisons": (screen.get("seasonal", {}).get("jjas") or {}).get(
                         "comparisons"
                     ),
+                    "model": (screen.get("seasonal", {}).get("jjas") or {}).get("model"),
+                    "reference_metrics": (
+                        screen.get("seasonal", {}).get("jjas") or {}
+                    ).get("reference_metrics"),
                 },
             }
         )

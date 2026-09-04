@@ -82,6 +82,8 @@ class SummariseTest(unittest.TestCase):
         self.assertAlmostEqual(systems["absolute_change"], 1.0)
         self.assertAlmostEqual(systems["percent_change"], 20.0)
         self.assertAlmostEqual(systems["mean_model_percent_change"], 55.5555555556)
+        self.assertTrue(all(value["ci05"] <= value["absolute_change"] <= value["ci95"] for value in systems["models"]))
+        self.assertTrue(all(value["percent_ci05"] <= value["percent_change"] <= value["percent_ci95"] for value in systems["models"]))
 
     def test_event_summary_uses_complete_track_geometry(self) -> None:
         frame = pd.DataFrame(
@@ -292,6 +294,8 @@ class SummariseTest(unittest.TestCase):
             self.assertEqual(
                 screen["jjas"]["comparisons"]["event_frequency_ratio"], 0.5
             )
+            self.assertIn("model", screen)
+            self.assertIn("reference_metrics", screen)
             ensemble = next(pair for pair in index["pairs"] if pair.get("kind") == "multi-model")
             self.assertEqual(ensemble["source_label"], "Multi-model mean")
             with gzip.open(combined / ensemble["change"]["url"], "rt", encoding="utf-8") as stream:

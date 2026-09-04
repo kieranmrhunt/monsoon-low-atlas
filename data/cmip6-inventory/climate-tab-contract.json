@@ -86,16 +86,18 @@
       "MPI-ESM1-2-HR",
       "MPI-ESM1-2-LR",
       "MIROC6",
-      "MRI-ESM2-0"
+      "MRI-ESM2-0",
+      "HadGEM3-GC31-LL"
     ],
-    "status": "hold-publication",
-    "finding": "MIROC6 alone passes the conservative all-LPS historical screen; no model passes the all-month plus JJAS absolute classification screen.",
-    "next_gate": "Evaluate the complete HadGEM3-GC31-LL pair as a fifth independent model and keep absolute D/DD/CS changes out of headline inference until category realism improves."
+    "status": "public-research-preview; hold formal validation",
+    "finding": "MIROC6 alone passes the conservative all-LPS historical screen and no model passes the all-month plus JJAS absolute classification screen. JJAS system-count changes split two increases to three decreases, whereas all five models increase mean peak 24-hour precipitation.",
+    "next_gate": "Complete the ERA5-as-model common-grid control and precipitation-impact diagnostics; keep absolute D/DD/CS changes out of headline inference until category realism improves."
   },
   "prepublication_gates": [
     "Run at least the 1981-2010 and 2071-2100 windows for every admitted model/scenario pair.",
     "Apply common-grid final-centre wind, pressure-deficit and actual closed-isobar intensity classification using a common land mask.",
     "Quantify 1-degree versus native-grid sensitivity for a representative high-resolution model.",
+    "Run ERA5 itself through the common 1-degree input contract to isolate detector resolution effects.",
     "Validate Gregorian, no-leap and 360-day calendar identity without mapping nonexistent dates into civil time.",
     "Report historical frequency and intensity biases against ERA5 separately from projected paired changes."
   ],
