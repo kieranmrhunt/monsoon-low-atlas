@@ -26,6 +26,7 @@
 	const HISTORICAL_COLOUR = '#243665';
 	const FUTURE_COLOUR = '#c6473b';
 	const MODEL_COLOURS = ['#00629b', '#d55e00', '#009e73', '#8f3b76', '#6f4c9b', '#e69f00', '#0072b2', '#cc79a7'];
+	const GWL_COLOURS = {'1.5': '#e69f00', '2': '#d55e00', '3': '#c33149', '4': '#6f4c9b'};
 	const METRICS = {
 		systems: {label: 'Systems', unit: 'yr⁻¹', digits: 1, zero: true},
 		depressions_or_stronger: {label: 'Depressions or stronger', unit: 'yr⁻¹', digits: 1, zero: true},
@@ -476,6 +477,162 @@
 		status.textContent = `${positive}/${records.length} increase · ${negative}/${records.length} decrease · ${robustPositive + robustNegative} intervals exclude zero`;
 		const metric = METRICS[state.metric];
 		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(valueText(record.historical, metric))}</td><td>${esc(valueText(record.future, metric))}</td><td>${esc(signedPercent(record.percent_change))}</td><td>${esc(numberAvailable(record.percent_ci05) ? `${signedPercent(record.percent_ci05)} to ${signedPercent(record.percent_ci95)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function warmingForModel(modelId) {
+		const pair = modelPair(modelId);
+		const value = pair && pair.warming ? Number(pair.warming.change_k) : NaN;
+		return Number.isFinite(value) && value > 0 ? value : null;
+	}
+
+	function signedPerDegree(value) {
+		if (!numberAvailable(value)) return '—';
+		const number = Number(value);
+		return `${number > 0 ? '+' : ''}${number.toFixed(1)}% °C⁻¹`;
+	}
+
+	function drawWarmingNormalisedChanges() {
+		const canvas = $('#mlaClimateWarmingChange');
+		const {context, width, height} = setupCanvas(canvas);
+		const records = selectedModelChanges().map(record => {
+			const warming = warmingForModel(record.id);
+			return {
+				...record,
+				warming,
+				normalised: warming && numberAvailable(record.percent_change) ? Number(record.percent_change) / warming : null,
+				low: warming && numberAvailable(record.percent_ci05) ? Number(record.percent_ci05) / warming : null,
+				high: warming && numberAvailable(record.percent_ci95) ? Number(record.percent_ci95) / warming : null
+			};
+		}).filter(record => numberAvailable(record.normalised));
+		const status = $('#mlaClimateWarmingStatus');
+		const data = $('#mlaClimateWarmingData');
+		if (!records.length) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('Warming-normalised change is unavailable for this measure.', width / 2, height / 2);
+			status.textContent = '';
+			data.textContent = '';
+			return;
+		}
+		const intervalValues = finite(records.flatMap(record => [record.low, record.normalised, record.high]));
+		const scale = Math.max(2, Math.max(...intervalValues.map(Math.abs)) * 1.12);
+		const left = Math.min(150, Math.max(96, width * .24)), right = width - 38, top = 28, bottom = height - 40;
+		const rowGap = (bottom - top) / Math.max(1, records.length);
+		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
+		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line;
+		context.fillStyle = muted;
+		context.lineWidth = 1;
+		context.textAlign = 'center';
+		context.textBaseline = 'top';
+		for (const fraction of [-1, -.5, 0, .5, 1]) {
+			const value = fraction * scale;
+			const px = x(value);
+			context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke();
+			context.fillText(`${Math.round(value)}`, px, bottom + 8);
+		}
+		context.strokeStyle = ink;
+		context.lineWidth = 1.5;
+		context.beginPath(); context.moveTo(x(0), top - 8); context.lineTo(x(0), bottom + 4); context.stroke();
+		records.forEach((record, ordinal) => {
+			const y = top + (ordinal + .5) * rowGap;
+			context.fillStyle = ink;
+			context.textAlign = 'right';
+			context.textBaseline = 'middle';
+			context.fillText(record.label, left - 9, y);
+			if (numberAvailable(record.low) && numberAvailable(record.high)) {
+				context.strokeStyle = record.colour;
+				context.lineWidth = 2;
+				context.beginPath(); context.moveTo(x(record.low), y); context.lineTo(x(record.high), y); context.stroke();
+				for (const value of [record.low, record.high]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
+			}
+			context.fillStyle = record.colour;
+			context.beginPath(); context.arc(x(record.normalised), y, 5, 0, Math.PI * 2); context.fill();
+		});
+		context.fillStyle = muted;
+		context.textAlign = 'center';
+		context.textBaseline = 'bottom';
+		context.fillText('paired change per degree of global warming (% °C⁻¹)', (left + right) / 2, height - 2);
+		const mean = records.reduce((sum, record) => sum + Number(record.normalised), 0) / records.length;
+		const warmings = records.map(record => Number(record.warming));
+		status.textContent = `${current.pair.kind === 'multi-model' ? 'Equal-model mean' : 'Response'} ${signedPerDegree(mean)} · global warming ${Math.min(...warmings).toFixed(2)}${records.length > 1 ? `–${Math.max(...warmings).toFixed(2)}` : ''} °C`;
+		data.innerHTML = `<table><thead><tr><th>Model</th><th>Global warming</th><th>Response</th><th>Within-model 90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>+${Number(record.warming).toFixed(2)} °C</td><td>${esc(signedPerDegree(record.normalised))}</td><td>${esc(numberAvailable(record.low) ? `${signedPerDegree(record.low)} to ${signedPerDegree(record.high)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
+	}
+
+	function publishedGwlRecords() {
+		const pairs = current.pair.kind === 'multi-model'
+			? current.pair.model_ids.map(modelPair).filter(Boolean)
+			: [current.pair];
+		return pairs.map(pair => ({
+			id: pair.id,
+			label: pair.source_label,
+			crossings: pair.warming && pair.warming.published_gwl ? pair.warming.published_gwl.crossings : []
+		})).filter(record => record.crossings.length);
+	}
+
+	function gwlWindowText(crossing) {
+		return numberAvailable(crossing.central_year)
+			? `${crossing.window_start_year}–${crossing.window_end_year} (${crossing.central_year})`
+			: 'Not reached';
+	}
+
+	function drawPublishedGwl() {
+		const canvas = $('#mlaClimateGwl');
+		const {context, width, height} = setupCanvas(canvas);
+		const records = publishedGwlRecords();
+		const status = $('#mlaClimateGwlStatus');
+		const data = $('#mlaClimateGwlData');
+		if (!records.length) {
+			context.fillStyle = css('--mla-muted', '#5f6574');
+			context.textAlign = 'center';
+			context.fillText('No published GWL crossings match this exact model run.', width / 2, height / 2);
+			status.textContent = '';
+			data.textContent = '';
+			return;
+		}
+		const left = Math.min(150, Math.max(96, width * .24)), right = width - 34, top = 42, bottom = height - 40;
+		const minimumYear = 2010, maximumYear = 2100;
+		const x = year => left + (Number(year) - minimumYear) / (maximumYear - minimumYear) * (right - left);
+		const rowGap = (bottom - top) / Math.max(1, records.length);
+		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
+		context.strokeStyle = line;
+		context.fillStyle = muted;
+		context.lineWidth = 1;
+		context.textAlign = 'center';
+		context.textBaseline = 'top';
+		for (let year = 2020; year <= 2100; year += 20) {
+			const px = x(year);
+			context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke();
+			context.fillText(String(year), px, bottom + 8);
+		}
+		records.forEach((record, ordinal) => {
+			const y = top + (ordinal + .5) * rowGap;
+			context.fillStyle = ink;
+			context.textAlign = 'right';
+			context.textBaseline = 'middle';
+			context.fillText(record.label, left - 9, y);
+			for (const crossing of record.crossings) {
+				if (!numberAvailable(crossing.central_year)) continue;
+				const level = String(Number(crossing.level_c));
+				const px = x(crossing.central_year);
+				context.strokeStyle = GWL_COLOURS[level] || '#555';
+				context.globalAlpha = .34;
+				context.lineWidth = 5;
+				context.beginPath(); context.moveTo(x(crossing.window_start_year), y); context.lineTo(x(crossing.window_end_year), y); context.stroke();
+				context.globalAlpha = 1;
+				context.fillStyle = GWL_COLOURS[level] || '#555';
+				context.beginPath(); context.arc(px, y, 6, 0, Math.PI * 2); context.fill();
+			}
+		});
+		drawLegend(context, [1.5, 2, 3, 4].map(level => ({label: `${level} °C`, colour: GWL_COLOURS[String(level)]})), left, 17);
+		context.fillStyle = muted;
+		context.textAlign = 'center';
+		context.textBaseline = 'bottom';
+		context.fillText('central year of first 20-year GWL window', (left + right) / 2, height - 2);
+		const levels = [1.5, 2, 3, 4];
+		const counts = levels.map(level => records.filter(record => record.crossings.some(crossing => Number(crossing.level_c) === level && numberAvailable(crossing.central_year))).length);
+		status.textContent = levels.map((level, position) => `${level} °C: ${counts[position]}/${records.length}`).join(' · ');
+		data.innerHTML = `<table><thead><tr><th>Model</th>${levels.map(level => `<th>${level} °C window (central year)</th>`).join('')}</tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td>${levels.map(level => { const crossing = record.crossings.find(item => Number(item.level_c) === level); return `<td>${esc(crossing ? gwlWindowText(crossing) : 'Unavailable')}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`;
 	}
 
 	function historicalScreenRecords() {
@@ -1070,6 +1227,22 @@
 				['Model agreement', `${positive}/${models.length} increase`, `${negative}/${models.length} decrease`]
 			];
 		}
+		const warming = current.pair.warming;
+		if (warming) {
+			if (current.pair.kind === 'multi-model') {
+				cards.push([
+					'Global warming',
+					`+${Number(warming.mean_change_k).toFixed(2)} °C`,
+					`${Number(warming.minimum_change_k).toFixed(2)}–${Number(warming.maximum_change_k).toFixed(2)} °C across models`
+				]);
+			} else {
+				cards.push([
+					'Global warming',
+					`+${Number(warming.change_k).toFixed(2)} °C`,
+					`${current.historical.run.period_label} to ${current.future.run.period_label}`
+				]);
+			}
+		}
 		const container = $('#mlaClimateStats');
 		container.replaceChildren(...cards.map(([label, value, note]) => {
 			const card = document.createElement('section');
@@ -1101,6 +1274,8 @@
 		requestAnimationFrame(() => {
 			drawModelChanges();
 			drawHistoricalAgreement();
+			drawWarmingNormalisedChanges();
+			drawPublishedGwl();
 			drawRainfallChanges();
 			drawRegionalRainfall();
 			drawFootprints();

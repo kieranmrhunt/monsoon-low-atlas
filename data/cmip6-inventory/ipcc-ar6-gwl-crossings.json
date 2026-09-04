@@ -1,0 +1,69 @@
+{
+  "schema": "lps-atlas-ipcc-ar6-gwl-crossings-v1",
+  "source": {
+    "title": "IPCC WGI AR6 Atlas CMIP6 warming levels",
+    "url": "https://github.com/IPCC-WG1/Atlas/blob/main/warming-levels/CMIP6_Atlas_WarmingLevels.csv",
+    "raw_url": "https://raw.githubusercontent.com/IPCC-WG1/Atlas/main/warming-levels/CMIP6_Atlas_WarmingLevels.csv",
+    "retrieved_utc": "2026-09-04",
+    "license": "CC BY 4.0",
+    "citation": "Iturbide et al. (2022), Scientific Data 9, 629, https://doi.org/10.1038/s41597-022-01739-y"
+  },
+  "definition": {
+    "baseline": "1850-1900",
+    "window_years": 20,
+    "window_from_central_year": "central_year - 9 through central_year + 10",
+    "levels_celsius": [1.5, 2.0, 3.0, 4.0]
+  },
+  "runs": [
+    {
+      "source_id": "HadGEM3-GC31-LL",
+      "member_id": "r1i1p1f3",
+      "scenarios": {
+        "ssp126": {"1.5": 2021, "2": 2037, "3": null, "4": null},
+        "ssp245": {"1.5": 2019, "2": 2033, "3": 2061, "4": null},
+        "ssp370": null,
+        "ssp585": {"1.5": 2020, "2": 2030, "3": 2047, "4": 2063}
+      }
+    },
+    {
+      "source_id": "MIROC6",
+      "member_id": "r1i1p1f1",
+      "scenarios": {
+        "ssp126": {"1.5": 2063, "2": null, "3": null, "4": null},
+        "ssp245": {"1.5": 2046, "2": 2073, "3": null, "4": null},
+        "ssp370": {"1.5": 2042, "2": 2059, "3": null, "4": null},
+        "ssp585": {"1.5": 2040, "2": 2053, "3": 2076, "4": null}
+      }
+    },
+    {
+      "source_id": "MPI-ESM1-2-HR",
+      "member_id": "r1i1p1f1",
+      "scenarios": {
+        "ssp126": {"1.5": 2041, "2": null, "3": null, "4": null},
+        "ssp245": {"1.5": 2037, "2": 2063, "3": null, "4": null},
+        "ssp370": {"1.5": 2034, "2": 2050, "3": 2081, "4": null},
+        "ssp585": {"1.5": 2033, "2": 2049, "3": 2073, "4": null}
+      }
+    },
+    {
+      "source_id": "MPI-ESM1-2-LR",
+      "member_id": "r1i1p1f1",
+      "scenarios": {
+        "ssp126": {"1.5": 2042, "2": null, "3": null, "4": null},
+        "ssp245": {"1.5": 2036, "2": 2057, "3": null, "4": null},
+        "ssp370": {"1.5": 2035, "2": 2052, "3": 2079, "4": null},
+        "ssp585": {"1.5": 2034, "2": 2048, "3": 2071, "4": null}
+      }
+    },
+    {
+      "source_id": "MRI-ESM2-0",
+      "member_id": "r1i1p1f1",
+      "scenarios": {
+        "ssp126": {"1.5": 2029, "2": null, "3": null, "4": null},
+        "ssp245": {"1.5": 2030, "2": 2049, "3": null, "4": null},
+        "ssp370": {"1.5": 2031, "2": 2045, "3": 2073, "4": null},
+        "ssp585": {"1.5": 2026, "2": 2038, "3": 2064, "4": 2083}
+      }
+    }
+  ]
+}
