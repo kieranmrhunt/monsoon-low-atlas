@@ -136,7 +136,10 @@ def prepare(source: str, output_root: Path, run_root: Path, *, force: bool = Fal
         })
     manifest_path = run_root / "task-manifest.csv"
     if manifest_path.exists() and not force:
-        previous = pd.read_csv(manifest_path)
+        previous = pd.read_csv(
+            manifest_path,
+            dtype={"first_month": str, "last_month": str},
+        )
         expected = pd.DataFrame(rows)
         comparable = ["task_id", "core_year", "first_month", "last_month", "month_count"]
         if previous[comparable].equals(expected[comparable]):

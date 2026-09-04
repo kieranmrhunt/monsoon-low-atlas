@@ -37,6 +37,7 @@ class ParallelReanalysisLinkTest(unittest.TestCase):
                 }).to_csv(candidates / f"candidates-{month}.csv", index=False)
             run_root = root / "run"
             manifest = prepare("merra2", output_root, run_root)
+            self.assertEqual(prepare("merra2", output_root, run_root), manifest)
             tasks = pd.read_csv(manifest)
             self.assertEqual(tasks["core_year"].tolist(), [2000, 2001])
             self.assertEqual(tasks["month_count"].tolist(), [2, 2])

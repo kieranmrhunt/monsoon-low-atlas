@@ -19,4 +19,4 @@ IFS=$'\t' read -r INDEX SOURCE_LABEL TRACKING_ROOT LINK_ROOT <<< "$ROW"
 cd "$ATLAS_ROOT"
 exec "$PYTHON" -m cmip6_pipeline.production link-period \
   --source-label "$SOURCE_LABEL" --output-root "$TRACKING_ROOT" \
-  --run-root "$LINK_ROOT" --workers "${LPS_CMIP6_LINK_WORKERS:-1}"
+  --run-root "$LINK_ROOT" --workers "${LPS_CMIP6_LINK_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
