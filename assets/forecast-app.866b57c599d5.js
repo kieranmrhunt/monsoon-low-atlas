@@ -53,7 +53,7 @@
 		fullPayloads: new Map(), fullLoads: new Map(), fullFailures: new Set(), archiveEntriesCache: null,
 		archiveColourIndexes: new Map(), archiveManifestLoaded: false, archiveManifestLoad: null,
 		systemGroupsCache: null, systemGroupsCacheKey: '',
-		selectedSystem: null, hoveredSystemKey: '', isolateSystem: false, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
+		selectedSystem: null, selectedGroupKeys: new Set(), hoveredSystemKey: '', isolateSystem: false, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
 		archiveDate: /^\d{4}-\d{2}-\d{2}$/.test(storedPreferences.archiveDate || '') ? storedPreferences.archiveDate : DEFAULT_ARCHIVE_DATE,
 		archiveHour: ['00', '06', '12', '18'].includes(storedPreferences.archiveHour) ? storedPreferences.archiveHour : '00', archiveMonth: '', archiveEntry: null,
 		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
@@ -93,7 +93,7 @@
 
 	const FORECAST_URL_PARAMETERS = Object.freeze([
 		'fmode', 'fdate', 'fhour', 'fquery', 'fruns', 'fanalysis', 'fmodels', 'finit',
-		'fsystem', 'ffocus', 'fmembers', 'fvalid', 'fweather', 'fweather_run', 'fzoom', 'fcentre'
+		'fsystem', 'fgroup', 'ffocus', 'fmembers', 'fvalid', 'fweather', 'fweather_run', 'fzoom', 'fcentre'
 	]);
 
 	function writeForecastUrl() {
@@ -116,6 +116,7 @@
 		}
 		const selectedSystem = state.selectedSystem || state.requestedSystem;
 		if (selectedSystem) url.searchParams.set('fsystem', `${selectedSystem.runKey}~${selectedSystem.systemId}`);
+		if (state.isolateSystem && state.selectedGroupKeys.size) url.searchParams.set('fgroup', [...state.selectedGroupKeys].sort().map(systemKeyToken).join(','));
 		url.searchParams.set('ffocus', state.isolateSystem ? '1' : '0');
 		url.searchParams.set('fmembers', state.showMembers ? '1' : '0');
 		const valid = currentValidTime();
@@ -533,6 +534,17 @@
 
 	function activeEntry(modelId) {
 		if (!state.manifest) return null;
+		if (state.mode === 'latest' && state.isolateSystem && state.selectedGroupKeys.size) {
+			const runKey = [...state.selectedGroupKeys].map(runKeyFromSystemKey).find(key => key.startsWith(`${modelId}:`));
+			if (runKey) {
+				const cycle = runKey.slice(modelId.length + 1);
+				const pinned = [
+					...(((state.manifest.recent || {})[modelId]) || []),
+					(state.manifest.latest || {})[modelId]
+				].filter(Boolean).find(entry => String(entry.cycle) === cycle);
+				if (pinned) return pinned;
+			}
+		}
 		if (state.initialization === 'latest') return (state.manifest.latest || {})[modelId] || null;
 		return ((state.manifest.recent || {})[modelId] || []).find(entry => String(entry.cycle) === String(state.initialization)) || null;
 	}
@@ -765,7 +777,7 @@
 		state.mode = 'archive';
 		state.archiveEntry = null;
 		state.archiveSelected.clear();
-		state.selectedSystem = null;
+		clearForecastSelection();
 		persistPreferences();
 		syncModeControls();
 		return true;
@@ -1052,7 +1064,7 @@
 		let selectionChanged = false;
 		for (const key of [...state.archiveSelected]) if (!permitted.has(key)) {
 			state.archiveSelected.delete(key);
-			if (state.selectedSystem && state.selectedSystem.runKey === key) state.selectedSystem = null;
+			if (state.selectedSystem && state.selectedSystem.runKey === key) clearForecastSelection();
 			selectionChanged = true;
 		}
 		if (selectionChanged) {
@@ -1144,7 +1156,7 @@
 	async function loadSelectedModels() {
 		const selected = requestedLatestRuns();
 		if (!selected.length) {
-			state.selectedSystem = null;
+			clearForecastSelection();
 			notice('', '', false);
 			populateWeatherModels();
 			configureTimeline(false);
@@ -1160,7 +1172,7 @@
 			state.selectedSystem = state.requestedSystem;
 		}
 		state.requestedSystem = null;
-		if (state.selectedSystem && !loaded.some(item => item.runKey === state.selectedSystem.runKey && (item.payload.systems || []).some(system => system.id === state.selectedSystem.systemId))) state.selectedSystem = null;
+		if (state.selectedSystem && !loaded.some(item => item.runKey === state.selectedSystem.runKey && (item.payload.systems || []).some(system => system.id === state.selectedSystem.systemId))) clearForecastSelection();
 		populateWeatherModels();
 		configureTimeline(true);
 		if (!loaded.length) notice(`Selected forecasts could not be loaded${failures[0] ? `: ${failures[0].reason.message || failures[0].reason}` : '.'}`, 'flag', true);
@@ -1176,7 +1188,8 @@
 		const hadRuns = state.archiveSelected.size > 0;
 		state.archiveSelected.add(key);
 		state.archiveEntry = entry;
-		state.selectedSystem = null;
+		if (state.requestedSystem) state.selectedSystem = null;
+		else clearForecastSelection();
 		if (modelDefinition(entry.model).kind === 'ensemble') setShowMembers(true);
 		populateArchive(false);
 		try {
@@ -1201,7 +1214,7 @@
 		if (!key || !state.archiveSelected.has(key)) return;
 		state.archiveSelected.delete(key);
 		state.archiveEntry = null;
-		if (state.selectedSystem && state.selectedSystem.runKey === key) state.selectedSystem = null;
+		if (state.selectedSystem && state.selectedSystem.runKey === key) clearForecastSelection();
 		const remaining = displayEntries();
 		state.payload = remaining.length ? remaining[remaining.length - 1].payload : null;
 		configureTimeline(Boolean(remaining.length), archiveTargetTime());
@@ -1215,7 +1228,7 @@
 		state.archiveSelected.clear();
 		state.archiveEntry = null;
 		state.payload = null;
-		state.selectedSystem = null;
+		clearForecastSelection();
 		configureTimeline(false);
 		populateArchive(false);
 		populateWeatherModels();
@@ -1255,7 +1268,7 @@
 		state.archiveEntry = null;
 		state.archiveSelected.clear();
 		state.payload = null;
-		state.selectedSystem = null;
+		clearForecastSelection();
 		state.requestedArchiveRuns = null;
 		state.requestedSystem = null;
 		state.requestedValidTime = null;
@@ -1428,7 +1441,7 @@
 		if (!state.initialised) { if (!panel.hidden) initialise(); return; }
 		if (!changed) { resizeAndRender(); return; }
 		state.payload = null;
-		state.selectedSystem = null;
+		clearForecastSelection();
 		state.archiveEntry = null;
 		state.archiveSelected.clear();
 		$('#mlaForecastArchiveDate').value = state.archiveDate;
@@ -1724,6 +1737,40 @@
 		return `${item.runKey}:${item.system.id}`;
 	}
 
+	function runKeyFromSystemKey(key) {
+		const separator = String(key || '').lastIndexOf(':');
+		return separator > 0 ? String(key).slice(0, separator) : '';
+	}
+
+	function systemKeyToken(key) {
+		const separator = String(key || '').lastIndexOf(':');
+		return separator > 0 ? `${String(key).slice(0, separator)}~${String(key).slice(separator + 1)}` : '';
+	}
+
+	function systemKeyFromToken(token) {
+		const separator = String(token || '').lastIndexOf('~');
+		return separator > 0 && separator < String(token).length - 1
+			? `${String(token).slice(0, separator)}:${String(token).slice(separator + 1)}`
+			: '';
+	}
+
+	function clearForecastSelection() {
+		state.selectedSystem = null;
+		state.selectedGroupKeys.clear();
+		state.isolateSystem = false;
+		state.hoveredSystemKey = '';
+	}
+
+	function focusForecastGroup(group, anchor) {
+		if (!group || !group.items || !group.items.length) return false;
+		const selected = anchor || group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0];
+		state.selectedSystem = {runKey: selected.runKey, systemId: selected.system.id};
+		state.selectedGroupKeys = new Set(group.items.map(systemItemKey));
+		state.isolateSystem = true;
+		state.hoveredSystemKey = '';
+		return true;
+	}
+
 	function systemTimeline(item) {
 		let cache = systemTimelineCaches.get(item.payload);
 		if (!cache) { cache = new Map(); systemTimelineCaches.set(item.payload, cache); }
@@ -1757,6 +1804,19 @@
 		return .72 * median + .28 * mean + coveragePenalty;
 	}
 
+	function decorateForecastGroup(group, current) {
+		group.items.sort((a, b) => a.model.label.localeCompare(b.model.label) || String(b.payload.cycle).localeCompare(String(a.payload.cycle)));
+		group.key = group.items.map(systemItemKey).sort().join('|');
+		group.active = group.items.filter(item => {
+			if (!Number.isFinite(current)) return false;
+			const timeline = systemTimeline(item);
+			return timeline.points.some(point => Math.abs(point.time - current) <= 1.1 * 3600000);
+		}).length;
+		group.models = new Set(group.items.map(item => item.model.id)).size;
+		group.members = group.items.reduce((sum, item) => sum + Number(item.system.member_count || 1), 0);
+		return group;
+	}
+
 	function forecastSystemGroups() {
 		const current = currentValidTime();
 		const items = displayEntries().flatMap(entry => (entry.payload.systems || []).map(system => ({...entry, system})));
@@ -1780,22 +1840,23 @@
 			state.systemGroupsCacheKey = cacheKey;
 			state.systemGroupsCache = groups;
 		}
-		for (const group of groups) {
-			group.items.sort((a, b) => a.model.label.localeCompare(b.model.label) || String(b.payload.cycle).localeCompare(String(a.payload.cycle)));
-			group.key = group.items.map(systemItemKey).sort().join('|');
-			group.active = group.items.filter(item => {
-				if (!Number.isFinite(current)) return false;
-				const timeline = systemTimeline(item);
-				return timeline.points.some(point => Math.abs(point.time - current) <= 1.1 * 3600000);
-			}).length;
-			group.models = new Set(group.items.map(item => item.model.id)).size;
-			group.members = group.items.reduce((sum, item) => sum + Number(item.system.member_count || 1), 0);
-		}
+		for (const group of groups) decorateForecastGroup(group, current);
 		return groups.sort((a, b) => b.active - a.active || b.models - a.models || b.items.length - a.items.length || b.members - a.members || a.key.localeCompare(b.key));
 	}
 
 	function selectedForecastGroup(groups) {
 		const values = groups || forecastSystemGroups();
+		if (state.isolateSystem && state.selectedGroupKeys.size) {
+			const items = values.flatMap(candidate => candidate.items).filter(item => state.selectedGroupKeys.has(systemItemKey(item)));
+			if (items.length) {
+				const exact = decorateForecastGroup({items: [...items]}, currentValidTime());
+				if (!state.selectedSystem || !items.some(item => item.runKey === state.selectedSystem.runKey && item.system.id === state.selectedSystem.systemId)) {
+					state.selectedSystem = {runKey: items[0].runKey, systemId: items[0].system.id};
+				}
+				return exact;
+			}
+			clearForecastSelection();
+		}
 		let group = state.selectedSystem
 			? values.find(candidate => candidate.items.some(item => item.runKey === state.selectedSystem.runKey && item.system.id === state.selectedSystem.systemId))
 			: null;
@@ -1804,6 +1865,8 @@
 			group = values[0] || null;
 			const anchor = group && (group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0]);
 			state.selectedSystem = anchor ? {runKey: anchor.runKey, systemId: anchor.system.id} : null;
+		} else if (state.isolateSystem && !state.selectedGroupKeys.size) {
+			state.selectedGroupKeys = new Set(group.items.map(systemItemKey));
 		}
 		return group;
 	}
@@ -2234,9 +2297,14 @@
 
 	function updateEvolutionControls(groups, group, analysisSeries) {
 		const select = $('#mlaForecastEvolutionSystem');
-		select.innerHTML = groups.map(candidate => `<option value="${esc(candidate.key)}">${esc(groupLabel(candidate))}</option>`).join('');
+		let choices = groups;
+		if (!groups.some(candidate => candidate.key === group.key)) {
+			const exactKeys = new Set(group.items.map(systemItemKey));
+			choices = [group, ...groups.filter(candidate => !candidate.items.some(item => exactKeys.has(systemItemKey(item))))];
+		}
+		select.innerHTML = choices.map(candidate => `<option value="${esc(candidate.key)}">${esc(groupLabel(candidate))}</option>`).join('');
 		select.value = group.key;
-		select.disabled = groups.length < 2;
+		select.disabled = choices.length < 2;
 		$('#mlaForecastEvolutionLegend').innerHTML = [
 			...group.items.map(item => `<span><i style="--run-colour:${esc(runColour(item))}" aria-hidden="true"></i>${esc(chartRunLabel(item, group))}</span>`),
 			...(analysisSeries || []).map(item => `<span><i style="--run-colour:${esc(item.colour)}" aria-hidden="true"></i>${esc(item.label)}</span>`)
@@ -2481,11 +2549,11 @@
 	function selectSystemAt(event) {
 		const best = forecastSystemAt(event.clientX, event.clientY, event.pointerType === 'touch');
 		if (best) {
-			state.selectedSystem = {runKey: best.runKey, systemId: best.system.id};
-			state.isolateSystem = true;
-			state.hoveredSystemKey = '';
-			writeForecastUrl();
-			render();
+			const group = forecastSystemGroups().find(candidate => candidate.items.some(item => item.runKey === best.runKey && item.system.id === best.system.id));
+			if (focusForecastGroup(group, best)) {
+				writeForecastUrl();
+				render();
+			}
 		}
 	}
 
@@ -2593,7 +2661,7 @@
 		$('#mlaForecastZoomIn').addEventListener('click', () => setMapZoom(state.mapZoom * 1.35));
 		$('#mlaForecastZoomOut').addEventListener('click', () => setMapZoom(state.mapZoom / 1.35));
 		$('#mlaForecastZoomReset').addEventListener('click', resetMapView);
-		$('#mlaForecastShowAllTracks').addEventListener('click', () => { state.isolateSystem = false; render(); });
+		$('#mlaForecastShowAllTracks').addEventListener('click', () => { state.isolateSystem = false; state.selectedGroupKeys.clear(); render(); });
 	}
 
 	$('#mlaForecastModeLatest').addEventListener('click', () => setMode('latest'));
@@ -2608,14 +2676,14 @@
 			if (modelDefinition(input.value).kind === 'ensemble') setShowMembers(true);
 		} else state.selectedModels.delete(input.value);
 		state.hasModelPreference = true;
-		state.selectedSystem = null;
+		clearForecastSelection();
 		populateInitializationControls();
 		persistPreferences();
 		loadSelectedModels();
 	});
 	$('#mlaForecastInitialization').addEventListener('change', event => {
 		state.initialization = event.target.value;
-		state.selectedSystem = null;
+		clearForecastSelection();
 		state.leadIndex = 0;
 		persistPreferences();
 		loadSelectedModels();
@@ -2628,10 +2696,7 @@
 	$('#mlaForecastArchiveMembers').addEventListener('change', event => { setShowMembers(event.target.checked); render(); });
 	$('#mlaForecastEvolutionSystem').addEventListener('change', event => {
 		const group = forecastSystemGroups().find(candidate => candidate.key === event.target.value);
-		const anchor = group && (group.items.find(item => systemTimeline(item).points.some(point => Math.abs(point.time - currentValidTime()) <= 1.1 * 3600000)) || group.items[0]);
-		if (anchor) {
-			state.selectedSystem = {runKey: anchor.runKey, systemId: anchor.system.id};
-			state.isolateSystem = true;
+		if (focusForecastGroup(group)) {
 			writeForecastUrl();
 		}
 		render();
@@ -2730,7 +2795,7 @@
 		if (typeof detail.query === 'string') $('#mlaForecastArchiveSearch').value = detail.query;
 		state.archiveEntry = null;
 		state.archiveSelected.clear();
-		state.selectedSystem = null;
+		clearForecastSelection();
 		persistPreferences();
 		const alreadyArchive = state.mode === 'archive';
 		setMode('archive');
@@ -2762,6 +2827,11 @@
 		const selected = parameters.get('fsystem') || '';
 		const separator = selected.lastIndexOf('~');
 		if (separator > 0 && separator < selected.length - 1) state.requestedSystem = {runKey: selected.slice(0, separator), systemId: selected.slice(separator + 1)};
+		const groupKeys = (parameters.get('fgroup') || '').split(',').map(systemKeyFromToken).filter(Boolean);
+		if (groupKeys.length) {
+			state.selectedGroupKeys = new Set(groupKeys);
+			state.isolateSystem = true;
+		}
 		const requestedValid = Date.parse(`${parameters.get('fvalid') || ''}:00:00Z`);
 		if (Number.isFinite(requestedValid)) state.requestedValidTime = requestedValid;
 		const zoom = Number(parameters.get('fzoom'));
