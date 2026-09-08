@@ -1865,17 +1865,29 @@
 		const firstTimeline = systemTimeline(first), secondTimeline = systemTimeline(second);
 		const shorter = firstTimeline.points.length <= secondTimeline.points.length ? firstTimeline : secondTimeline;
 		const longer = shorter === firstTimeline ? secondTimeline : firstTimeline;
-		const distances = [];
+		const matches = [];
 		for (const point of shorter.points) {
 			if (point.time % (6 * 3600000) !== 0) continue;
 			const counterpart = longer.byTime.get(point.time);
-			if (counterpart) distances.push(haversineKm(point.longitude, point.latitude, counterpart.longitude, counterpart.latitude));
+			if (counterpart) matches.push({
+				time: point.time,
+				distance: haversineKm(point.longitude, point.latitude, counterpart.longitude, counterpart.latitude)
+			});
 		}
+		// Establish physical-system identity from the first 72 hours that both
+		// runs represent. Long-range divergence is exactly what this comparison
+		// is intended to reveal and must not split one storm into model-specific
+		// evolution panels.
+		const firstCommon = matches.length ? matches[0].time : NaN;
+		const windowEnd = firstCommon + 72 * 3600000;
+		const windowMatches = matches.filter(item => item.time <= windowEnd);
+		const distances = windowMatches.map(item => item.distance);
 		if (distances.length < 2) return Infinity;
 		distances.sort((a, b) => a - b);
 		const median = distances[Math.floor(distances.length / 2)];
 		const mean = distances.reduce((sum, value) => sum + value, 0) / distances.length;
-		const available = Math.max(2, Math.ceil(shorter.points.length / 6));
+		const lastCommon = windowMatches[windowMatches.length - 1].time;
+		const available = Math.max(2, Math.floor((lastCommon - firstCommon) / (6 * 3600000)) + 1);
 		const coveragePenalty = 140 * (1 - Math.min(1, distances.length / available));
 		return .72 * median + .28 * mean + coveragePenalty;
 	}
@@ -2460,7 +2472,7 @@
 		const muted = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63';
 		const line = getComputedStyle(root).getPropertyValue('--mla-line').trim() || '#d8d0c4';
 		const compact = width < 560;
-		const left = compact ? 57 : 64, right = 18, top = 13, bottom = 44, gap = 39;
+		const left = compact ? 57 : 64, right = 18, top = 13, bottom = 44, gap = 45;
 		const plotWidth = Math.max(1, width - left - right);
 		const panelHeight = Math.max(58, (height - top - bottom - gap) / 2);
 		const vortTop = top, rainTop = top + panelHeight + gap;
@@ -2491,11 +2503,17 @@
 		context.textAlign = 'center';
 		for (let index = 0; index <= ticks; index++) {
 			const time = first + span * index / ticks, xx = x(time), date = new Date(time);
-			context.strokeStyle = line; context.beginPath(); context.moveTo(xx, vortTop); context.lineTo(xx, rainTop + panelHeight); context.stroke();
+			context.strokeStyle = line; context.beginPath();
+			context.moveTo(xx, vortTop); context.lineTo(xx, vortTop + panelHeight);
+			context.moveTo(xx, rainTop); context.lineTo(xx, rainTop + panelHeight); context.stroke();
 			context.fillStyle = muted; context.textBaseline = 'top';
 			context.fillText(new Intl.DateTimeFormat('en-GB', {timeZone: 'UTC', day: '2-digit', month: 'short'}).format(date), xx, rainTop + panelHeight + 8);
 			context.fillText(`${String(date.getUTCHours()).padStart(2, '0')}Z`, xx, rainTop + panelHeight + 23);
 		}
+		context.save();
+		context.strokeStyle = dark; context.globalAlpha = .28; context.lineWidth = 1.15;
+		context.beginPath(); context.moveTo(left, vortTop + panelHeight + gap / 2); context.lineTo(width - right, vortTop + panelHeight + gap / 2); context.stroke();
+		context.restore();
 		const dashPatterns = [[], [8, 3], [2, 3], [11, 3, 2, 3], [5, 3]];
 		if (state.showMembers) forecastSeries.forEach(record => {
 			if (record.item.payload.model.kind !== 'ensemble') return;

@@ -10,7 +10,8 @@ const asset = html.match(/src="(assets\/forecast-app\.[a-f0-9]+\.js)"/)[1];
 let source = fs.readFileSync(path.join(repo, asset), 'utf8');
 source = source.replace('let reanalysisManifestPromise = null;', `
 globalThis.qa = {state, ensembleMeanMinimum, splitPlotPath, systemMeanGeometry,
-  systemReferenceTrack, meanTrack, forecastMapPaths, forecastSystemAt}; return;
+  systemReferenceTrack, meanTrack, forecastMapPaths, forecastSystemAt,
+  systemMatchScore}; return;
 let reanalysisManifestPromise = null;`);
 const root = {querySelector: () => ({})};
 const sandbox = {
@@ -61,6 +62,22 @@ assert.equal(q.forecastMapPaths(deterministic, deterministic.system).memberPaths
 const jumping = make(11);
 for (const track of jumping.tracks) for (const point of track.points) if (point[0] >= 2) point[1] += 20;
 assert.equal(q.forecastMapPaths(jumping, jumping.system).meanPaths.length, 2, 'do not connect unphysical mean jumps');
+
+const matchItem = (runKey, startStep, longitudeAtStep) => {
+  const points = [];
+  for (let step = startStep; step <= 240; step++) points.push([step, longitudeAtStep(step), 20]);
+  const track = {id: `${runKey}-track`, member: 'det', points};
+  const system = {id: 'S01', track_ids: [track.id], member_count: 1};
+  const payload = {cycle_utc: '2026-09-08T00:00:00Z', model: {kind: 'deterministic'}, tracks: [track], systems: [system]};
+  return {runKey, model: {id: runKey, label: runKey}, payload, system};
+};
+const earlyAgreement = matchItem('first', 6, step => 85 + step * .02);
+const laterDivergence = matchItem('second', 0, step => 85.5 + step * .02 + Math.max(0, step - 72) * .15);
+assert(q.systemMatchScore(earlyAgreement, laterDivergence) < 550,
+  'long-range divergence must not split one early-matched forecast system');
+const unrelated = matchItem('unrelated', 0, step => 105 + step * .01);
+assert(q.systemMatchScore(earlyAgreement, unrelated) > 550,
+  'different systems must remain separate inside the identity window');
 
 if (process.argv[2]) {
   const payload = JSON.parse(zlib.gunzipSync(fs.readFileSync(process.argv[2])));
