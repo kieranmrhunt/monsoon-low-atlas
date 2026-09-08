@@ -90,7 +90,9 @@ def resolve_precipitation_file(
         ),
     ]
     if raw_root is not None:
-        candidates.insert(0, raw_output_path(raw_root, "precipitation", day))
+        raw_candidate = raw_output_path(raw_root, "precipitation", day)
+        if raw_candidate.is_file():
+            candidates.insert(0, raw_candidate)
     if not candidates:
         raise FileNotFoundError(f"No local MERRA-2 PRECTOT file found for {day} below {root}")
     return candidates[0]

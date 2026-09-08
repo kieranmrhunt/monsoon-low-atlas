@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
+import numpy as np
 import xarray as xr
 
 from .common import require_variables, sha256
@@ -64,11 +65,10 @@ def utc_now() -> str:
 
 
 def stream_number(day: date) -> int:
-    # NASA used the supplementary 401 production stream for the four-month
-    # observing-system interruption in 2021.  The surrounding dates returned
-    # to stream 400; this is a filename distinction, not a product-version
-    # change.  CMR titles confirm the same switch in every required collection.
-    if date(2021, 6, 1) <= day <= date(2021, 9, 30):
+    # NASA CMR identifies the replacement 401 production stream for September
+    # 2020 and June--September 2021 in all three required collections. Dates
+    # on either side use 400; the product version remains 5.12.4.
+    if date(2020, 9, 1) <= day <= date(2020, 9, 30) or date(2021, 6, 1) <= day <= date(2021, 9, 30):
         return 401
     if day.year <= 1991:
         return 100
@@ -222,6 +222,24 @@ def validate_download(kind: str, day: date, path: Path) -> None:
         first = datetime.fromisoformat(str(dataset.time.values[0])[:19])
         if first.date() != day:
             raise ValueError(f"{path} begins on {first.date()}, expected {day}")
+        offset = np.timedelta64(30, "m") if kind == "precipitation" else np.timedelta64(0, "m")
+        step = np.timedelta64(1 if kind == "precipitation" else 3, "h")
+        expected = np.datetime64(day) + offset + np.arange(expected_times) * step
+        if not np.array_equal(dataset.time.values, expected):
+            raise ValueError(f"{path} has missing, duplicated or displaced timestamps")
+        if not np.allclose(dataset.lat.values, np.linspace(-15, 45, 121)) or not np.allclose(
+            dataset.lon.values, np.linspace(45, 120, 121)
+        ):
+            raise ValueError(f"{path} has incorrect regional coordinates")
+        dimensions = ("time", "lev", "lat", "lon") if kind == "pressure" else ("time", "lat", "lon")
+        for name in COLLECTIONS[kind]["variables"]:
+            if dataset[name].dims != dimensions:
+                raise ValueError(f"{path}:{name} has unexpected dimensions")
+            # Read the payload, not only the header: truncated HDF5 chunks can
+            # otherwise pass validation and fail much later in standardisation.
+            finite = np.isfinite(dataset[name].values).any(axis=(-2, -1))
+            if not finite.all():
+                raise ValueError(f"{path}:{name} contains an entirely missing time/level field")
 
 
 def days_in_month(value: str, *, include_next_midnight: bool = True) -> list[date]:
@@ -329,8 +347,10 @@ def download_days(
                     validate_download(kind, day, destination)
                     counts["reused"] += 1
                     continue
-                except ValueError:
-                    destination.unlink()
+                except (ValueError, OSError):
+                    # Keep the old response until a validated replacement is
+                    # atomically installed. A failed retry must not erase it.
+                    pass
             client.download(kind, day, destination)
             counts["downloaded"] += 1
             print(f"downloaded {key} ({destination.stat().st_size:,} bytes)", flush=True)
