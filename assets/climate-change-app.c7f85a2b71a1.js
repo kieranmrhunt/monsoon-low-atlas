@@ -154,7 +154,12 @@
 			? pair.historical.qa.historical_screen.screening_status
 			: '';
 		const review = screening === 'passes-basic-historical-screen' ? ' · passes historical screen' : screening === 'review-model-bias' ? ' · model bias' : '';
-		return `${pair.source_label} · ${future.experiment_id.toUpperCase()} · ${pair.member_id}${review}`;
+		return `${pair.source_label} · ${experimentLabel(future.experiment_id)} · ${pair.member_id}${review}`;
+	}
+
+	function experimentLabel(value) {
+		const key = String(value || '').toLowerCase();
+		return ({ssp126: 'SSP1–2.6', ssp245: 'SSP2–4.5', ssp585: 'SSP5–8.5'})[key] || key.toUpperCase();
 	}
 
 	async function loadIndex() {
@@ -217,10 +222,10 @@
 
 	function comparisonLabel(pair) {
 		if (comparisonBasis(pair) === 'gwl') {
-			return `+${Number(pair.comparison.level_c).toFixed(Number(pair.comparison.level_c) % 1 ? 1 : 0)} °C · ${String(pair.comparison.scenario).toUpperCase()}`;
+			return `+${Number(pair.comparison.level_c).toFixed(Number(pair.comparison.level_c) % 1 ? 1 : 0)} °C · ${experimentLabel(pair.comparison.scenario)}`;
 		}
 		const experiment = String(pair.future.run.experiment_id).toLowerCase();
-		const scenario = experiment === 'highres-future' ? 'HighResMIP future' : experiment.toUpperCase();
+		const scenario = experiment === 'highres-future' ? 'HighResMIP future' : experimentLabel(experiment);
 		const windows = new Set(index.pairs.filter(item => comparisonKey(item) === comparisonKey(pair)).map(item => item.future.run.period_label));
 		return `${scenario} · ${windows.size === 1 ? [...windows][0] : 'late-century windows'}`;
 	}
@@ -295,6 +300,15 @@
 			return node;
 		}));
 		metricControl.value = state.metric;
+		const metricOptions = $('#mlaClimateMetricOptions');
+		metricOptions.replaceChildren(...Object.entries(METRICS).filter(([key]) => available.has(key)).map(([key, metric]) => {
+			const option = document.createElement('option');
+			option.value = metric.label;
+			option.label = `${metric.group}${metric.unit ? ` · ${metric.unit}` : ''}${metric.resolutionSensitive ? ' · resolution-sensitive' : ''}`;
+			option.dataset.metric = key;
+			return option;
+		}));
+		$('#mlaClimateMetricSearch').value = METRICS[state.metric].label;
 		const selectedGroup = METRICS[state.metric] && METRICS[state.metric].group;
 		if (state.metric !== requestedMetric || !groups.has(state.metricGroup)) state.metricGroup = selectedGroup || [...groups.keys()][0];
 		const groupControl = $('#mlaClimateMetricGroup');
@@ -305,6 +319,33 @@
 			return option;
 		}));
 		groupControl.value = state.metricGroup;
+	}
+
+	function selectSearchedMetric() {
+		const control = $('#mlaClimateMetricSearch');
+		const query = control.value.trim().toLowerCase();
+		if (!query) {
+			control.value = METRICS[state.metric].label;
+			return false;
+		}
+		const available = availableMetricSet();
+		const candidates = Object.entries(METRICS).filter(([key]) => available.has(key));
+		const exact = candidates.find(([key, metric]) => key.toLowerCase() === query || metric.label.toLowerCase() === query);
+		const partial = exact || candidates.find(([key, metric]) => `${metric.label} ${metric.group} ${key}`.toLowerCase().includes(query));
+		if (!partial) {
+			control.setCustomValidity('Choose an available measure from the suggestions.');
+			control.reportValidity();
+			return false;
+		}
+		control.setCustomValidity('');
+		state.metric = partial[0];
+		state.metricGroup = partial[1].group;
+		$('#mlaClimateMetric').value = state.metric;
+		$('#mlaClimateMetricGroup').value = state.metricGroup;
+		control.value = partial[1].label;
+		writeState();
+		render();
+		return true;
 	}
 
 	function populatePairControls() {
@@ -326,7 +367,9 @@
 		comparisonControl.replaceChildren(...[...groups].map(([key, pairs]) => {
 			const option = document.createElement('option');
 			option.value = key;
-			option.textContent = comparisonLabel(preferredPair(pairs));
+			const modelCount = pairs.filter(pair => pair.kind !== 'multi-model').length;
+			const hasEnsemble = pairs.some(pair => pair.kind === 'multi-model');
+			option.textContent = `${comparisonLabel(preferredPair(pairs))}${!hasEnsemble && modelCount === 1 ? ' · single model' : ''}`;
 			return option;
 		}));
 		if (!groups.has(state.comparison)) {
@@ -340,7 +383,7 @@
 		datasetControl.replaceChildren(...datasets.sort((left, right) => Number(right.kind === 'multi-model') - Number(left.kind === 'multi-model') || left.source_label.localeCompare(right.source_label)).map(pair => {
 			const option = document.createElement('option');
 			option.value = pair.id;
-			const count = pair.kind === 'multi-model' ? ` · ${pair.model_ids.length} models` : ` · ${pair.member_id}`;
+			const count = pair.kind === 'multi-model' ? ` · ${pair.model_ids.length} models` : ` · single model · ${pair.member_id}`;
 			option.textContent = `${pair.source_label}${count}`;
 			return option;
 		}));
@@ -398,6 +441,9 @@
 		state.view = VALID_VIEWS.has(view) ? view : 'overview';
 		panel.querySelectorAll('[data-climate-view]').forEach(node => { node.hidden = node.dataset.climateView !== state.view; });
 		panel.querySelectorAll('[data-climate-view-button]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.climateViewButton === state.view)));
+		const usesGlobalMetric = state.view === 'overview' || state.view === 'evaluation';
+		$('#mlaClimateMetricField').hidden = !usesGlobalMetric;
+		$('#mlaClimateMetricNote').hidden = !usesGlobalMetric;
 		writeState();
 		if (shouldRender) render();
 	}
@@ -513,9 +559,10 @@
 		context.textBaseline = 'top';
 		context.fillText('1', plot.left, plot.bottom + 8);
 		context.textAlign = 'right';
-		context.fillText(`${historical.length} / ${future.length}`, plot.right, plot.bottom + 8);
+		context.fillText(historical.length === future.length ? String(historical.length) : `${historical.length} / ${future.length}`, plot.right, plot.bottom + 8);
 		context.textAlign = 'center';
-		context.fillText('year within window (historical / future)', (plot.left + plot.right) / 2, plot.bottom + 8);
+		context.textBaseline = 'bottom';
+		context.fillText('year in historical / future window', (plot.left + plot.right) / 2, height - 1);
 		drawLegend(context, [
 			{label: current.historical.run.period_label, colour: HISTORICAL_COLOUR},
 			{label: current.future.run.period_label, colour: FUTURE_COLOUR}
@@ -653,7 +700,8 @@
 		}
 		const intervalValues = finite(records.flatMap(record => [record.plotLow, record.plotValue, record.plotHigh]));
 		const scale = Math.max(metric.changeMode === 'absolute' ? .1 : 5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
-		const left = Math.min(132, Math.max(90, width * .29)), right = width - 31, top = 28, bottom = height - 40;
+		const labelWidth = Math.max(0, ...records.map(record => context.measureText(record.label).width));
+		const left = Math.min(width * .45, Math.max(90, labelWidth + 16)), right = width - 31, top = 28, bottom = height - 40;
 		const rowGap = (bottom - top) / Math.max(1, records.length);
 		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
 		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
@@ -686,7 +734,8 @@
 			}
 			context.fillStyle = record.colour;
 			context.beginPath(); context.arc(x(record.plotValue), y, 5, 0, Math.PI * 2); context.fill();
-			chartHits.push({canvas, x: x(record.plotValue), y, radius: 10, pairId: record.id, text: `${record.label}: ${changeText(record.plotValue, metric)} · click to inspect model`});
+			const selectable = current.pair.kind === 'multi-model';
+			chartHits.push({canvas, x: x(record.plotValue), y, radius: 10, pairId: selectable ? record.id : null, text: `${record.label}: ${changeText(record.plotValue, metric)}${selectable ? ' · click to inspect model' : ''}`});
 		});
 		context.fillStyle = muted;
 		context.textAlign = 'center';
@@ -939,7 +988,7 @@
 			context.fillStyle = css('--mla-muted', '#5f6574');
 			context.textAlign = 'center';
 			context.fillText('This measure is not in the current ERA5 screening summary.', width / 2, height / 2);
-			status.textContent = state.season === 'all' || state.season === 'jjas' ? 'The reanalysis envelope is being expanded to the full variable set.' : 'Historical screening is currently available for All months and JJAS.';
+			status.textContent = state.season === 'all' || state.season === 'jjas' ? 'This measure is not included in the historical-screen ratio.' : 'Historical screening ratios are currently defined for All months and JJAS.';
 			data.textContent = '';
 			return;
 		}
@@ -1033,7 +1082,8 @@
 		}
 		const intervalValues = finite(records.flatMap(record => [record.plotLow, record.plotChange, record.plotHigh]));
 		const scale = Math.max(metric.changeMode === 'points' ? 1 : 5, Math.max(...intervalValues.map(Math.abs)) * 1.12);
-		const left = Math.min(158, Math.max(108, width * .25)), right = width - 31, top = 28, bottom = height - 40;
+		const labelWidth = Math.max(0, ...records.map(record => context.measureText(record.label).width));
+		const left = Math.min(width * .45, Math.max(108, labelWidth + 16)), right = width - 31, top = 28, bottom = height - 40;
 		const rowGap = (bottom - top) / Math.max(1, records.length);
 		const x = value => left + (Number(value) + scale) / (2 * scale) * (right - left);
 		const ink = css('--mla-ink', '#202334'), muted = css('--mla-muted', '#5f6574'), line = css('--mla-line', '#d8d9df');
@@ -1046,7 +1096,7 @@
 			const value = fraction * scale;
 			const px = x(value);
 			context.beginPath(); context.moveTo(px, top - 8); context.lineTo(px, bottom + 4); context.stroke();
-			context.fillText(`${Math.round(value)}%`, px, bottom + 8);
+			context.fillText(metric.changeMode === 'points' ? `${value.toFixed(1)} pp` : `${Math.round(value)}%`, px, bottom + 8);
 		}
 		context.strokeStyle = ink;
 		context.lineWidth = 1.5;
@@ -1125,7 +1175,7 @@
 		for (const fraction of [-1, -.5, 0, .5, 1]) {
 			const value = fraction * scale, px = x(value);
 			context.beginPath(); context.moveTo(px, top - 6); context.lineTo(px, bottom + 4); context.stroke();
-			context.fillText(metric.changeMode === 'points' ? value.toFixed(1) : `${Math.round(value)}%`, px, bottom + 8);
+			context.fillText(metric.changeMode === 'points' ? `${value.toFixed(1)} pp` : `${Math.round(value)}%`, px, bottom + 8);
 		}
 		context.strokeStyle = ink; context.lineWidth = 1.5; context.beginPath(); context.moveTo(x(0), top - 6); context.lineTo(x(0), bottom + 4); context.stroke();
 		records.forEach((record, ordinal) => {
@@ -1371,13 +1421,13 @@
 		context.fillStyle = css('--mla-ink', '#202334');
 		context.textBaseline = 'top';
 		context.textAlign = 'left';
-		context.fillText(mode === 'agreement' ? 'fewer' : mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
+		context.fillText(mode === 'agreement' ? '100% ↓' : mode === 'change' ? `−${scale.toFixed(1)}` : '0', legendX, legendY + 9);
 		if (mode === 'agreement') {
 			context.textAlign = 'center';
 			context.fillText('mixed', legendX + legendWidth / 2, legendY + 9);
 		}
 		context.textAlign = 'right';
-		context.fillText(mode === 'agreement' ? 'more' : mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
+		context.fillText(mode === 'agreement' ? '100% ↑' : mode === 'change' ? `+${scale.toFixed(1)}` : scale.toFixed(1), legendX + legendWidth, legendY + 9);
 	}
 
 	function differenceDensity(historical, future, historicalYears, futureYears) {
@@ -1466,6 +1516,10 @@
 
 	function drawMetricFamily() {
 		const canvas = $('#mlaClimateMetricFamilyChart');
+		const multiModel = current.pair.kind === 'multi-model';
+		$('#mlaClimateMetricFamilyCard').querySelector('p').textContent = multiModel
+			? 'Ensemble changes across every available measure in the selected scientific family.'
+			: 'Paired changes across every available measure in the selected scientific family.';
 		const metrics = Object.entries(METRICS).filter(([, metric]) => metric.group === state.metricGroup && current.change.seasonal_changes[state.season]);
 		const rows = metrics.map(([key, metric]) => {
 			const records = metricChangeRecords(key);
@@ -1499,11 +1553,12 @@
 		context.textBaseline = 'bottom';
 		modelIds.forEach((id, ordinal) => {
 			const x = left + (ordinal + .5) * cellWidth;
-			const label = modelLabel(id).replace('MPI-ESM1-2-', 'MPI-');
-			context.save(); context.translate(x, top - 7); context.rotate(-.55); context.fillText(label, 0, 0); context.restore();
+			const label = modelIds.length === 1 ? 'Model' : modelLabel(id).replace('MPI-ESM1-2-', 'MPI-');
+			if (modelIds.length === 1) context.fillText(label, x, top - 7);
+			else { context.save(); context.translate(x, top - 7); context.rotate(-.55); context.fillText(label, 0, 0); context.restore(); }
 		});
 		context.textAlign = 'left';
-		context.fillText('Ensemble change', right + 10, top - 7);
+		context.fillText(multiModel ? 'Ensemble change' : 'Paired change', right + 10, top - 7);
 		rows.forEach((row, rowIndex) => {
 			const y = top + rowIndex * rowGap;
 			context.fillStyle = row.key === state.metric ? css('--mla-indigo-deep', '#243665') : css('--mla-ink', '#202334');
@@ -1531,7 +1586,7 @@
 		context.font = `11px ${FONT}`;
 		status.textContent = 'Red = decrease; blue = increase. Saturation is scaled within each row, so compare sign and model agreement rather than colour magnitude between variables.';
 		const headings = modelIds.map(id => `<th>${esc(modelLabel(id))}</th>`).join('');
-		data.innerHTML = `<table><thead><tr><th>Measure</th>${headings}<th>Ensemble</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.metric.label)}</td>${modelIds.map(id => { const record = row.records.find(item => item.id === id); return `<td>${esc(record ? changeText(record.value, row.metric) : '—')}</td>`; }).join('')}<td>${esc(changeText(row.ensembleValue, row.metric))} · N=${row.modelCount}</td></tr>`).join('')}</tbody></table>`;
+		data.innerHTML = `<table><thead><tr><th>Measure</th>${headings}<th>${multiModel ? 'Ensemble' : 'Paired change'}</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.metric.label)}</td>${modelIds.map(id => { const record = row.records.find(item => item.id === id); return `<td>${esc(record ? changeText(record.value, row.metric) : '—')}</td>`; }).join('')}<td>${esc(changeText(row.ensembleValue, row.metric))} · N=${row.modelCount}</td></tr>`).join('')}</tbody></table>`;
 	}
 
 	const PROFILE_METRICS = {
@@ -1609,7 +1664,8 @@
 		const observed = ratioContribution(shareFuture, shareHistorical), explained = records.reduce((sum, record) => sum + record.value, 0), residual = observed - explained;
 		if (Math.abs(residual) > .01) records.push({label: 'Aggregation residual', value: residual});
 		const scale = Math.max(2, Math.max(...records.map(record => Math.abs(record.value))) * 1.18);
-		const left = Math.min(175, width * .38), right = width - 28, top = 20, bottom = height - 42, rowGap = (bottom - top) / records.length;
+		const labelWidth = Math.max(0, ...records.map(record => context.measureText(record.label).width));
+		const left = Math.min(width * .48, Math.max(124, labelWidth + 14)), right = width - 28, top = 20, bottom = height - 42, rowGap = (bottom - top) / records.length;
 		const x = value => left + (value + scale) / (2 * scale) * (right - left);
 		context.strokeStyle = css('--mla-line', '#d8d9df'); context.beginPath(); context.moveTo(x(0), top); context.lineTo(x(0), bottom); context.stroke();
 		records.forEach((record, ordinal) => { const y = top + (ordinal + .5) * rowGap; context.fillStyle = css('--mla-ink', '#202334'); context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(record.label, left - 8, y); context.fillStyle = record.value >= 0 ? '#2166ac' : '#b2182b'; const start = x(Math.min(0, record.value)), end = x(Math.max(0, record.value)); context.fillRect(start, y - 7, Math.max(1, end - start), 14); context.textAlign = record.value >= 0 ? 'left' : 'right'; context.fillText(`${record.value > 0 ? '+' : ''}${record.value.toFixed(1)}`, x(record.value) + (record.value >= 0 ? 5 : -5), y); });
@@ -1642,7 +1698,7 @@
 				? `${Math.round(100 * row.completeness.minimum)}${Math.round(100 * row.completeness.maximum) !== Math.round(100 * row.completeness.minimum) ? `–${Math.round(100 * row.completeness.maximum)}` : ''}%`
 				: 'Unavailable';
 			const completeClass = !row.completeness ? 'mla-climate-capability-no' : row.completeness.minimum >= .99 ? 'mla-climate-capability-yes' : 'mla-climate-capability-partial';
-			cells.push(`<span${selected ? ' aria-current="true"' : ''}>${esc(comparisonLabel(row.pair))}</span>`, `<span>${row.models}</span>`, `<span class="${row.metricCount ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.metricCount}/${Object.keys(METRICS).length}</span>`, `<span class="${completeClass}">${completeText}</span>`, `<span class="${row.rain ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.rain ? 'Available' : 'Processing'}</span>`);
+			cells.push(`<span${selected ? ' aria-current="true"' : ''}>${esc(comparisonLabel(row.pair))}</span>`, `<span>${row.models}</span>`, `<span class="${row.metricCount ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.metricCount}/${Object.keys(METRICS).length}</span>`, `<span class="${completeClass}">${completeText}</span>`, `<span class="${row.rain ? 'mla-climate-capability-yes' : 'mla-climate-capability-no'}">${row.rain ? 'Available' : 'Not yet available'}</span>`);
 		}
 		container.innerHTML = cells.join('');
 		$('#mlaClimateAvailabilityStatus').textContent = `${rows.length} source-backed comparison${rows.length === 1 ? '' : 's'} currently published. Missing diagnostics remain disabled rather than estimated.`;
@@ -1696,9 +1752,9 @@
 					`${current.historical.run.period_label} to ${current.future.run.period_label}`
 				]);
 			}
-		} else if (comparisonBasis(current.pair) === 'gwl') {
-			cards.push(['Global warming level', `+${Number(current.pair.comparison.level_c).toFixed(1)} °C`, `${String(current.pair.comparison.scenario).toUpperCase()} first-crossing window`]);
-		}
+			} else if (comparisonBasis(current.pair) === 'gwl') {
+				cards.push(['Global warming level', `+${Number(current.pair.comparison.level_c).toFixed(1)} °C`, `${experimentLabel(current.pair.comparison.scenario)} first-crossing window`]);
+			}
 		const container = $('#mlaClimateStats');
 		container.replaceChildren(...cards.map(([label, value, note]) => {
 			const card = document.createElement('section');
@@ -1739,7 +1795,7 @@
 		rainNotice.hidden = Boolean(current.impact) && state.season === 'jjas';
 		rainNotice.textContent = current.impact
 			? 'India-wide and regional attribution is currently JJAS-only; the storm-centred footprint below follows the selected genesis season.'
-			: `India-wide and storm-footprint rainfall diagnostics are still processing for ${comparisonLabel(current.pair)}. Track-centred precipitation remains available from the main measure selector.`;
+			: `India-wide and storm-footprint rainfall diagnostics are not yet available for ${comparisonLabel(current.pair)}. Track-centred precipitation remains available in Overview.`;
 		chartHits = [];
 		requestAnimationFrame(() => {
 			if (state.view === 'overview') {
@@ -1891,6 +1947,16 @@
 		$('#mlaClimateMetricGroup').value = state.metricGroup;
 		writeState();
 		render();
+	});
+	$('#mlaClimateMetricSearch').addEventListener('input', event => {
+		event.currentTarget.setCustomValidity('');
+	});
+	$('#mlaClimateMetricSearch').addEventListener('change', selectSearchedMetric);
+	$('#mlaClimateMetricSearch').addEventListener('keydown', event => {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			selectSearchedMetric();
+		}
 	});
 	$('#mlaClimateMetricGroup').addEventListener('change', event => {
 		state.metricGroup = event.target.value;

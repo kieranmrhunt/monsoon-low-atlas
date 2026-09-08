@@ -1071,7 +1071,7 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
         ): pair
         for pair in pair_records
     }
-    entries: list[dict[str, Any]] = []
+    all_entries: list[dict[str, Any]] = []
     assets_dir = output_dir / "assets"
     for impact_manifest in impact_manifests:
         impact_meta, impact_payload, impact_asset = _manifest_payload(impact_manifest)
@@ -1096,7 +1096,7 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
         pair.setdefault("capabilities", {})["precipitation_impacts"] = True
         historical_path = Path(impact_meta["historical_manifest"])
         future_path = Path(impact_meta["future_manifest"])
-        entries.append(
+        all_entries.append(
             {
                 "id": pair["id"],
                 "source_label": pair["source_label"],
@@ -1105,6 +1105,7 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
                 "future": _run_payload(future_path),
             }
         )
+    entries = [entry for entry in all_entries if str(entry["id"]) in target_pair_ids]
     if {str(entry["id"]) for entry in entries} != target_pair_ids:
         raise ValueError(
             f"received impact pairs for {sorted(str(entry['id']) for entry in entries)}; "
@@ -1131,6 +1132,7 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
             "generated_utc": index["generated_utc"],
             "index": {"path": new_index.name, "sha256": sha256(new_index), "bytes": new_index.stat().st_size},
             "impact_models": len(entries),
+            "impact_pairs": len(all_entries),
             "impact_schema": ENSEMBLE_SCHEMA,
         }
     )

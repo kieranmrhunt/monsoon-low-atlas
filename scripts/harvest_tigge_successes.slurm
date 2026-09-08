@@ -2,9 +2,9 @@
 #SBATCH --account=ncas_climate
 #SBATCH --partition=standard
 #SBATCH --qos=high
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=12G
-#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=01:30:00
 #SBATCH --job-name=mla-tigge-harvest
 #SBATCH --output=hpc-logs/mla-tigge-harvest-%j.out
 #SBATCH --error=hpc-logs/mla-tigge-harvest-%j.err
@@ -26,7 +26,7 @@ cd "$ATLAS_ROOT"
   --run-root "$RUN_ROOT" \
   --public-root "$PUBLIC_ROOT" \
   --models "$MODELS" \
-  --workers 16 \
+  --workers 8 \
   --download \
   --download-workers 8
 

@@ -99,6 +99,11 @@ The HighResMIP full-physics comparison uses `hist-1950` and `highres-future` pai
 
 The companion `scripts/submit_cmip6_highres_impacts.sh` workflow derives the same India-wide, regional and storm-centred rainfall diagnostics for the three-model HighResMIP family.
 
+`scripts/submit_cmip6_scenario_impacts.sh` fills the corresponding impact
+payloads for the completed HadGEM3-GC31-MM SSP1-2.6 and SSP5-8.5 comparisons.
+The browser rebuild attaches those pair-specific results without treating the
+two additional scenarios as members of the five-model SSP2-4.5 ensemble.
+
 HadGEM3-GC31-MM r1i1p1f3 provides a like-for-like historical member with complete SSP1-2.6 and SSP5-8.5 high-frequency physics. Both four-month 1990/2080 canary pairs pass the field, 360-day calendar, detection, linking, final-centre physics and publication QA chain. Full 1981–2010 versus 2070–2099 processing is submitted separately for both scenarios; canary changes are never admitted as climate evidence.
 
 ## Weather archive and deployment
@@ -202,11 +207,15 @@ and UKMO TIGGE data are CC BY 4.0; BoM, CMA, CPTEC, IMD, JMA, Météo-France and
 NCMRWF are CC BY-NC 4.0. The public manifest retains the provider and licence
 for every model rather than presenting TIGGE as one homogeneous system.
 
-ECDS control and perturbed forecasts are submitted as one genuine multi-value
-request for pressure levels and one for surface fields. This preserves every
-member while halving the remote queue footprint; missing accumulated-rainfall
-frames are recorded and excluded from the optional precipitation score rather
-than interpreted as dry intervals.
+ECDS control and perturbed forecasts, pressure levels and surface fields are
+submitted in one genuine multi-value request per centre/cycle. This preserves
+every member while minimising the remote queue footprint; missing accumulated-
+rainfall frames are recorded and excluded from the optional precipitation score
+rather than interpreted as dry intervals. The IMD/NCMRWF priority campaign uses
+`forecast_pipeline.submit_tigge_requests` to fill the ECDS queue and exit
+immediately. A separate half-hourly harvester downloads successful requests and
+submits only the local decoding/tracking work to Slurm, so remote tape staging
+does not occupy compute nodes or expire at the worker time limit.
 
 The Met Office rolling MOGREPS-G archive can be captured before its oldest
 objects expire with:

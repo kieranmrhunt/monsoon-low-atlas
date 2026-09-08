@@ -259,9 +259,17 @@ def rebuild(repo_root: Path, *, refresh: bool = True) -> Path:
         status="multi-model-awaiting-review",
     )
 
-    impacts = [root / "climate-impact" / "manifest.json" for root in fixed_roots]
-    if all(path.is_file() for path in impacts):
-        attach_impacts(output_root / "manifest.json", impacts)
+    core_impacts = [root / "climate-impact" / "manifest.json" for root in fixed_roots]
+    supplementary_impacts = [
+        root / "climate-impact" / "manifest.json"
+        for root in extra_roots
+        if (root / "climate-impact" / "manifest.json").is_file()
+    ]
+    if all(path.is_file() for path in core_impacts):
+        attach_impacts(
+            output_root / "manifest.json",
+            core_impacts + supplementary_impacts,
+        )
 
     attach_resolution_control(output_root / "manifest.json", control_manifest)
 

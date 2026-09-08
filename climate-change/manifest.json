@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-09-04T16:22:14Z",
+  "generated_utc": "2026-09-07T12:20:48Z",
   "gwl_comparisons": 2,
   "gwl_models_by_level": {
     "1.5": 4,
@@ -8,6 +8,7 @@
   "highresmip_models": 3,
   "highresmip_schema": "lps-atlas-cmip6-climate-index-v1",
   "impact_models": 5,
+  "impact_pairs": 7,
   "impact_schema": "lps-atlas-cmip6-precipitation-impact-ensemble-v1",
   "included_pair_ids": [
     "8b9d1b05fc4d3d66",
@@ -17,9 +18,9 @@
     "202d09fe9eb81efb"
   ],
   "index": {
-    "bytes": 53221,
-    "path": "climate-index.64ff7812d47b.json.gz",
-    "sha256": "eaf8cadb9dd6a92bd566c576ea28b0be95840bcf1724e5dada9f62364a270530"
+    "bytes": 53334,
+    "path": "climate-index.a251c2d598b7.json.gz",
+    "sha256": "d16aeb999fc4fc2a6ef421e924e24e3b170e5076824690b4bff10aaa8f029669"
   },
   "models": 5,
   "pairs": 23,

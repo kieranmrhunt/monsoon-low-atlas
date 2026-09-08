@@ -1411,21 +1411,25 @@ class TiggeAdapter(BaseAdapter):
             )
         )
 
-    def _retrieve(
+    def ecds_request(
         self,
         cycle: datetime,
         steps: Sequence[int],
-        target: Path,
-        forecast_types: Sequence[str] | str,
-        levtypes: Sequence[str] | str,
+        forecast_types: Sequence[str] | str | None = None,
+        levtypes: Sequence[str] | str = ("pl", "sfc"),
         parameters: Sequence[str] | None = None,
-    ) -> None:
-        try:
-            import cdsapi
-        except ImportError as error:
-            raise DownloadError("cdsapi is required for TIGGE retrieval") from error
+    ) -> dict[str, Any]:
+        """Build the complete ECDS request for one model cycle.
+
+        Separating construction from retrieval allows long-running TIGGE tape
+        staging to be submitted asynchronously, without keeping a Slurm worker
+        alive while the remote service queues and executes the request.
+        """
+
         requested_types = (
-            [forecast_types]
+            list(self.centre.forecast_types)
+            if forecast_types is None
+            else [forecast_types]
             if isinstance(forecast_types, str)
             else [str(value) for value in forecast_types]
         )
@@ -1453,7 +1457,7 @@ class TiggeAdapter(BaseAdapter):
             requested_parameters.extend(str(value) for value in parameters)
         if not requested_parameters:
             raise DownloadError("TIGGE retrieval requires at least one parameter")
-        request = {
+        request: dict[str, Any] = {
             "class": "ti",
             "date": cycle.strftime("%Y-%m-%d"),
             "expver": "prod",
@@ -1472,6 +1476,38 @@ class TiggeAdapter(BaseAdapter):
         }
         if "pl" in requested_level_types:
             request["levelist"] = "500/700/850"
+        return request
+
+    def _retrieve(
+        self,
+        cycle: datetime,
+        steps: Sequence[int],
+        target: Path,
+        forecast_types: Sequence[str] | str,
+        levtypes: Sequence[str] | str,
+        parameters: Sequence[str] | None = None,
+    ) -> None:
+        try:
+            import cdsapi
+        except ImportError as error:
+            raise DownloadError("cdsapi is required for TIGGE retrieval") from error
+        requested_types = (
+            [forecast_types]
+            if isinstance(forecast_types, str)
+            else [str(value) for value in forecast_types]
+        )
+        requested_level_types = (
+            [levtypes]
+            if isinstance(levtypes, str)
+            else [str(value) for value in levtypes]
+        )
+        request = self.ecds_request(
+            cycle,
+            steps,
+            requested_types,
+            requested_level_types,
+            parameters,
+        )
         for attempt in range(1, self.queue_retry_attempts + 1):
             try:
                 client = cdsapi.Client(
