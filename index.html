@@ -607,6 +607,8 @@
 .mla-forecast-timeline input { width: 100%; accent-color: var(--mla-indigo); }
 .mla-forecast-time { min-width: 174px; text-align: right; font-variant-numeric: tabular-nums; }
 .mla-forecast-map-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 12px 11px; color: var(--mla-muted); font-size: 12px; }
+.mla-forecast-wn2-terms { margin: 0; padding: 0 12px 11px; color: var(--mla-muted); font-size: 10px; line-height: 1.35; }
+.mla-forecast-wn2-terms[hidden] { display: none; }
 .mla-forecast-key { display: inline-flex; align-items: center; gap: 6px; }
 .mla-forecast-run-key { display: flex; flex: 1 0 100%; flex-wrap: wrap; gap: 6px 12px; padding-top: 8px; border-top: 1px solid var(--mla-line); }
 .mla-forecast-run-key[hidden] { display: none; }
@@ -909,7 +911,7 @@
 				<label class="mla-field" for="mlaForecastArchiveHour"><span class="mla-label">Valid hour (UTC)</span><select class="mla-select" id="mlaForecastArchiveHour"><option value="00">00 UTC</option><option value="06">06 UTC</option><option value="12">12 UTC</option><option value="18">18 UTC</option></select></label>
 				<label class="mla-field" id="mlaForecastArchiveWeatherField" for="mlaForecastArchiveWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastArchiveWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 				<label class="mla-field" id="mlaForecastArchiveWeatherSourceField" for="mlaForecastArchiveWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastArchiveWeatherModel"><option value="">Select a run below</option></select></label>
-				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show ensemble members</label>
+				<label class="mla-map-toggle" id="mlaForecastArchiveMembersLabel" for="mlaForecastArchiveMembers" title="Thick map means require more than one third of the full ensemble at each lead. Lower-support paths always remain as thin member tracks." hidden><input id="mlaForecastArchiveMembers" type="checkbox"> Show all ensemble members</label>
 				<section class="mla-forecast-archive-calendar" id="mlaForecastArchiveCalendar" aria-label="Processed forecast availability by date and model">
 					<div class="mla-forecast-calendar-head"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarPrevious" type="button" aria-label="Previous available month">‹</button><label class="mla-field" for="mlaForecastCalendarMonth"><span class="mla-label">Available month</span><select class="mla-select" id="mlaForecastCalendarMonth"></select></label><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaForecastCalendarNext" type="button" aria-label="Next available month">›</button><p>Coloured marks show models with output valid on each date.</p></div>
 					<div class="mla-forecast-calendar-legend" id="mlaForecastCalendarLegend" aria-label="Calendar model colours"></div>
@@ -926,7 +928,7 @@
 							<label class="mla-field" for="mlaForecastInitialization"><span class="mla-label">Initialization</span><select class="mla-select" id="mlaForecastInitialization"><option value="latest">Latest available</option></select></label>
 							<label class="mla-field" for="mlaForecastWeather"><span class="mla-label">Weather field</span><select class="mla-select" id="mlaForecastWeather"><option value="none">No weather field</option><option value="vorticity">Positive 850-hPa vorticity</option><option value="precipitation">Trailing 24 h precipitation</option></select></label>
 							<label class="mla-field" for="mlaForecastWeatherModel"><span class="mla-label">Weather source</span><select class="mla-select" id="mlaForecastWeatherModel"></select></label>
-							<label class="mla-map-toggle" for="mlaForecastMembers"><input id="mlaForecastMembers" type="checkbox"> Show ensemble members</label>
+							<label class="mla-map-toggle" for="mlaForecastMembers" title="Thick map means require more than one third of the full ensemble at each lead. Lower-support paths always remain as thin member tracks."><input id="mlaForecastMembers" type="checkbox"> Show all ensemble members</label>
 						</div>
 					</div>
 					<div class="mla-forecast-map-stack" id="mlaForecastMapStack">
@@ -943,7 +945,8 @@
 						<output class="mla-forecast-time" id="mlaForecastTime">—</output>
 					</div>
 					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-analysis-key" id="mlaForecastAnalysisKey" aria-label="Analysis-track colours" hidden></span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span><div class="mla-forecast-run-key" id="mlaForecastRunKey" aria-label="Forecast track colours" hidden></div></div>
-					<section class="mla-forecast-evolution" id="mlaForecastEvolutionPanel" hidden><div class="mla-forecast-evolution-head"><h3>Storm evolution</h3><label class="mla-field mla-forecast-evolution-system"><span class="mla-label">Storm</span><select class="mla-select" id="mlaForecastEvolutionSystem" aria-label="Forecast-system group"></select></label></div><div class="mla-forecast-evolution-legend" id="mlaForecastEvolutionLegend" aria-label="Model and initialization colours"></div><canvas id="mlaForecastEvolution" role="img" tabindex="0" aria-label="Member and mean vorticity with mean trailing 24-hour precipitation across matched model runs; drag to change valid time"></canvas><p class="mla-chart-readout" id="mlaForecastEvolutionStatus" role="status" aria-live="polite"></p></section>
+					<p class="mla-forecast-wn2-terms" id="mlaForecastWeatherNextTerms" hidden>Google Cloud Storage · © 2024-6 Google LLC, whose machine learning models were used to create the experimental data made available under the following licence terms <a href="https://storage.googleapis.com/weathernext-public/terms-of-use.pdf" rel="noopener">https://storage.googleapis.com/weathernext-public/terms-of-use.pdf</a>. This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.</p>
+					<section class="mla-forecast-evolution" id="mlaForecastEvolutionPanel" hidden><div class="mla-forecast-evolution-head"><h3>Storm evolution</h3><label class="mla-field mla-forecast-evolution-system"><span class="mla-label">Storm</span><select class="mla-select" id="mlaForecastEvolutionSystem" aria-label="Forecast-system group"></select></label></div><div class="mla-forecast-evolution-legend" id="mlaForecastEvolutionLegend" aria-label="Model and initialization colours"></div><canvas id="mlaForecastEvolution" role="img" tabindex="0" aria-label="Member and mean vorticity with available member or mean trailing 24-hour precipitation across matched model runs; drag to change valid time"></canvas><p class="mla-chart-readout" id="mlaForecastEvolutionStatus" role="status" aria-live="polite"></p></section>
 				</section>
 				<aside class="mla-card mla-forecast-archive-sidebar" id="mlaForecastArchiveSidebar" hidden><h3 class="mla-sr-only">Forecast model and lead-time selection</h3><div class="mla-forecast-archive-results" id="mlaForecastArchiveResults" aria-live="polite"></div></aside>
 			</div>
@@ -1127,7 +1130,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","analysisSeries":"assets/atlas-analysis-series.c5ee5001daff.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","climateChangeBase":"climate-change","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","reanalysisBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-reanalyses-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.3681542b6718.js"></script>
-<script src="assets/forecast-app.b231200b0f62.js"></script>
+<script src="assets/forecast-app.a6842d2dad3e.js"></script>
 <script src="assets/climate-change-app.c7f85a2b71a1.js"></script>
 
 </body>

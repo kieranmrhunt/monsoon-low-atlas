@@ -14,6 +14,7 @@
 	const MODEL_TRACK_COLOURS = {
 		gfs: '#d7191c', gefs: '#f07c00', ifs: '#2166ac', 'ifs-ens': '#00a6ca',
 		aigfs: '#7b2cbf', aigefs: '#d45087',
+		weathernext2: '#0066ff',
 		'graphcast-noaa': '#1b9e77', 'graphcast-ifs-noaa': '#00796b',
 		aifs: '#5e3c99', 'aifs-ens': '#b358c8', 'ukmo-global': '#8c510a', 'mogreps-g': '#4d4d4d',
 		'gefs-control': '#e66101', 'tigge-ecmwf': '#4575b4',
@@ -32,7 +33,7 @@
 	const ALTERNATIVE_ANALYSIS_KEYS = Object.freeze(Object.keys(ANALYSIS_TRACKS).filter(source => source !== 'era5'));
 	const OPERATIONAL_MODEL_ORDER = [
 		'gfs', 'gefs', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
-		'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
+		'weathernext2', 'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
 	];
 	let storedPreferences = {};
 	try {
@@ -528,7 +529,7 @@
 
 	function preferredModel() {
 		const available = Object.keys(state.manifest.latest || {});
-		for (const id of ['ifs', 'aifs', 'aigfs', 'gfs', 'ifs-ens', 'aifs-ens', 'aigefs', 'gefs']) if (available.includes(id)) return id;
+		for (const id of ['ifs', 'aifs', 'aigfs', 'gfs', 'weathernext2', 'ifs-ens', 'aifs-ens', 'aigefs', 'gefs']) if (available.includes(id)) return id;
 		return available[0] || '';
 	}
 
@@ -1033,7 +1034,7 @@
 	}
 
 	function defaultArchiveEntry(entries) {
-		const preferred = ['ifs', 'aifs', 'aigfs', 'graphcast-ifs-noaa', 'graphcast-noaa', 'gfs', 'ifs-ens', 'aifs-ens', 'aigefs', 'gefs', 'mogreps-g', 'ukmo-global', 'gefs-control', 'tigge-ecmwf'];
+		const preferred = ['ifs', 'aifs', 'aigfs', 'graphcast-ifs-noaa', 'graphcast-noaa', 'gfs', 'weathernext2', 'ifs-ens', 'aifs-ens', 'aigefs', 'gefs', 'mogreps-g', 'ukmo-global', 'gefs-control', 'tigge-ecmwf'];
 		const target = archiveTargetTime();
 		return [...entries].sort((a, b) => {
 			const first = preferred.indexOf(a.model), second = preferred.indexOf(b.model);
@@ -1703,26 +1704,101 @@
 		return (payload.tracks || []).filter(track => ids.has(track.id));
 	}
 
-	function meanTrack(payload, system) {
-		if (!payload || !system) return [];
+	// Map contract: thick ensemble paths require >1/3 of the full run's
+	// members at each lead. Thin member paths preserve low-support guidance.
+	// Keep reference geometry separate so hiding a mean never hides a system
+	// from selection, cycle matching, or its evolution charts.
+	function ensembleMeanMinimum(payload) {
+		if (payload.model.kind !== 'ensemble') return 1;
+		const members = payload.members || {};
+		const total = Math.max(Number(members.expected) || 0, Number(members.available) || 0, (members.ids || []).length);
+		return total > 0 ? Math.floor(total / 3) + 1 : Infinity;
+	}
+
+	function splitPlotPath(points, include = () => true, checkMeanSpeed = false) {
+		let cadence = Infinity;
+		for (let index = 1; index < points.length; index++) {
+			const gap = Number(points[index][0]) - Number(points[index - 1][0]);
+			if (gap > 0) cadence = Math.min(cadence, gap);
+		}
+		const paths = [];
+		let current = [];
+		for (let index = 0; index < points.length; index++) {
+			const point = points[index];
+			if (!include(point, index)) {
+				if (current.length) paths.push(current);
+				current = [];
+				continue;
+			}
+			const previous = current[current.length - 1];
+			const gap = previous ? Number(point[0]) - Number(previous[0]) : 0;
+			if (previous && (gap > cadence + .01 || (checkMeanSpeed && haversineKm(previous[1], previous[2], point[1], point[2]) > 150 * gap))) {
+				paths.push(current);
+				current = [];
+			}
+			current.push(point);
+		}
+		if (current.length) paths.push(current);
+		return paths;
+	}
+
+	function systemMeanGeometry(payload, system) {
+		if (!payload || !system) return {reference: [], mean: [], meanPaths: []};
 		let cache = meanTrackCaches.get(payload);
 		if (!cache) { cache = new Map(); meanTrackCaches.set(payload, cache); }
 		if (cache.has(system.id)) return cache.get(system.id);
 		const tracks = tracksForSystem(payload, system);
 		const byStep = new Map();
 		for (const track of tracks) for (const point of track.points) {
-			if (!byStep.has(point[0])) byStep.set(point[0], []);
-			byStep.get(point[0]).push(point);
+			const step = Number(point[0]), member = String(track.member || track.id);
+			if (!byStep.has(step)) byStep.set(step, new Map());
+			const members = byStep.get(step);
+			if (!members.has(member)) members.set(member, []);
+			members.get(member).push(point);
 		}
-		const minimum = Math.max(1, Math.ceil((system.member_count || tracks.length) * .2));
-		const result = [...byStep.entries()].filter(([, points]) => points.length >= minimum).sort((a, b) => a[0] - b[0]).map(([step, points]) => [
-			step,
-			points.reduce((sum, point) => sum + Number(point[1]), 0) / points.length,
-			points.reduce((sum, point) => sum + Number(point[2]), 0) / points.length,
-			points.length
-		]);
+		const all = [...byStep.entries()].sort((a, b) => a[0] - b[0]).map(([step, members]) => {
+			// A member with two branches still contributes only one vote and
+			// one member-weighted centre; track count is not ensemble support.
+			const centres = [...members.values()].map(points => [
+				points.reduce((sum, point) => sum + Number(point[1]), 0) / points.length,
+				points.reduce((sum, point) => sum + Number(point[2]), 0) / points.length
+			]);
+			return [step, centres.reduce((sum, point) => sum + point[0], 0) / centres.length,
+				centres.reduce((sum, point) => sum + point[1], 0) / centres.length, members.size];
+		});
+		const referenceMinimum = Math.max(1, Math.ceil((system.member_count || tracks.length) * .2));
+		const minimum = ensembleMeanMinimum(payload);
+		const meanPaths = splitPlotPath(all, point => point[3] >= minimum, payload.model.kind === 'ensemble');
+		const result = {reference: all.filter(point => point[3] >= referenceMinimum), mean: meanPaths.flat(), meanPaths};
 		cache.set(system.id, result);
 		return result;
+	}
+
+	function systemReferenceTrack(payload, system) { return systemMeanGeometry(payload, system).reference; }
+	function meanTrack(payload, system) { return systemMeanGeometry(payload, system).mean; }
+
+	function forecastMapPaths(payload, system) {
+		const geometry = systemMeanGeometry(payload, system);
+		if (!geometry.mapPaths) geometry.mapPaths = new Map();
+		if (geometry.mapPaths.has(state.showMembers)) return geometry.mapPaths.get(state.showMembers);
+		const supported = new Set(geometry.mean.map(point => Number(point[0])));
+		const memberPaths = payload.model.kind === 'ensemble' ? tracksForSystem(payload, system).flatMap(track =>
+			splitPlotPath(track.points, (point, index) => state.showMembers ||
+				[track.points[index - 1], point, track.points[index + 1]].some(value => value && !supported.has(Number(value[0]))))
+		) : [];
+		const result = {mean: geometry.mean, meanPaths: geometry.meanPaths, memberPaths};
+		geometry.mapPaths.set(state.showMembers, result);
+		return result;
+	}
+
+	function drawMemberMarkers(target, paths, current, selected) {
+		for (const points of paths.memberPaths) {
+			const point = points.find(value => Math.abs(Number(value[0]) - current) < .01);
+			if (!point) continue;
+			const xy = target.projection.project(point[2], point[1]);
+			target.context.beginPath(); target.context.arc(xy[0], xy[1], selected ? 2.6 : 1.8, 0, Math.PI * 2);
+			target.context.fill();
+		}
 	}
 
 	function haversineKm(longitudeA, latitudeA, longitudeB, latitudeB) {
@@ -1776,7 +1852,7 @@
 		if (!cache) { cache = new Map(); systemTimelineCaches.set(item.payload, cache); }
 		if (cache.has(item.system.id)) return cache.get(item.system.id);
 		const cycle = new Date(item.payload.cycle_utc).getTime();
-		const points = meanTrack(item.payload, item.system).map(point => ({
+		const points = systemReferenceTrack(item.payload, item.system).map(point => ({
 			time: cycle + Number(point[0]) * 3600000,
 			step: Number(point[0]), longitude: Number(point[1]), latitude: Number(point[2])
 		}));
@@ -1944,7 +2020,7 @@
 		if (analysisCentreCaches.has(payload)) return analysisCentreCaches.get(payload);
 		const output = [];
 		for (const item of payload.systems || []) {
-			const point = meanTrack(payload, item).find(value => Number(value[0]) === 0);
+			const point = systemReferenceTrack(payload, item).find(value => Number(value[0]) === 0);
 			if (point) output.push({system_id: String(item.id), longitude: Number(point[1]), latitude: Number(point[2])});
 		}
 		analysisCentreCaches.set(payload, output);
@@ -1956,7 +2032,7 @@
 		if (!cache) { cache = new Map(); analysisHistoryCaches.set(payload, cache); }
 		const cacheKey = `${state.mode}:${modelId}:${system.id}`;
 		if (cache.has(cacheKey)) return cache.get(cacheKey);
-		const forecast = meanTrack(payload, system);
+		const forecast = systemReferenceTrack(payload, system);
 		const initial = forecast.find(point => Number(point[0]) === 0);
 		if (!initial) { cache.set(cacheKey, []); return []; }
 		const currentCycle = new Date(payload.cycle_utc).getTime();
@@ -2007,7 +2083,8 @@
 
 	function stitchedTrack(payload, system, modelId) {
 		const forecast = meanTrack(payload, system);
-		const history = analysisHistory(payload, system, modelId);
+		const history = payload.model.kind !== 'ensemble' || forecast.some(point => Number(point[0]) === 0)
+			? analysisHistory(payload, system, modelId) : [];
 		return {history, points: [...history, ...forecast]};
 	}
 
@@ -2088,14 +2165,12 @@
 			const colour = runColour(entry);
 			for (const system of payload.systems || []) {
 				if (visibleSystemKeys && !visibleSystemKeys.has(`${runKey}:${system.id}`)) continue;
-				const tracks = tracksForSystem(payload, system);
+				const paths = forecastMapPaths(payload, system);
 				const key = `${runKey}:${system.id}`;
 				const selected = selectedKeys.has(key);
 				if (state.mode === 'latest' && state.hoveredSystemKey === key && !selected) hoveredItem = {entry, system};
-				if (state.showMembers && payload.model.kind === 'ensemble') {
-					for (const track of tracks) drawPath(target.context, target.projection, track.points, colour, 1, selected ? .48 : .24);
-				}
-				const mean = meanTrack(payload, system);
+				for (const points of paths.memberPaths) drawPath(target.context, target.projection, points, colour, 1, selected ? .6 : .3);
+				const mean = paths.mean;
 				const stitched = stitchedTrack(payload, system, model.id);
 				// Operational-style distinction: previous analyses are a thin solid
 				// history, while every forecast lead retains one thicker solid path.
@@ -2103,37 +2178,46 @@
 				// as an artificial "past" and "future" forecast segment.
 				if (selected) {
 					drawPath(target.context, target.projection, stitched.history, '#fffdf6', 3.6, .92);
-					drawPath(target.context, target.projection, mean, '#fffdf6', payload.model.kind === 'ensemble' ? 6.2 : 6.6, .96);
+					for (const points of paths.meanPaths) drawPath(target.context, target.projection, points, '#fffdf6', payload.model.kind === 'ensemble' ? 6.2 : 6.6, .96);
 				}
 				drawPath(target.context, target.projection, stitched.history, colour, selected ? 1.8 : 1.25, selected ? .9 : .62);
-				drawPath(target.context, target.projection, mean, colour, payload.model.kind === 'ensemble' ? 3.1 : 3.5, selected ? 1 : .9);
+				for (const points of paths.meanPaths) drawPath(target.context, target.projection, points, colour, payload.model.kind === 'ensemble' ? 3.1 : 3.5, selected ? 1 : .9);
 				if (selected) for (const point of stitched.history) {
 					const xy = target.projection.project(point[2], point[1]);
 					target.context.beginPath(); target.context.arc(xy[0], xy[1], 2.8, 0, Math.PI * 2);
 					target.context.fillStyle = colour; target.context.fill(); target.context.lineWidth = 1.1; target.context.strokeStyle = '#fffdf6'; target.context.stroke();
 				}
-				const marker = pointAt(mean, current);
+				const marker = payload.model.kind === 'ensemble' ? mean.find(point => Math.abs(Number(point[0]) - current) < .01) : pointAt(mean, current);
 				if (marker) {
 					const xy = target.projection.project(marker[2], marker[1]);
 					target.context.beginPath(); target.context.arc(xy[0], xy[1], selected ? 7 : 5.3, 0, Math.PI * 2);
 					target.context.fillStyle = colour; target.context.fill(); target.context.lineWidth = selected ? 3 : 2; target.context.strokeStyle = '#fffdf6'; target.context.stroke();
+				} else if (payload.model.kind === 'ensemble') {
+					target.context.fillStyle = colour;
+					drawMemberMarkers(target, paths, current, selected);
 				}
 			}
 		}
 		if (hoveredItem) {
 			const {entry, system} = hoveredItem;
 			const colour = runColour(entry);
-			const mean = meanTrack(entry.payload, system);
+			const paths = forecastMapPaths(entry.payload, system);
+			const mean = paths.mean;
 			const stitched = stitchedTrack(entry.payload, system, entry.model.id);
 			drawPath(target.context, target.projection, stitched.history, '#fffdf6', 4.4, .96);
-			drawPath(target.context, target.projection, mean, '#fffdf6', 7.2, .98);
+			for (const points of paths.meanPaths) drawPath(target.context, target.projection, points, '#fffdf6', 7.2, .98);
 			drawPath(target.context, target.projection, stitched.history, colour, 2.2, 1);
-			drawPath(target.context, target.projection, mean, colour, 4.2, 1);
-			const marker = pointAt(mean, stepForPayload(entry.payload));
+			for (const points of paths.meanPaths) drawPath(target.context, target.projection, points, colour, 4.2, 1);
+			for (const points of paths.memberPaths) drawPath(target.context, target.projection, points, colour, 1.3, 1);
+			const current = stepForPayload(entry.payload);
+			const marker = entry.payload.model.kind === 'ensemble' ? mean.find(point => Math.abs(Number(point[0]) - current) < .01) : pointAt(mean, current);
 			if (marker) {
 				const xy = target.projection.project(marker[2], marker[1]);
 				target.context.beginPath(); target.context.arc(xy[0], xy[1], 7.2, 0, Math.PI * 2);
 				target.context.fillStyle = colour; target.context.fill(); target.context.lineWidth = 2.5; target.context.strokeStyle = '#fffdf6'; target.context.stroke();
+			} else if (entry.payload.model.kind === 'ensemble') {
+				target.context.fillStyle = colour;
+				drawMemberMarkers(target, paths, current, true);
 			}
 		}
 		if (state.mode !== 'latest' && state.analysisSources.size) {
@@ -2190,9 +2274,12 @@
 		const tracks = tracksForSystem(item.payload, item.system);
 		const byStep = new Map();
 		const byMember = new Map();
+		const precipitationByStep = new Map();
+		const precipitationByMember = new Map();
 		for (const track of tracks) {
 			const member = String(track.member || track.id || 'member');
 			if (!byMember.has(member)) byMember.set(member, new Map());
+			if (!precipitationByMember.has(member)) precipitationByMember.set(member, new Map());
 			for (const point of track.points || []) {
 				if (point[7] === 'i' || !Number.isFinite(Number(point[3]))) continue;
 				const step = Number(point[0]);
@@ -2202,6 +2289,15 @@
 				if (!memberSteps.has(step)) memberSteps.set(step, []);
 				memberSteps.get(step).push(Number(point[3]));
 			}
+			for (const point of track.centre_precipitation_24h || []) {
+				const step = Number(point[0]), value = Number(point[1]);
+				if (!Number.isFinite(step) || !Number.isFinite(value)) continue;
+				if (!precipitationByStep.has(step)) precipitationByStep.set(step, []);
+				precipitationByStep.get(step).push(value);
+				const memberSteps = precipitationByMember.get(member);
+				if (!memberSteps.has(step)) memberSteps.set(step, []);
+				memberSteps.get(step).push(value);
+			}
 		}
 		const stepSeries = values => [...values.entries()].sort((a, b) => a[0] - b[0]).map(([step, samples]) => ({
 			step,
@@ -2209,13 +2305,17 @@
 			value: samples.reduce((sum, value) => sum + value, 0) / samples.length
 		}));
 		const vorticity = stepSeries(byStep);
-		const members = [...byMember.entries()].map(([member, values]) => ({member, vorticity: stepSeries(values)})).filter(record => record.vorticity.length);
-		let precipitation = [];
+		const members = [...byMember.entries()].map(([member, values]) => ({
+			member,
+			vorticity: stepSeries(values),
+			precipitation: stepSeries(precipitationByMember.get(member) || new Map())
+		})).filter(record => record.vorticity.length || record.precipitation.length);
+		let precipitation = stepSeries(precipitationByStep);
 		const precipitationRecord = item.payload.weather && item.payload.weather.precipitation
 			? await decodeWeather(item.payload, 'precipitation')
 			: null;
-		if (precipitationRecord) {
-			const mean = new Map(meanTrack(item.payload, item.system).map(point => [Number(point[0]), point]));
+		if (!precipitation.length && precipitationRecord) {
+			const mean = new Map(systemReferenceTrack(item.payload, item.system).map(point => [Number(point[0]), point]));
 			const native = (item.payload.steps || []).map((step, frame) => {
 				const point = mean.get(Number(step));
 				if (!point) return null;
@@ -2367,11 +2467,14 @@
 		const memberVorticity = state.showMembers
 			? forecastSeries.flatMap(item => item.item.payload.model.kind === 'ensemble' ? item.values.members.flatMap(member => member.vorticity) : [])
 			: [];
-		const times = [...series.flatMap(item => [...item.values.vorticity, ...item.values.precipitation]), ...memberVorticity].map(point => point.time).filter(Number.isFinite);
+		const memberPrecipitation = state.showMembers
+			? forecastSeries.flatMap(item => item.item.payload.model.kind === 'ensemble' ? item.values.members.flatMap(member => member.precipitation || []) : [])
+			: [];
+		const times = [...series.flatMap(item => [...item.values.vorticity, ...item.values.precipitation]), ...memberVorticity, ...memberPrecipitation].map(point => point.time).filter(Number.isFinite);
 		const first = Math.min(...times), last = Math.max(...times), span = Math.max(3600000, last - first);
 		const x = time => left + (Number(time) - first) / span * plotWidth;
 		const vortMaximum = Math.max(1, ...series.flatMap(item => item.values.vorticity.map(point => point.value)), ...memberVorticity.map(point => point.value)) * 1.08;
-		const rainMaximum = Math.max(1, ...series.flatMap(item => item.values.precipitation.map(point => point.value))) * 1.08;
+		const rainMaximum = Math.max(1, ...series.flatMap(item => item.values.precipitation.map(point => point.value)), ...memberPrecipitation.map(point => point.value)) * 1.08;
 		const yVort = value => vortTop + panelHeight * (1 - Number(value) / vortMaximum);
 		const yRain = value => rainTop + panelHeight * (1 - Number(value) / rainMaximum);
 		context.font = '12px "effra", Effra, Arial, sans-serif';
@@ -2398,7 +2501,10 @@
 			if (record.item.payload.model.kind !== 'ensemble') return;
 			const colour = runColour(record.item);
 			const alpha = clamp(.62 / Math.sqrt(Math.max(1, record.values.members.length)), .075, .22);
-			for (const member of record.values.members) drawEvolutionLine(context, member.vorticity, x, yVort, colour, [], false, .85, alpha);
+			for (const member of record.values.members) {
+				drawEvolutionLine(context, member.vorticity, x, yVort, colour, [], false, .85, alpha);
+				drawEvolutionLine(context, member.precipitation || [], x, yRain, colour, [], false, .75, alpha);
+			}
 		});
 		series.forEach((record, index) => {
 			const colour = record.item ? runColour(record.item) : record.colour;
@@ -2419,7 +2525,7 @@
 		context.save(); context.translate(15, rainTop + panelHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = dark; context.fillText('Trailing 24 h rain (mm)', 0, 0); context.restore();
 		canvas._forecastTimeline = {left, right: width - right, first, last};
 		const status = $('#mlaForecastEvolutionStatus');
-		const rainAvailable = group.items.filter(item => weatherFields(item).has('precipitation')).length;
+		const rainAvailable = group.items.filter(item => weatherFields(item).has('precipitation') || tracksForSystem(item.payload, item.system).some(track => (track.centre_precipitation_24h || []).length)).length;
 		const rainLoaded = forecastSeries.filter(record => record.values.precipitation.length).length;
 		const rainLoading = group.items.filter(item => state.fullLoads.has(item.runKey)).length;
 		const ensembleMembers = state.showMembers ? forecastSeries.reduce((sum, record) => sum + (record.item.payload.model.kind === 'ensemble' ? record.values.members.length : 0), 0) : 0;
@@ -2444,6 +2550,8 @@
 		if (serial !== state.renderSerial) return;
 		updateTimeLabel();
 		const entries = displayEntries();
+		const weatherNextTerms = $('#mlaForecastWeatherNextTerms');
+		if (weatherNextTerms) weatherNextTerms.hidden = !entries.some(item => item.model.id === 'weathernext2');
 		const mapStack = $('#mlaForecastMapStack');
 		mapStack.dataset.zoom = state.mapZoom.toFixed(3);
 		mapStack.dataset.centerLon = state.mapCenterLon.toFixed(3);
@@ -2503,13 +2611,16 @@
 			const {model, payload, runKey} = entry;
 			for (const system of payload.systems || []) {
 				if (permitted && !permitted.has(`${runKey}:${system.id}`)) continue;
-				const points = meanTrack(payload, system).map(point => map.project(point[2], point[1]));
-				if (!points.length) continue;
-				let distanceSquared = Math.min(...points.map(point => (clickX - point[0]) ** 2 + (clickY - point[1]) ** 2));
-				for (let index = 1; index < points.length; index++) distanceSquared = Math.min(
-					distanceSquared,
-					pointSegmentDistanceSquared(clickX, clickY, points[index - 1][0], points[index - 1][1], points[index][0], points[index][1])
-				);
+				const paths = forecastMapPaths(payload, system);
+				let distanceSquared = Infinity;
+				for (const path of [...paths.meanPaths, ...paths.memberPaths]) {
+					const points = path.map(point => map.project(point[2], point[1]));
+					for (const point of points) distanceSquared = Math.min(distanceSquared, (clickX - point[0]) ** 2 + (clickY - point[1]) ** 2);
+					for (let index = 1; index < points.length; index++) distanceSquared = Math.min(
+						distanceSquared,
+						pointSegmentDistanceSquared(clickX, clickY, points[index - 1][0], points[index - 1][1], points[index][0], points[index][1])
+					);
+				}
 				const distance = Math.sqrt(distanceSquared);
 				if (!best || distance < best.distance) best = {model, payload, runKey, system, distance};
 			}
