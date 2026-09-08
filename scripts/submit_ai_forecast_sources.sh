@@ -23,3 +23,4 @@ FINAL_ID="$(sbatch --parsable --dependency="afterany:$DEPENDENCY" \
 
 echo "Submitted operational AI model jobs ${JOB_IDS[*]} and partial publisher $FINAL_ID"
 echo "Run root: $RUN_ROOT"
+/usr/bin/bash "$ATLAS_ROOT/scripts/submit_weathernext2_shards.sh" recent

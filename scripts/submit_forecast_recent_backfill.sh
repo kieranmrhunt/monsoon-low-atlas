@@ -25,7 +25,8 @@ cd "$ATLAS_ROOT"
   --manifest "$OUTPUT/manifest.json" \
   --output "$PLAN" \
   --jobs "$JOBS" \
-  --exclude-model aigefs
+  --exclude-model aigefs \
+  --exclude-model weathernext2
 
 COUNT="$(wc -l < "$JOBS")"
 if [[ "$COUNT" == "0" ]]; then

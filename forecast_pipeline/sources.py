@@ -85,6 +85,10 @@ def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
         horizon = 360 if value.hour in {0, 12} else 144
     elif model in {"aifs", "aifs-ens"}:
         horizon = 360
+    elif model == "weathernext2":
+        # WeatherNext 2 publishes 60 six-hourly frames from +6 to +360 h;
+        # unlike the other live feeds there is no t+0 frame in the Zarr run.
+        return list(range(6, 361, 6))
     elif model in TIGGE_CENTRES:
         horizon = TIGGE_CENTRES[model].maximum_horizon_hours
     elif model == "ukmo-global":
@@ -199,6 +203,14 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "ECMWF Artificial Intelligence Forecasting System control plus 50 perturbed members",
         "https://data.ecmwf.int/forecasts/", "ECMWF Open Data", "CC BY 4.0", "#9a54ad",
     ),
+    "weathernext2": ModelDefinition(
+        "weathernext2", "WeatherNext 2", "Google DeepMind", "ensemble", 64,
+        "Google DeepMind WeatherNext 2 experimental 64-member global ensemble forecast",
+        "https://developers.google.com/weathernext/guides/models-wn2",
+        "Google Cloud Storage Zarr",
+        "GDM Real-Time Weather Forecasting Experimental Data Terms; CC BY 4.0 for data at least one hour old",
+        "#0066ff",
+    ),
     "ukmo-global": ModelDefinition(
         "ukmo-global", "Met Office Global", "Met Office", "deterministic", 1,
         "Archived Met Office operational global deterministic forecast",
@@ -280,7 +292,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
 
 DEFAULT_MODELS = (
     "gfs", "gefs", "aigfs", "aigefs", "graphcast-noaa", "graphcast-ifs-noaa", "mogreps-g",
-    "ifs", "ifs-ens", "aifs", "aifs-ens",
+    "ifs", "ifs-ens", "aifs", "aifs-ens", "weathernext2",
 )
 
 
@@ -527,6 +539,7 @@ class BaseAdapter:
         warnings: list[str],
         tracking_qa: list[dict[str, Any]],
         expected_members: int | None = None,
+        publish_weather: bool = True,
     ) -> dict[str, Any]:
         definition = self.definition
         systems = assign_systems(tracks)
@@ -557,11 +570,6 @@ class BaseAdapter:
             },
             "tracks": tracks,
             "systems": systems,
-            "weather": compact_weather(
-                np.maximum(vorticity_mean, 0.0),
-                trailing_24h(precipitation_mean_cumulative, steps),
-                basis,
-            ),
             "source": {
                 "provider": definition.centre,
                 "service": definition.source_name,
@@ -594,9 +602,469 @@ class BaseAdapter:
             "tracking_qa": tracking_qa,
             "warnings": warnings,
         }
+        if publish_weather:
+            payload["weather"] = compact_weather(
+                np.maximum(vorticity_mean, 0.0),
+                trailing_24h(precipitation_mean_cumulative, steps),
+                basis,
+            )
         payload["qa"] = validate_cycle_payload(payload)
         if payload["qa"]["status"] == "failed":
             raise ValueError(f"{definition.id} payload failed QA: {payload['qa']['errors']}")
+        return payload
+
+
+class WeatherNext2Adapter(BaseAdapter):
+    """Authenticated Google Cloud Storage adapter for WeatherNext 2.
+
+    WeatherNext 2 supplies 64 members on a 0.25-degree global Zarr grid.  The
+    source chunks span the full horizontal grid, so operational production is
+    member-sharded by :mod:`forecast_pipeline.weathernext2_shards`; this class
+    deliberately keeps the scientific decoding and frozen v5.6 tracking in
+    one place for both those shards and bounded direct QA runs.
+
+    Live WeatherNext fields have distribution restrictions beyond those for a
+    derived, non-retrievable service.  The public atlas therefore publishes
+    derived member tracks and centre diagnostics, but no WeatherNext weather
+    grids.  Historic source fields remain available from Google under their
+    applicable terms rather than being mirrored by the atlas.
+    """
+
+    BUCKET = "weathernext"
+    DATASET_ROOT = "weathernext_2_0_0/zarr/2025_to_present"
+    REQUIRED_SURFACE_VARIABLES = (
+        "mean_sea_level_pressure",
+        "10m_u_component_of_wind",
+        "10m_v_component_of_wind",
+    )
+    PRECIPITATION_VARIABLES = ("total_precipitation_6hr", "total_precipitation")
+    PRESSURE_WIND_VARIABLES = ("u_component_of_wind", "v_component_of_wind")
+    MEMBER_COUNT = 64
+
+    def __init__(
+        self,
+        *,
+        filesystem: Any | None = None,
+        dataset_opener: Any | None = None,
+        workers: int = 2,
+    ):
+        super().__init__(workers=workers)
+        self.definition = MODEL_DEFINITIONS["weathernext2"]
+        self._filesystem_override = filesystem
+        self._dataset_opener = dataset_opener
+        self._filesystem_cache: Any | None = None
+
+    @classmethod
+    def cycle_prefix(cls, cycle: datetime) -> str:
+        value = cycle.astimezone(UTC)
+        return (
+            f"{cls.BUCKET}/{cls.DATASET_ROOT}/"
+            f"{value:%Y%m%d}_{value:%H}hr_01_preds"
+        )
+
+    @classmethod
+    def zarr_path(cls, cycle: datetime) -> str:
+        return f"{cls.cycle_prefix(cycle)}/predictions.zarr"
+
+    @classmethod
+    def success_path(cls, cycle: datetime) -> str:
+        return f"{cls.cycle_prefix(cycle)}/success"
+
+    def _filesystem(self) -> Any:
+        if self._filesystem_override is not None:
+            return self._filesystem_override
+        if self._filesystem_cache is not None:
+            return self._filesystem_cache
+        try:
+            import gcsfs
+        except ImportError as error:
+            raise DownloadError("WeatherNext 2 requires the gcsfs package") from error
+        credential_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        token: str = credential_path or "google_default"
+        project = (
+            os.environ.get("LPS_WEATHERNEXT_PROJECT", "").strip()
+            or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+            or None
+        )
+        try:
+            self._filesystem_cache = gcsfs.GCSFileSystem(
+                project=project,
+                token=token,
+                cache_timeout=0,
+            )
+        except Exception as error:
+            raise DownloadError(
+                "WeatherNext 2 authentication failed; configure Google Application "
+                "Default Credentials for the account granted bucket access"
+            ) from error
+        return self._filesystem_cache
+
+    def cycle_complete(self, cycle: datetime, horizon: int) -> bool:
+        if cycle < datetime(2025, 1, 1, tzinfo=UTC) or horizon > 360:
+            return False
+        try:
+            return bool(self._filesystem().exists(self.success_path(cycle)))
+        except Exception as error:
+            LOGGER.warning("WeatherNext 2 marker check failed for %s: %s", cycle_id(cycle), error)
+            return False
+
+    def _open_dataset(self, cycle: datetime) -> Any:
+        path = self.zarr_path(cycle)
+        if self._dataset_opener is not None:
+            dataset = self._dataset_opener(path)
+        else:
+            try:
+                import xarray as xr
+            except ImportError as error:
+                raise DownloadError("WeatherNext 2 requires xarray and zarr") from error
+            credential_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+            storage_options: dict[str, Any] = {
+                "token": credential_path or "google_default",
+                "cache_timeout": 0,
+            }
+            project = (
+                os.environ.get("LPS_WEATHERNEXT_PROJECT", "").strip()
+                or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+            )
+            if project:
+                storage_options["project"] = project
+            # Let Zarr construct its own asynchronous filesystem from the URL.
+            # Passing a synchronous gcsfs object across the xarray/Zarr bridge
+            # either crosses event loops or attempts to serialise its live ADC
+            # credentials, depending on the compute-node fsspec backend.
+            dataset = xr.open_zarr(
+                f"gs://{path}",
+                consolidated=True,
+                storage_options=storage_options,
+            )
+        variables = set(dataset.data_vars)
+        missing = sorted(set(self.REQUIRED_SURFACE_VARIABLES) - variables)
+        if not any(name in variables for name in self.PRECIPITATION_VARIABLES):
+            missing.append("total_precipitation[_6hr]")
+        has_level_dimension_winds = all(
+            name in variables for name in self.PRESSURE_WIND_VARIABLES
+        )
+        has_level_named_winds = all(
+            f"{level}_{component}_component_of_wind" in variables
+            for level in (850, 700, 500)
+            for component in ("u", "v")
+        )
+        if not has_level_dimension_winds and not has_level_named_winds:
+            missing.append("850/700/500-hPa u/v wind")
+        if missing:
+            close = getattr(dataset, "close", None)
+            if callable(close):
+                close()
+            raise DownloadError(
+                "WeatherNext 2 Zarr is missing required variables: " + ", ".join(missing)
+            )
+        return dataset
+
+    @staticmethod
+    def _time_hours(dataset: Any, cycle: datetime) -> np.ndarray:
+        if "time" not in dataset.coords:
+            raise DownloadError("WeatherNext 2 Zarr has no time coordinate")
+        values = np.asarray(dataset.coords["time"].values)
+        if np.issubdtype(values.dtype, np.timedelta64):
+            hours = values / np.timedelta64(1, "h")
+        elif np.issubdtype(values.dtype, np.datetime64):
+            origin = np.datetime64(cycle.astimezone(UTC).replace(tzinfo=None))
+            hours = (values - origin) / np.timedelta64(1, "h")
+        else:
+            hours = values.astype(float)
+        rounded = np.rint(np.asarray(hours, dtype=float)).astype(int)
+        if not np.allclose(np.asarray(hours, dtype=float), rounded, atol=1.0e-6):
+            raise DownloadError("WeatherNext 2 time coordinate is not in whole forecast hours")
+        return rounded
+
+    @staticmethod
+    def _nearest_indexes(source: np.ndarray, target: np.ndarray, *, cyclic: bool = False) -> np.ndarray:
+        values = np.asarray(source, dtype=float).reshape(-1)
+        requested = np.asarray(target, dtype=float).reshape(-1)
+        if cyclic:
+            distance = np.abs(
+                ((np.mod(values, 360.0)[:, None] - np.mod(requested, 360.0)[None, :] + 180.0) % 360.0)
+                - 180.0
+            )
+        else:
+            distance = np.abs(values[:, None] - requested[None, :])
+        indexes = distance.argmin(axis=0)
+        if float(np.max(distance[indexes, np.arange(requested.size)])) > 0.51:
+            raise DownloadError("WeatherNext 2 grid cannot represent the 1-degree atlas domain")
+        return indexes.astype(int)
+
+    @staticmethod
+    def _member_number(member: str) -> int:
+        match = re.fullmatch(r"m(\d{2})", member)
+        if not match or not 0 <= int(match.group(1)) < WeatherNext2Adapter.MEMBER_COUNT:
+            raise ValueError(f"invalid WeatherNext 2 member {member!r}")
+        return int(match.group(1))
+
+    def member_ids(self, member_limit: int | None = None) -> list[str]:
+        values = [f"m{number:02d}" for number in range(self.MEMBER_COUNT)]
+        return values[: max(1, member_limit)] if member_limit is not None else values
+
+    def _selection_indexes(
+        self,
+        dataset: Any,
+        cycle: datetime,
+        steps: Sequence[int],
+        member: str,
+    ) -> dict[str, Any]:
+        required_coords = {"sample", "lat", "lon", "time"}
+        missing = sorted(required_coords - set(dataset.coords))
+        if missing:
+            raise DownloadError("WeatherNext 2 Zarr lacks coordinates: " + ", ".join(missing))
+        time_lookup = {int(value): index for index, value in enumerate(self._time_hours(dataset, cycle))}
+        absent_steps = [int(step) for step in steps if int(step) not in time_lookup]
+        if absent_steps:
+            raise DownloadError(
+                "WeatherNext 2 Zarr lacks forecast steps "
+                + ", ".join(f"+{step} h" for step in absent_steps[:5])
+            )
+        level_indexes = []
+        if all(name in dataset.data_vars for name in self.PRESSURE_WIND_VARIABLES):
+            if "level" not in dataset.coords:
+                raise DownloadError("WeatherNext 2 pressure winds have no level coordinate")
+            levels = np.asarray(dataset.coords["level"].values, dtype=float).reshape(-1)
+            for level in (850, 700, 500):
+                matches = np.flatnonzero(np.isclose(levels, level))
+                if not matches.size:
+                    raise DownloadError(f"WeatherNext 2 Zarr lacks the {level}-hPa level")
+                level_indexes.append(int(matches[0]))
+        sample_number = self._member_number(member)
+        samples = np.asarray(dataset.coords["sample"].values).reshape(-1)
+        numeric_matches: list[int] = []
+        try:
+            numeric_matches = np.flatnonzero(samples.astype(int) == sample_number).astype(int).tolist()
+        except (TypeError, ValueError):
+            pass
+        sample_index = numeric_matches[0] if numeric_matches else sample_number
+        if sample_index >= samples.size:
+            raise DownloadError(f"WeatherNext 2 member {member} is absent from the Zarr run")
+        return {
+            "sample": int(sample_index),
+            "time": np.asarray([time_lookup[int(step)] for step in steps], dtype=int),
+            "level": np.asarray(level_indexes, dtype=int),
+            "lat": self._nearest_indexes(dataset.coords["lat"].values, GRID_LATS),
+            "lon": self._nearest_indexes(dataset.coords["lon"].values, GRID_LONS, cyclic=True),
+        }
+
+    @staticmethod
+    def _read_array(
+        dataset: Any,
+        name: str,
+        indexes: dict[str, Any],
+        *,
+        pressure_level: bool = False,
+    ) -> np.ndarray:
+        variable = dataset[name]
+        indexers = {
+            dimension: indexes[dimension]
+            for dimension in ("sample", "time", "lat", "lon")
+            if dimension in variable.dims
+        }
+        if pressure_level:
+            if "level" not in variable.dims:
+                raise DownloadError(f"WeatherNext 2 {name} has no pressure-level dimension")
+            indexers["level"] = indexes["level"]
+        selected = variable.isel(indexers)
+        order = ["time"] + (["level"] if pressure_level else []) + ["lat", "lon"]
+        unexpected = [dimension for dimension in selected.dims if dimension not in order]
+        if unexpected:
+            raise DownloadError(
+                f"WeatherNext 2 {name} has unexpected dimensions: {', '.join(unexpected)}"
+            )
+        values = np.asarray(selected.transpose(*order).load().values, dtype=np.float32)
+        if not np.isfinite(values).all():
+            raise DownloadError(f"WeatherNext 2 {name} contains missing values in the atlas domain")
+        return values
+
+    @staticmethod
+    def _attach_centre_precipitation(
+        tracks: Sequence[dict[str, Any]],
+        precipitation_cumulative: np.ndarray,
+        steps: Sequence[int],
+    ) -> None:
+        """Attach non-retrievable storm-centre rainfall diagnostics to tracks."""
+
+        rainfall = trailing_24h(precipitation_cumulative, steps)
+        for track in tracks:
+            points = {
+                int(point[0]): point
+                for point in track.get("points", [])
+                if len(point) >= 3
+            }
+            series = []
+            for frame, step in enumerate(steps):
+                point = points.get(int(step))
+                if point is None:
+                    continue
+                longitude, latitude = float(point[1]), float(point[2])
+                x = int(np.abs(GRID_LONS - longitude).argmin())
+                y = int(np.abs(GRID_LATS - latitude).argmin())
+                value = float(rainfall[frame, y, x])
+                if np.isfinite(value):
+                    series.append([int(step), round(max(0.0, value), 2)])
+            if series:
+                track["centre_precipitation_24h"] = series
+
+    def load_member(
+        self,
+        cycle: datetime,
+        steps: Sequence[int],
+        member: str,
+        *,
+        dataset: Any | None = None,
+    ) -> dict[str, Any]:
+        owned_dataset = dataset is None
+        source = dataset if dataset is not None else self._open_dataset(cycle)
+        try:
+            indexes = self._selection_indexes(source, cycle, steps, member)
+            mslp = self._read_array(source, "mean_sea_level_pressure", indexes)
+            if float(np.nanmedian(mslp)) > 2_000.0:
+                mslp = mslp / np.float32(100.0)
+            if all(name in source.data_vars for name in self.PRESSURE_WIND_VARIABLES):
+                pressure_u = self._read_array(
+                    source, "u_component_of_wind", indexes, pressure_level=True
+                )
+                pressure_v = self._read_array(
+                    source, "v_component_of_wind", indexes, pressure_level=True
+                )
+            else:
+                pressure_u = np.stack([
+                    self._read_array(source, f"{level}_u_component_of_wind", indexes)
+                    for level in (850, 700, 500)
+                ], axis=1)
+                pressure_v = np.stack([
+                    self._read_array(source, f"{level}_v_component_of_wind", indexes)
+                    for level in (850, 700, 500)
+                ], axis=1)
+            u10 = self._read_array(source, "10m_u_component_of_wind", indexes)
+            v10 = self._read_array(source, "10m_v_component_of_wind", indexes)
+            precipitation_name = next(
+                name for name in self.PRECIPITATION_VARIABLES if name in source.data_vars
+            )
+            precipitation = np.maximum(
+                self._read_array(source, precipitation_name, indexes), 0.0
+            )
+            units = str(source[precipitation_name].attrs.get("units", "m")).lower()
+            if units.strip() in {"m", "metre", "metres", "meter", "meters"}:
+                precipitation = precipitation * np.float32(1000.0)
+            cumulative = np.cumsum(precipitation, axis=0, dtype=np.float32)
+            winds = {
+                level: (pressure_u[:, index], pressure_v[:, index])
+                for index, level in enumerate((850, 700, 500))
+            }
+            vorticity = {
+                level: np.stack(
+                    [relative_vorticity_x1e5(u, v) for u, v in zip(*values, strict=True)]
+                )
+                for level, values in winds.items()
+            }
+            tracking = track_forecast_member(
+                cycle=cycle,
+                steps=steps,
+                member=member,
+                role="perturbed",
+                mslp_hpa=mslp,
+                vorticity_by_level=vorticity,
+                wind_by_level=winds,
+                wind_10m=(u10, v10),
+                precipitation_cumulative_mm=cumulative,
+            )
+            self._attach_centre_precipitation(tracking.tracks, cumulative, steps)
+            return {
+                "member": member,
+                "tracks": tracking.tracks,
+                "vorticity": vorticity[850],
+                "precipitation": cumulative,
+                "tracking_qa": {
+                    "member": member,
+                    "detector_candidates": tracking.detector_candidates,
+                    "linker": tracking.linker_summary,
+                    "crosscheck": tracking.qa_crosscheck,
+                },
+            }
+        finally:
+            if owned_dataset:
+                close = getattr(source, "close", None)
+                if callable(close):
+                    close()
+
+    def build(
+        self,
+        requested: str,
+        steps: Sequence[int],
+        member_limit: int | None = None,
+    ) -> dict[str, Any]:
+        cycle = self.resolve_cycle(requested, int(max(steps)))
+        members = self.member_ids(member_limit)
+        results: list[dict[str, Any]] = []
+        errors: list[str] = []
+        # Direct builds are intended for bounded QA. Operational production is
+        # member-sharded so one failed transfer cannot discard the whole cycle.
+        for member in members:
+            try:
+                results.append(self.load_member(cycle, steps, member))
+            except Exception as error:
+                errors.append(f"{member}: {error}")
+        minimum = 1 if member_limit is not None else math.ceil(self.MEMBER_COUNT * 0.7)
+        if len(results) < minimum:
+            raise DownloadError(
+                f"Only {len(results)}/{len(members)} WeatherNext 2 members completed: "
+                + "; ".join(errors[:3])
+            )
+        warnings = (
+            [f"{len(errors)} of {self.MEMBER_COUNT} WeatherNext 2 members were unavailable"]
+            if errors
+            else []
+        )
+        return self.payload_from_results(cycle, steps, results, warnings)
+
+    def payload_from_results(
+        self,
+        cycle: datetime,
+        steps: Sequence[int],
+        results: Sequence[dict[str, Any]],
+        warnings: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Combine independently decoded members into one public track payload."""
+
+        if not results:
+            raise ValueError("at least one WeatherNext 2 member result is required")
+        payload = self._payload(
+            cycle,
+            steps,
+            [track for result in results for track in result["tracks"]],
+            [result["member"] for result in results],
+            np.mean(np.stack([result["vorticity"] for result in results]), axis=0),
+            np.mean(np.stack([result["precipitation"] for result in results]), axis=0),
+            list(warnings),
+            [result["tracking_qa"] for result in results],
+            expected_members=self.MEMBER_COUNT,
+            publish_weather=False,
+        )
+        payload["source"]["retrieval"] = (
+            "authenticated Google Cloud Storage Zarr; full native chunks decoded, "
+            "then the atlas domain resampled to 1 degree"
+        )
+        payload["source"]["public_product"] = (
+            "derived member tracks and storm-centre diagnostics only; WeatherNext gridded "
+            "fields are not redistributed"
+        )
+        payload["method"]["source_first_forecast_hour"] = 6
+        payload["method"]["analysis_history"] = (
+            "not available because the WeatherNext 2 Zarr run begins at +6 h"
+        )
+        payload["source"]["required_attribution"] = (
+            "Google Cloud Storage · © 2024-6 Google LLC, whose machine learning "
+            "models were used to create the experimental data made available under "
+            "the following licence terms https://storage.googleapis.com/"
+            "weathernext-public/terms-of-use.pdf. This data is intended for "
+            "experimental modelling only and is not intended, validated, or "
+            "approved for real world use."
+        )
         return payload
 
 
@@ -3212,6 +3680,10 @@ class EcmwfAdapter(BaseAdapter):
 
 
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
+    if model == "weathernext2":
+        if archive_root:
+            raise ValueError("WeatherNext 2 uses its fixed authenticated Google Cloud Storage Zarr")
+        return WeatherNext2Adapter(workers=workers)
     if model == "ukmo-global":
         return BadcUkmoAdapter(root=archive_root, workers=workers)
     if model == "mogreps-g":

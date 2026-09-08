@@ -125,6 +125,14 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
             "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/620418893/Implementation%2Bof%2BAIFS%2BENS%2Bv2",
         },
     ),
+    "weathernext2": (
+        {
+            "from": "2025010100",
+            "label": "WeatherNext 2 operational v2.0.0",
+            "source_url": "https://developers.google.com/weathernext/guides/models-wn2",
+            "basis": "Google WeatherNext 2 GCS dataset generation encoded in the source path",
+        },
+    ),
     "ukmo-global": (
         {
             "from": "2016031900",

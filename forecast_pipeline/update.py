@@ -129,7 +129,7 @@ def replace_archive_entry(entries: list[dict[str, Any]], new: dict[str, Any]) ->
 
 
 def replace_recent_entry(entries: list[dict[str, Any]], new: dict[str, Any]) -> list[dict[str, Any]]:
-    """Retain full weather-capable cycles within 72 hours of the newest run."""
+    """Retain operational cycles within 72 hours of the newest run."""
 
     combined = [item for item in entries if str(item.get("cycle", "")) != str(new["cycle"])] + [new]
     combined.sort(key=lambda item: str(item.get("cycle", "")), reverse=True)

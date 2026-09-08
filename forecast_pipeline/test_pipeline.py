@@ -17,7 +17,13 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from forecast_pipeline import aigefs_shards, merge_archives, merge_runs, migrate_track_sidecars
+from forecast_pipeline import (
+    aigefs_shards,
+    merge_archives,
+    merge_runs,
+    migrate_track_sidecars,
+    weathernext2_shards,
+)
 from forecast_pipeline.plan_archive_weather import weather_backfill_cycles
 from forecast_pipeline.forecast_core import (
     GRID_LATS,
@@ -52,6 +58,7 @@ from forecast_pipeline.sources import (
     TiggeNcepAdapter,
     TiggeWeatherBenchAdapter,
     WeatherBenchHresAdapter,
+    WeatherNext2Adapter,
     _interpolate_isolated_native_gaps,
     _fetch_record,
     _validate_local_grib_cycle,
@@ -97,6 +104,146 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+
+    def test_weathernext2_decodes_native_zarr_member_onto_atlas_grid(self) -> None:
+        import xarray as xr
+
+        cycle = datetime(2026, 9, 8, 0, tzinfo=UTC)
+        shape_surface = (2, 2, GRID_LATS.size, GRID_LONS.size)
+        shape_pressure = (2, 2, 3, GRID_LATS.size, GRID_LONS.size)
+        surface = np.ones(shape_surface, dtype=np.float32)
+        pressure = np.ones(shape_pressure, dtype=np.float32)
+        dataset = xr.Dataset(
+            {
+                "mean_sea_level_pressure": (("sample", "time", "lat", "lon"), surface * 100_000),
+                "10m_u_component_of_wind": (("sample", "time", "lat", "lon"), surface * 3),
+                "10m_v_component_of_wind": (("sample", "time", "lat", "lon"), surface * 4),
+                "total_precipitation_6hr": (
+                    ("sample", "time", "lat", "lon"),
+                    surface * 0.006,
+                    {"units": "m"},
+                ),
+                "u_component_of_wind": (("sample", "time", "level", "lat", "lon"), pressure * 2),
+                "v_component_of_wind": (("sample", "time", "level", "lat", "lon"), pressure * 1),
+            },
+            coords={
+                "sample": [0, 1],
+                "time": np.asarray([6, 12], dtype="timedelta64[h]"),
+                "level": [850, 700, 500],
+                "lat": GRID_LATS,
+                "lon": GRID_LONS,
+            },
+        )
+        tracked = SimpleNamespace(
+            tracks=[{
+                "id": "m01-T01", "member": "m01",
+                "points": [[6, 80.0, 20.0, 4.0], [12, 81.0, 21.0, 5.0]],
+            }],
+            detector_candidates=2, linker_summary={}, qa_crosscheck={}
+        )
+        adapter = WeatherNext2Adapter(dataset_opener=lambda unused: dataset)
+        with patch("forecast_pipeline.sources.track_forecast_member", return_value=tracked) as track:
+            result = adapter.load_member(cycle, [6, 12], "m01")
+        arguments = track.call_args.kwargs
+        np.testing.assert_allclose(arguments["mslp_hpa"], 1000.0)
+        np.testing.assert_allclose(arguments["wind_10m"][0], 3.0)
+        np.testing.assert_allclose(arguments["wind_10m"][1], 4.0)
+        np.testing.assert_allclose(arguments["precipitation_cumulative_mm"][0], 6.0)
+        np.testing.assert_allclose(arguments["precipitation_cumulative_mm"][1], 12.0)
+        self.assertEqual(arguments["steps"], [6, 12])
+        self.assertEqual(result["member"], "m01")
+        self.assertEqual(result["vorticity"].shape, (2, GRID_LATS.size, GRID_LONS.size))
+        self.assertEqual(
+            result["tracks"][0]["centre_precipitation_24h"],
+            [[6, 6.0], [12, 12.0]],
+        )
+
+        # The current model documentation also exposes pressure variables with
+        # the level encoded in each variable name. Keep both GCS schemas valid.
+        flat = dataset.drop_vars(["u_component_of_wind", "v_component_of_wind"])
+        flat = flat.rename({"total_precipitation_6hr": "total_precipitation"})
+        for level_index, level in enumerate((850, 700, 500)):
+            flat[f"{level}_u_component_of_wind"] = (
+                ("sample", "time", "lat", "lon"), pressure[:, :, level_index] * 2
+            )
+            flat[f"{level}_v_component_of_wind"] = (
+                ("sample", "time", "lat", "lon"), pressure[:, :, level_index]
+            )
+        with patch("forecast_pipeline.sources.track_forecast_member", return_value=tracked) as track:
+            adapter.load_member(cycle, [6, 12], "m00", dataset=flat)
+        self.assertEqual(track.call_args.kwargs["wind_by_level"][850][0].shape, (2, GRID_LATS.size, GRID_LONS.size))
+
+    def test_weathernext2_registration_schedule_and_terms(self) -> None:
+        cycle = datetime(2026, 9, 8, 0, tzinfo=UTC)
+
+        class Filesystem:
+            def exists(self, path):
+                return path.endswith("20260908_00hr_01_preds/success")
+
+        adapter = WeatherNext2Adapter(filesystem=Filesystem())
+        self.assertTrue(adapter.cycle_complete(cycle, 360))
+        self.assertFalse(adapter.cycle_complete(cycle, 366))
+        self.assertEqual(available_forecast_steps("weathernext2", cycle), list(range(6, 361, 6)))
+        self.assertEqual(adapter_for("weathernext2").definition.expected_members, 64)
+        definition = MODEL_DEFINITIONS["weathernext2"]
+        self.assertEqual(definition.kind, "ensemble")
+        self.assertIn("Experimental Data Terms", definition.licence)
+        self.assertEqual(
+            model_version("weathernext2", cycle)["label"],
+            "WeatherNext 2 operational v2.0.0",
+        )
+
+    def test_weathernext2_member_parallel_combination_requires_45_members(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for number in range(46):
+                member = f"m{number:02d}"
+                track = {"id": member, "points": []}
+                if number == 45:
+                    track["points"] = [[6, 80.0, 20.0], [7, 92.0, 30.0]]
+                np.savez_compressed(
+                    root / f"{member}.npz",
+                    cycle=np.asarray("2026090800"),
+                    member=np.asarray(member),
+                    steps=np.asarray([6, 12], dtype=np.int16),
+                    vorticity=np.full((2, 2, 2), number, dtype=np.float32),
+                    precipitation=np.full((2, 2, 2), number * 2, dtype=np.float32),
+                    tracks=np.frombuffer(json.dumps([track]).encode(), dtype=np.uint8),
+                    tracking_qa=np.frombuffer(json.dumps({"member": member}).encode(), dtype=np.uint8),
+                )
+            with patch.object(
+                WeatherNext2Adapter,
+                "payload_from_results",
+                return_value={"source": {"retrieval": "GCS"}},
+            ) as build:
+                payload = weathernext2_shards.combined_payload(
+                    "2026090800", sorted(root.glob("m*.npz"))
+                )
+            results = build.call_args.args[2]
+            self.assertEqual(len(results), 45)
+            self.assertEqual(results[0]["member"], "m00")
+            self.assertEqual(results[-1]["member"], "m44")
+            self.assertIn("m45", build.call_args.args[3][1])
+            self.assertEqual(payload["source"]["retrieval"], "GCS")
+
+        newest = datetime(2026, 9, 8, 0, tzinfo=UTC)
+        missing = weathernext2_shards.missing_recent_cycles(
+            {
+                "recent": {
+                    "weathernext2": [
+                        {
+                            "cycle": "2026090718",
+                            "cycle_utc": "2026-09-07T18:00:00Z",
+                            "valid_end_utc": "2026-09-22T18:00:00Z",
+                        }
+                    ]
+                }
+            },
+            newest,
+        )
+        self.assertNotIn("2026090718", missing)
+        self.assertEqual(missing[0], "2026090800")
+        self.assertEqual(len(missing), 12)
 
     def test_parallel_aigefs_members_combine_with_ensemble_mean(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -327,6 +474,8 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertEqual(available_forecast_steps("ifs", cycle_00)[-1], 360)
         self.assertEqual(available_forecast_steps("ifs", cycle_06)[-1], 144)
         self.assertEqual(available_forecast_steps("aifs-ens", cycle_06)[-1], 360)
+        self.assertEqual(available_forecast_steps("weathernext2", cycle_06)[0], 6)
+        self.assertEqual(available_forecast_steps("weathernext2", cycle_06)[-1], 360)
         self.assertEqual(available_forecast_steps("tigge-ecmwf", cycle_00)[-1], 360)
         self.assertEqual(available_forecast_steps("tigge-jma", cycle_00)[-1], 264)
         self.assertEqual(available_forecast_steps("tigge-eccc", cycle_00)[-1], 384)
