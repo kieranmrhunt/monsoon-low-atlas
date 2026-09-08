@@ -11,7 +11,7 @@ let source = fs.readFileSync(path.join(repo, asset), 'utf8');
 source = source.replace('let reanalysisManifestPromise = null;', `
 globalThis.qa = {state, ensembleMeanMinimum, splitPlotPath, systemMeanGeometry,
   systemReferenceTrack, meanTrack, forecastMapPaths, forecastSystemAt,
-  systemMatchScore}; return;
+  systemMatchScore, selectedForecastGroup, systemItemKey}; return;
 let reanalysisManifestPromise = null;`);
 const root = {querySelector: () => ({})};
 const sandbox = {
@@ -78,6 +78,13 @@ assert(q.systemMatchScore(earlyAgreement, laterDivergence) < 550,
 const unrelated = matchItem('unrelated', 0, step => 105 + step * .01);
 assert(q.systemMatchScore(earlyAgreement, unrelated) > 550,
   'different systems must remain separate inside the identity window');
+q.state.mode = 'latest';
+q.state.isolateSystem = true;
+q.state.selectedGroupKeys = new Set([q.systemItemKey(earlyAgreement)]);
+q.state.selectedSystem = {runKey: earlyAgreement.runKey, systemId: earlyAgreement.system.id};
+const restoredGroup = q.selectedForecastGroup([{items: [earlyAgreement, laterDivergence]}]);
+assert.equal(restoredGroup.items.length, 2, 'a legacy singleton URL must gain its newly matched model counterpart');
+assert.equal(q.state.selectedGroupKeys.size, 2, 'the upgraded group must be retained in the next shared URL');
 
 if (process.argv[2]) {
   const payload = JSON.parse(zlib.gunzipSync(fs.readFileSync(process.argv[2])));

@@ -1935,6 +1935,17 @@
 	function selectedForecastGroup(groups) {
 		const values = groups || forecastSystemGroups();
 		if (state.isolateSystem && state.selectedGroupKeys.size) {
+			// A shared/latest URL written before a new model finished loading can
+			// legitimately contain only its anchor system. Once the current
+			// grouping identifies a counterpart, promote that singleton to the
+			// complete physical-system group. Multi-key URLs remain exact.
+			if (state.mode === 'latest' && state.selectedGroupKeys.size === 1) {
+				const anchorKey = [...state.selectedGroupKeys][0];
+				const currentGroup = values.find(candidate => candidate.items.some(item => systemItemKey(item) === anchorKey));
+				if (currentGroup && currentGroup.items.length > 1) {
+					state.selectedGroupKeys = new Set(currentGroup.items.map(systemItemKey));
+				}
+			}
 			const items = values.flatMap(candidate => candidate.items).filter(item => state.selectedGroupKeys.has(systemItemKey(item)));
 			if (items.length) {
 				const exact = decorateForecastGroup({items: [...items]}, currentValidTime());
