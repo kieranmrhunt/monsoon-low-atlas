@@ -35,6 +35,7 @@ from forecast_pipeline.forecast_core import (
     client_recent_entries,
     compact_weather,
     compact_track_payload,
+    filter_unphysical_tracks,
     manifest_lock_path,
     manifest_entry_horizon_hours,
     publish_client_manifests,
@@ -248,9 +249,9 @@ class ForecastPipelineContractTests(unittest.TestCase):
     def test_parallel_aigefs_members_combine_with_ensemble_mean(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for number in range(1, 24):
+            for number in range(1, 16):
                 track = {"id": f"p{number:02d}"}
-                if number == 23:
+                if number == 15:
                     track["points"] = [[0, 80.0, 20.0], [1, 92.0, 30.0]]
                 tracks = json.dumps([track]).encode("utf-8")
                 qa = json.dumps({"member": f"p{number:02d}"}).encode("utf-8")
@@ -265,18 +266,25 @@ class ForecastPipelineContractTests(unittest.TestCase):
                     tracking_qa=np.frombuffer(qa, dtype=np.uint8),
                     source_gap_steps=np.asarray([], dtype=np.int16),
                 )
-            with patch.object(NcepAdapter, "_payload", return_value={"source": {}}) as build:
+            with patch.object(
+                NcepAdapter, "_payload", return_value={"source": {}, "members": {}}
+            ) as build:
                 payload = aigefs_shards.combined_payload(
                     "2026090100", sorted(root.glob("p*.npz"))
                 )
             arguments = build.call_args.args
             self.assertEqual(arguments[1], [0, 6])
-            self.assertEqual(arguments[3], [f"p{number:02d}" for number in range(1, 23)])
-            np.testing.assert_allclose(arguments[4], 11.5)
-            np.testing.assert_allclose(arguments[5], 23.0)
-            self.assertIn("p23", arguments[6][1])
+            self.assertEqual(arguments[3], [f"p{number:02d}" for number in range(1, 15)])
+            np.testing.assert_allclose(arguments[4], 7.5)
+            np.testing.assert_allclose(arguments[5], 15.0)
+            self.assertIn("p15", arguments[6][1])
             self.assertEqual(build.call_args.kwargs["expected_members"], 31)
             self.assertIn("member-parallel", payload["source"]["retrieval"])
+            self.assertEqual(payload["members"]["minimum_published"], 11)
+            with self.assertRaisesRegex(RuntimeError, "11 are required"):
+                aigefs_shards.combined_payload(
+                    "2026090100", sorted(root.glob("p0[1-9].npz"))
+                )
 
         newest = datetime(2026, 9, 3, 0, tzinfo=UTC)
         missing = aigefs_shards.missing_recent_cycles({
@@ -294,6 +302,15 @@ class ForecastPipelineContractTests(unittest.TestCase):
         self.assertNotIn("2026090218", missing)
         self.assertNotIn("2026090206", missing)
         self.assertEqual(len(missing), 11)
+
+        partial = aigefs_shards.missing_recent_cycles({
+            "recent": {"aigefs": [{
+                "cycle": "2026090218", "cycle_utc": "2026-09-02T18:00:00Z",
+                "valid_end_utc": "2026-09-18T18:00:00Z",
+                "members_available": 14, "members_expected": 31,
+            }]},
+        }, newest)
+        self.assertIn("2026090218", partial)
 
     def test_badc_cycle_audit_rejects_mislabelled_grib_header(self) -> None:
         cycle = datetime(2026, 7, 7, 12, tzinfo=UTC)
@@ -1023,6 +1040,14 @@ class ForecastPipelineContractTests(unittest.TestCase):
         result = validate_cycle_payload(payload)
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("implausible" in item for item in result["errors"]))
+
+    def test_published_motion_gate_drops_the_bad_track_not_the_cycle(self) -> None:
+        good = {"id": "good", "points": [[0, 80, 20], [1, 80.2, 20.1]]}
+        bad = {"id": "p09-T02", "points": [[13, 80, 20], [14, 82.2, 20]]}
+        retained, rejected = filter_unphysical_tracks([good, bad])
+        self.assertEqual([track["id"] for track in retained], ["good"])
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("p09-T02", rejected[0])
 
     def test_physical_support_run_breaks_across_false_or_missing_hours(self) -> None:
         mask = np.asarray([True, True, False, True, True, True, True])

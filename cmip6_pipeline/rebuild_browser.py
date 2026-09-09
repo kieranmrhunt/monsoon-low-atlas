@@ -15,6 +15,7 @@ from typing import Any
 from reanalysis_pipeline.common import sha256
 
 from .gwl_publish import attach_gwl_comparisons
+from .impact import attach_gwl_impacts
 from .impact import attach_to_climate_bundle as attach_impacts
 from .publish_control import attach_resolution_control
 from .summarise import (
@@ -215,6 +216,23 @@ def gwl_manifests(gwl_root: Path) -> list[tuple[float, Path]]:
     return records
 
 
+def gwl_impact_manifests(plan_path: Path) -> list[tuple[float, Path]]:
+    if not plan_path.is_file():
+        return []
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if plan.get("schema") != "lps-atlas-cmip6-gwl-precipitation-impact-plan-v1":
+        raise ValueError(f"unsupported GWL impact plan: {plan_path}")
+    records: list[tuple[float, Path]] = []
+    for record in plan.get("records", []):
+        manifest_text = record.get("pair_manifest")
+        if not manifest_text:
+            continue
+        manifest = Path(manifest_text)
+        if manifest.is_file():
+            records.append((float(record["level_c"]), manifest))
+    return records
+
+
 def rebuild(repo_root: Path, *, refresh: bool = True) -> Path:
     repo_root = repo_root.resolve()
     run_root = repo_root / ".cmip6-runs"
@@ -293,6 +311,11 @@ def rebuild(repo_root: Path, *, refresh: bool = True) -> Path:
         gwl_records,
         scenario="ssp245",
     )
+    gwl_impacts = gwl_impact_manifests(
+        run_root / "gwl-impact-production" / "plan.json"
+    )
+    if gwl_impacts and len(gwl_impacts) == len(gwl_records):
+        attach_gwl_impacts(output_root / "manifest.json", gwl_impacts)
 
     highres_roots = [run_root / name for name in HIGHRES_PAIR_DIRECTORIES]
     completed_highres = [

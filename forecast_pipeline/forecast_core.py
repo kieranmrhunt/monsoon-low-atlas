@@ -187,6 +187,46 @@ def haversine_km(first: Sequence[float], second: Sequence[float]) -> float:
     return EARTH_RADIUS_KM * 2 * math.atan2(math.sqrt(value), math.sqrt(max(0.0, 1.0 - value)))
 
 
+def filter_unphysical_tracks(
+    tracks: Sequence[dict[str, Any]],
+    maximum_speed_kmh: float = MAX_PUBLISHED_TRACK_SPEED_KMH,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Remove whole forecast tracks containing an impossible centre jump.
+
+    The frozen linker normally prevents these associations. A small number of
+    sparse historical ensemble members nevertheless join two nearby candidates
+    across consecutive interpolated hours. Publishing either the jump or two
+    post-gate fragments is misleading, so reject that member track while
+    retaining the other independently tracked members and the weather mean.
+    """
+
+    retained: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    for track in tracks:
+        maximum = 0.0
+        offending_steps: tuple[int, int] | None = None
+        points = track.get("points", [])
+        for previous, current in zip(points, points[1:]):
+            elapsed = int(current[0]) - int(previous[0])
+            if elapsed <= 0:
+                continue
+            speed = haversine_km(
+                (float(previous[2]), float(previous[1])),
+                (float(current[2]), float(current[1])),
+            ) / elapsed
+            if speed > maximum:
+                maximum = speed
+                offending_steps = (int(previous[0]), int(current[0]))
+        if maximum > maximum_speed_kmh:
+            start, end = offending_steps or (0, 0)
+            rejected.append(
+                f"{track.get('id')} ({maximum:.1f} km h-1 at +{start} to +{end} h)"
+            )
+        else:
+            retained.append(track)
+    return retained, rejected
+
+
 @dataclass(frozen=True)
 class GridField:
     values: np.ndarray

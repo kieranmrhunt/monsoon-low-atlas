@@ -32,6 +32,14 @@ from .sources import MODEL_DEFINITIONS, NcepAdapter, available_forecast_steps
 from .update import latest_entry, read_manifest
 
 
+# One third of the intended 31-member ensemble is the minimum support used by
+# the browser before it draws an ensemble-mean track.  A partial cycle with at
+# least this many independently tracked members is therefore still useful,
+# while ``members.expected`` remains 31 throughout so missing downloads never
+# make the mean-track test artificially easier.
+MINIMUM_PUBLISHABLE_MEMBERS = 11
+
+
 def _json_bytes(value: Any) -> np.ndarray:
     return np.frombuffer(
         json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8"),
@@ -84,7 +92,14 @@ def read_member(path: Path, cycle_text: str) -> dict[str, Any]:
         }
 
 
-def combined_payload(cycle_text: str, member_paths: list[Path]) -> dict[str, Any]:
+def combined_payload(
+    cycle_text: str,
+    member_paths: list[Path],
+    *,
+    minimum_members: int = MINIMUM_PUBLISHABLE_MEMBERS,
+) -> dict[str, Any]:
+    if not 1 <= minimum_members <= 31:
+        raise ValueError("minimum_members must be between 1 and 31")
     results = [read_member(path, cycle_text) for path in member_paths]
     by_member = {result["member"]: result for result in results}
     results = [by_member[key] for key in sorted(by_member, key=lambda value: int(value[1:]))]
@@ -111,13 +126,14 @@ def combined_payload(cycle_text: str, member_paths: list[Path]) -> dict[str, Any
         else:
             retained.append(result)
     results = retained
-    if len(results) < 22:
+    if len(results) < minimum_members:
         reason = (
             f"; rejected track geometry: {', '.join(geometry_rejections)}"
             if geometry_rejections else ""
         )
         raise RuntimeError(
-            f"only {len(results)}/31 AIGEFS members completed cleanly; 22 are required{reason}"
+            f"only {len(results)}/31 AIGEFS members completed cleanly; "
+            f"{minimum_members} are required{reason}"
         )
     steps = results[0]["steps"]
     if any(result["steps"] != steps for result in results):
@@ -150,6 +166,12 @@ def combined_payload(cycle_text: str, member_paths: list[Path]) -> dict[str, Any
         expected_members=31,
     )
     payload["source"]["retrieval"] = "member-parallel NOMADS inventory byte ranges; atlas domain resampled to 1 degree"
+    payload["members"]["minimum_published"] = minimum_members
+    payload["source"]["ensemble_availability"] = (
+        f"{len(results)}/31 independently processed members available; "
+        "the ensemble-mean track still requires support from more than one third "
+        "of the intended 31-member ensemble"
+    )
     if reconstructed:
         payload["source"]["gap_reconstruction"] = {
             "policy": "linear interpolation of isolated missing six-hour member frames bounded by source-present neighbours",
@@ -164,25 +186,38 @@ def missing_recent_cycles(
 ) -> list[str]:
     """Return incomplete AIGEFS cycles in the rolling operational window."""
 
-    available: dict[str, int] = {}
+    available: dict[str, tuple[int, bool]] = {}
     for entry in manifest.get("recent", {}).get("aigefs", []):
         cycle = str(entry.get("cycle", ""))
-        available[cycle] = max(
-            available.get(cycle, -1), manifest_entry_horizon_hours(entry)
+        horizon = manifest_entry_horizon_hours(entry)
+        members_available = entry.get("members_available")
+        members_expected = entry.get("members_expected")
+        members_complete = (
+            True
+            if members_available is None or members_expected is None
+            else int(members_available) >= int(members_expected)
         )
+        available[cycle] = max(available.get(cycle, (-1, False)), (horizon, members_complete))
     for entry in manifest.get("archive", []):
         if entry.get("model") != "aigefs":
             continue
         cycle = str(entry.get("cycle", ""))
-        available[cycle] = max(
-            available.get(cycle, -1), manifest_entry_horizon_hours(entry)
+        horizon = manifest_entry_horizon_hours(entry)
+        members_available = entry.get("members_available")
+        members_expected = entry.get("members_expected")
+        members_complete = (
+            True
+            if members_available is None or members_expected is None
+            else int(members_available) >= int(members_expected)
         )
+        available[cycle] = max(available.get(cycle, (-1, False)), (horizon, members_complete))
     output = []
     for offset in range(0, hours + 1, 6):
         cycle = newest - timedelta(hours=offset)
         cycle_text = cycle.strftime("%Y%m%d%H")
         required = int(available_forecast_steps("aigefs", cycle)[-1])
-        if available.get(cycle_text, -1) < required:
+        horizon, members_complete = available.get(cycle_text, (-1, False))
+        if horizon < required or not members_complete:
             output.append(cycle_text)
     return output
 
@@ -227,6 +262,9 @@ def main() -> None:
     combine.add_argument("--members", type=Path, required=True)
     combine.add_argument("--output-root", type=Path, required=True)
     combine.add_argument("--atlas-core", type=Path, required=True)
+    combine.add_argument(
+        "--minimum-members", type=int, default=MINIMUM_PUBLISHABLE_MEMBERS
+    )
     plan = subparsers.add_parser("plan")
     plan.add_argument("--manifest", type=Path, required=True)
     plan.add_argument("--hours", type=int, default=72)
@@ -246,7 +284,9 @@ def main() -> None:
         print(",".join(missing_recent_cycles(manifest, newest, args.hours)))
         return
     paths = sorted(args.members.glob("p*.npz"))
-    payload = combined_payload(args.cycle, paths)
+    payload = combined_payload(
+        args.cycle, paths, minimum_members=args.minimum_members
+    )
     write_staging(payload, args.output_root, args.atlas_core)
     print(args.output_root / "manifest.json")
 

@@ -14,16 +14,21 @@ ATLAS_ROOT="${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is required}"
 JOBS="${1:?auxiliary-boundary job table is required}"
 PYTHON="${LPS_CMIP6_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 ROW="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$JOBS")"
-IFS=$'\t' read -r INDEX ACTIVITY INSTITUTION SOURCE EXPERIMENT MEMBER GRID TIMESTAMP OUTPUT_ROOT TIME_AXIS <<< "$ROW"
+IFS=$'\t' read -r INDEX ACTIVITY INSTITUTION SOURCE EXPERIMENT MEMBER GRID TIMESTAMP OUTPUT_ROOT TIME_AXIS SOURCE_STITCH <<< "$ROW"
 [[ "$INDEX" =~ ^[0-9]+$ ]]
 cd "$ATLAS_ROOT"
 TIME_AXIS_ARGS=()
 if [[ -n "$TIME_AXIS" ]]; then
   TIME_AXIS_ARGS=(--time-axis "$TIME_AXIS")
 fi
+SOURCE_STITCH_ARGS=()
+if [[ -n "$SOURCE_STITCH" ]]; then
+  SOURCE_STITCH_ARGS=(--source-stitch "$SOURCE_STITCH")
+fi
 exec "$PYTHON" -m cmip6_pipeline.standardise \
   --output-root "$OUTPUT_ROOT" \
   --activity "$ACTIVITY" --institution "$INSTITUTION" --source-id "$SOURCE" \
   --experiment-id "$EXPERIMENT" --member-id "$MEMBER" --grid-label "$GRID" \
   "${TIME_AXIS_ARGS[@]}" \
+  "${SOURCE_STITCH_ARGS[@]}" \
   standardise-aux-boundary --timestamp "$TIMESTAMP"

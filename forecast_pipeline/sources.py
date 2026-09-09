@@ -28,12 +28,14 @@ from .forecast_core import (
     GridField,
     GRID_LATS,
     GRID_LONS,
+    MAX_PUBLISHED_TRACK_SPEED_KMH,
     assign_systems,
     candidate_cycles,
     compact_weather,
     cycle_id,
     decode_grib_message,
     decode_grib_messages,
+    filter_unphysical_tracks,
     grid_metadata,
     iso_z,
     parse_cycle,
@@ -542,6 +544,16 @@ class BaseAdapter:
         publish_weather: bool = True,
     ) -> dict[str, Any]:
         definition = self.definition
+        warnings = list(warnings)
+        tracks, motion_rejections = filter_unphysical_tracks(tracks)
+        if motion_rejections:
+            examples = "; ".join(motion_rejections[:8])
+            remainder = len(motion_rejections) - min(8, len(motion_rejections))
+            warnings.append(
+                "member tracks excluded by the published-motion gate: "
+                + examples
+                + (f"; and {remainder} more" if remainder else "")
+            )
         systems = assign_systems(tracks)
         basis = "deterministic" if definition.kind == "deterministic" else f"{len(member_ids)}-member ensemble mean"
         payload: dict[str, Any] = {
@@ -593,6 +605,7 @@ class BaseAdapter:
                 "native_to_linker_time": "continuous fields linearly interpolated from the complete six-hourly provider output to the hourly linker clock",
                 "spatial_derivatives": "relative vorticity is derived from winds after every provider is resampled to the common 1-degree atlas grid",
                 "minimum_published_support_hours": 18,
+                "published_motion_gate_kmh": MAX_PUBLISHED_TRACK_SPEED_KMH,
                 "forecast_physical_gate": "full frozen v5.6 physical-event gate when the forecast observes a complete 72-hour span, including physical continuity and release-domain support",
                 "retrospective_gate_exception": "only tracks touching initialization or the forecast horizon may scale the v5.6 duration requirements; three strong release-domain positions remain mandatory",
                 "no_genesis_basin_rule": True,

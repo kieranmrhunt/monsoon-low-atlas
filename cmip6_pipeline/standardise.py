@@ -35,7 +35,13 @@ from reanalysis_pipeline.common import (
 from reanalysis_pipeline.standardise_merra2 import month_bounds, standard_paths
 
 from .model_calendar import TimeAxis, load_time_axis, native_stamp
-from .source import DEFAULT_ROOT, RunSpec, files_overlapping, files_overlapping_stamps
+from .source import (
+    DEFAULT_ROOT,
+    RunSpec,
+    SourceSegment,
+    files_overlapping,
+    files_overlapping_stamps,
+)
 
 
 STANDARD_SCHEMA = "lps-atlas-cmip6-standard-month-v1"
@@ -175,6 +181,102 @@ def _open_variable(
         raise ValueError(f"{variable} has no samples on analysis clock {read_start}..{read_end}")
     combined = xr.concat(parts, dim="time", coords="minimal", compat="override") if len(parts) > 1 else parts[0]
     combined = combined.sortby("time")
+    times = pd.DatetimeIndex(pd.to_datetime(combined.time.values))
+    _, keep = np.unique(times.view("int64"), return_index=True)
+    return combined.isel(time=np.sort(keep)), paths
+
+
+def load_source_stitch(path: Path | None) -> tuple[SourceSegment, ...]:
+    if path is None:
+        return ()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != "lps-atlas-cmip6-source-stitch-v1":
+        raise ValueError(f"unsupported CMIP6 source stitch: {path}")
+    segments = tuple(
+        SourceSegment(
+            RunSpec(**record["run"]),
+            str(record["core_start"]),
+            str(record["core_end"]),
+        )
+        for record in payload.get("segments", [])
+    )
+    if not segments:
+        raise ValueError(f"CMIP6 source stitch contains no segments: {path}")
+    return segments
+
+
+def _source_stitch_record(segments: tuple[SourceSegment, ...]) -> list[dict[str, object]] | None:
+    if not segments:
+        return None
+    return [
+        {
+            "run": segment.spec.__dict__,
+            "core_start": segment.core_start,
+            "core_end": segment.core_end,
+        }
+        for segment in segments
+    ]
+
+
+def _segments_overlapping_interval(
+    segments: tuple[SourceSegment, ...],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    time_axis: TimeAxis,
+) -> tuple[SourceSegment, ...]:
+    native_start, native_end = time_axis.native_bounds_for_analysis_interval(
+        start - pd.Timedelta(hours=6),
+        end + pd.Timedelta(hours=6),
+    )
+    lower, upper = native_stamp(native_start), native_stamp(native_end)
+    selected: list[SourceSegment] = []
+    for index, segment in enumerate(segments):
+        segment_lower = "00000000000000" if index == 0 else f"{segment.core_start}01000000"
+        following = (
+            f"{int(segment.core_end[:4]) + 1:04d}01"
+            if segment.core_end[4:] == "12"
+            else f"{segment.core_end[:4]}{int(segment.core_end[4:]) + 1:02d}"
+        )
+        segment_upper = (
+            "99999999999999"
+            if index == len(segments) - 1
+            else f"{following}01000000"
+        )
+        if upper >= segment_lower and lower <= segment_upper:
+            selected.append(segment)
+    if not selected:
+        raise ValueError(f"source stitch does not cover {start}..{end}")
+    return tuple(selected)
+
+
+def _open_stitched_variable(
+    root: Path,
+    segments: tuple[SourceSegment, ...],
+    variable: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    pressure_levels: bool = False,
+    time_axis: TimeAxis,
+) -> tuple[xr.DataArray, list[Path]]:
+    parts: list[xr.DataArray] = []
+    paths: list[Path] = []
+    for segment in _segments_overlapping_interval(segments, start, end, time_axis):
+        value, source_paths = _open_variable(
+            root,
+            segment.spec,
+            variable,
+            start,
+            end,
+            pressure_levels=pressure_levels,
+            time_axis=time_axis,
+        )
+        parts.append(value)
+        paths.extend(source_paths)
+    combined = (
+        xr.concat(parts, dim="time", coords="minimal", compat="override")
+        if len(parts) > 1 else parts[0]
+    ).sortby("time")
     times = pd.DatetimeIndex(pd.to_datetime(combined.time.values))
     _, keep = np.unique(times.view("int64"), return_index=True)
     return combined.isel(time=np.sort(keep)), paths
@@ -321,7 +423,11 @@ def standardise_month(
     month: str,
     *,
     time_axis: TimeAxis | None = None,
+    source_segments: tuple[SourceSegment, ...] = (),
 ) -> dict[str, object]:
+    if source_segments and time_axis is None:
+        raise ValueError("a stitched CMIP6 source requires an explicit time axis")
+    source_stitch = _source_stitch_record(source_segments)
     provenance = standard_paths(output_root, month)["provenance"]
     if provenance.is_file():
         try:
@@ -329,6 +435,8 @@ def standardise_month(
             expected_axis = time_axis.record() if time_axis is not None else None
             if cached.get("time_axis") != expected_axis:
                 raise ValueError("cached standard month uses a different time-axis mapping")
+            if cached.get("source_stitch") != source_stitch:
+                raise ValueError("cached standard month uses a different source stitch")
             validate_month(output_root, month)
             return cached
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
@@ -339,39 +447,39 @@ def standardise_month(
     read_end = end
     source_paths: list[Path] = []
 
-    pressure: dict[str, xr.DataArray] = {}
-    for variable in ("ua", "va", "ta", "hus"):
-        value, paths = _open_variable(
+    def open_field(variable: str, *, pressure_levels: bool = False) -> tuple[xr.DataArray, list[Path]]:
+        if source_segments:
+            assert time_axis is not None
+            return _open_stitched_variable(
+                badc_root,
+                source_segments,
+                variable,
+                start,
+                read_end,
+                pressure_levels=pressure_levels,
+                time_axis=time_axis,
+            )
+        return _open_variable(
             badc_root,
             spec,
             variable,
             start,
             read_end,
-            pressure_levels=True,
+            pressure_levels=pressure_levels,
             time_axis=time_axis,
         )
+
+    pressure: dict[str, xr.DataArray] = {}
+    for variable in ("ua", "va", "ta", "hus"):
+        value, paths = open_field(variable, pressure_levels=True)
         pressure[variable] = _sample_grid(value)
         source_paths.extend(paths)
     surface: dict[str, xr.DataArray] = {}
     for variable in ("psl", "ps", "uas", "vas"):
-        value, paths = _open_variable(
-            badc_root,
-            spec,
-            variable,
-            start,
-            read_end,
-            time_axis=time_axis,
-        )
+        value, paths = open_field(variable)
         surface[variable] = _sample_grid(value)
         source_paths.extend(paths)
-    precipitation, paths = _open_variable(
-        badc_root,
-        spec,
-        "pr",
-        start,
-        read_end,
-        time_axis=time_axis,
-    )
+    precipitation, paths = open_field("pr")
     precipitation = _sample_grid(precipitation)
     source_paths.extend(paths)
 
@@ -471,6 +579,7 @@ def standardise_month(
         "month": month,
         "coverage": {"start": start.isoformat(), "end_exclusive": end.isoformat()},
         "time_axis": time_axis.record() if time_axis is not None else None,
+        "source_stitch": source_stitch,
         "source_fields": {
             variable: {
                 "table_id": field_table(spec, variable),
@@ -503,9 +612,13 @@ def standardise_auxiliary_boundary(
     timestamp: str | pd.Timestamp,
     *,
     time_axis: TimeAxis | None = None,
+    source_segments: tuple[SourceSegment, ...] = (),
 ) -> dict[str, object]:
     """Write the single next-month pressure-level frame needed at a run boundary."""
 
+    if source_segments and time_axis is None:
+        raise ValueError("a stitched CMIP6 source requires an explicit time axis")
+    source_stitch = _source_stitch_record(source_segments)
     boundary = pd.Timestamp(timestamp)
     month = boundary.strftime("%Y%m")
     path = standard_paths(output_root, month)["auxiliary"]
@@ -516,6 +629,8 @@ def standardise_auxiliary_boundary(
             expected_axis = time_axis.record() if time_axis is not None else None
             if cached.get("time_axis") != expected_axis:
                 raise ValueError("cached auxiliary boundary uses a different time-axis mapping")
+            if cached.get("source_stitch") != source_stitch:
+                raise ValueError("cached auxiliary boundary uses a different source stitch")
             validate_auxiliary_boundary(output_root, boundary)
             return cached
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
@@ -524,15 +639,27 @@ def standardise_auxiliary_boundary(
     pressure: dict[str, xr.DataArray] = {}
     source_paths: list[Path] = []
     for variable in ("ua", "va", "ta", "hus"):
-        value, paths = _open_variable(
-            badc_root,
-            spec,
-            variable,
-            boundary,
-            boundary,
-            pressure_levels=True,
-            time_axis=time_axis,
-        )
+        if source_segments:
+            assert time_axis is not None
+            value, paths = _open_stitched_variable(
+                badc_root,
+                source_segments,
+                variable,
+                boundary,
+                boundary,
+                pressure_levels=True,
+                time_axis=time_axis,
+            )
+        else:
+            value, paths = _open_variable(
+                badc_root,
+                spec,
+                variable,
+                boundary,
+                boundary,
+                pressure_levels=True,
+                time_axis=time_axis,
+            )
         pressure[variable] = _sample_grid(value)
         source_paths.extend(paths)
     output = xr.Dataset(
@@ -560,6 +687,7 @@ def standardise_auxiliary_boundary(
         "run": spec.__dict__,
         "timestamp": boundary.isoformat(),
         "time_axis": time_axis.record() if time_axis is not None else None,
+        "source_stitch": source_stitch,
         "source_files": _source_records(source_paths),
         "output": {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256(path)},
     }
@@ -593,6 +721,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--member-id", required=True)
     parser.add_argument("--grid-label", default="gn")
     parser.add_argument("--time-axis", type=Path)
+    parser.add_argument("--source-stitch", type=Path)
     subparsers = parser.add_subparsers(dest="command", required=True)
     standardise = subparsers.add_parser("standardise-month")
     standardise.add_argument("--month", required=True, help="YYYYMM")
@@ -606,6 +735,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     axis = load_time_axis(args.time_axis)
+    segments = load_source_stitch(args.source_stitch)
     if args.command == "standardise-month":
         report = standardise_month(
             args.output_root,
@@ -613,6 +743,7 @@ def main() -> None:
             run_spec(args),
             args.month,
             time_axis=axis,
+            source_segments=segments,
         )
     elif args.command == "standardise-aux-boundary":
         report = standardise_auxiliary_boundary(
@@ -621,6 +752,7 @@ def main() -> None:
             run_spec(args),
             args.timestamp,
             time_axis=axis,
+            source_segments=segments,
         )
     else:
         report = validate_month(args.output_root, args.month)

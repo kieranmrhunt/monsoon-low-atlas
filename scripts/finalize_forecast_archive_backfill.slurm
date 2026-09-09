@@ -15,6 +15,11 @@ RUN_ROOT="${1:?staging root is required}"
 PLAN="${2:?plan is required}"
 OUTPUT="${3:?public output is required}"
 COLLECTION="${4:-archive}"
+ALLOW_INCOMPLETE="${5:-false}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 cd "$ATLAS_ROOT"
-exec "$PYTHON" -m forecast_pipeline.merge_archives --target "$OUTPUT" --run-root "$RUN_ROOT" --plan "$PLAN" --collection "$COLLECTION" --cleanup
+ARGS=(--target "$OUTPUT" --run-root "$RUN_ROOT" --plan "$PLAN" --collection "$COLLECTION" --cleanup)
+if [[ "$ALLOW_INCOMPLETE" == "true" ]]; then
+  ARGS+=(--allow-incomplete)
+fi
+exec "$PYTHON" -m forecast_pipeline.merge_archives "${ARGS[@]}"

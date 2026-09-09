@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="publish available cases without treating a still-running plan as a job failure",
+    )
+    parser.add_argument(
         "--nonblocking-lock",
         action="store_true",
         help="leave validated staging in place and exit successfully when another publisher owns the target lock",
@@ -204,7 +209,7 @@ def main() -> None:
         if ".forecast-runs" not in resolved.parts:
             raise ValueError(f"Refusing to remove unexpected staging path {resolved}")
         shutil.rmtree(resolved)
-    if not complete:
+    if not complete and not args.allow_incomplete:
         raise SystemExit("Archive backfill is incomplete; staging was retained for retry")
 
 

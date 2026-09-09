@@ -46,5 +46,5 @@ PROCESS_ID="$(/usr/bin/timeout 60s /usr/bin/sbatch --parsable --qos=high --cpus-
   --error=hpc-logs/mla-tigge-recover-%A_%a.err \
   scripts/backfill_forecast_cycle.slurm "$SNAPSHOT" "$RUN_ROOT" tigge "$PUBLIC_ROOT")"
 FINAL_ID="$(/usr/bin/timeout 60s /usr/bin/sbatch --parsable --dependency="afterany:$PROCESS_ID" \
-  scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$PUBLIC_ROOT" tigge)"
+  scripts/finalize_forecast_archive_backfill.slurm "$RUN_ROOT" "$PLAN" "$PUBLIC_ROOT" tigge true)"
 echo "Submitted TIGGE recovery array $PROCESS_ID for $COUNT cycle(s) and finalizer $FINAL_ID."

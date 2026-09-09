@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from cmip6_pipeline.plan import PRESETS, PeriodPlan, build_plan
-from cmip6_pipeline.source import RunSpec
+from cmip6_pipeline.source import RunSpec, SourceSegment
 
 
 class PlanTest(unittest.TestCase):
@@ -113,6 +113,40 @@ class PlanTest(unittest.TestCase):
             self.assertEqual(elapsed, pd.Timedelta(days=30 * 360))
             standard_row = (root / "run" / "standardise.tsv").read_text().splitlines()[0]
             self.assertTrue(standard_row.endswith("time-axis.json"))
+
+    @patch("cmip6_pipeline.plan._verify_source_month")
+    def test_cross_experiment_plan_uses_one_logical_period(self, verify: object) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            static = root / "static.nc"
+            static.write_bytes(b"fixed")
+            historical = RunSpec(
+                "CMIP", "MOHC", "HadGEM3-GC31-LL", "historical", "r1i1p1f3", "gn"
+            )
+            scenario = RunSpec(
+                "ScenarioMIP", "MOHC", "HadGEM3-GC31-LL", "ssp245", "r1i1p1f3", "gn"
+            )
+            period = PeriodPlan(
+                scenario,
+                "201001",
+                "202912",
+                "full",
+                "360_day",
+                (
+                    SourceSegment(historical, "201001", "201412"),
+                    SourceSegment(scenario, "201501", "202912"),
+                ),
+            )
+            build_plan(root / "run", [period], badc_root=root / "badc", static_file=static)
+            plan_path = next((root / "run").glob("*/period-plan.json"))
+            plan = json.loads(plan_path.read_text())
+            stitch_path = Path(plan["source_stitch"]["path"])
+            self.assertTrue(stitch_path.is_file())
+            self.assertEqual(plan["run"]["experiment_id"], "ssp245")
+            rows = (root / "run" / "standardise.tsv").read_text().splitlines()
+            self.assertTrue(all(str(stitch_path) in row for row in rows))
+            verified_experiments = {call.args[1].experiment_id for call in verify.call_args_list}
+            self.assertEqual(verified_experiments, {"historical", "ssp245"})
 
 
 if __name__ == "__main__":

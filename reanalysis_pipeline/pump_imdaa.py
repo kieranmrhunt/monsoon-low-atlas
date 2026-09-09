@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .ncmrwf import (
+    RDSClient,
+    RDSUnavailable,
     download_completed,
     plan_requests,
     read_ledger,
@@ -26,9 +28,21 @@ def is_canary(record: dict[str, Any]) -> bool:
     return isinstance(days, list) and 0 < len(days) < 20
 
 
-def pump(ledger_path: Path, output_root: Path, *, maximum_active: int) -> dict[str, Any]:
-    statuses = refresh_status(ledger_path)
-    downloaded = download_completed(ledger_path, output_root, maximum=maximum_active)
+def pump(
+    ledger_path: Path,
+    output_root: Path,
+    *,
+    maximum_active: int,
+    client: RDSClient | None = None,
+) -> dict[str, Any]:
+    # One authenticated session is enough for status, download and submission.
+    # The old pump logged in three times per invocation, tripling exposure to
+    # the currently intermittent RDS login endpoint.
+    client = client or RDSClient.login()
+    statuses = refresh_status(ledger_path, client=client)
+    downloaded = download_completed(
+        ledger_path, output_root, maximum=maximum_active, client=client
+    )
     ledger = read_ledger(ledger_path)
     canaries = [record for record in ledger["requests"].values() if is_canary(record)]
     canary_ready = len(canaries) >= 2 and all(record.get("sha256") for record in canaries)
@@ -52,6 +66,7 @@ def pump(ledger_path: Path, output_root: Path, *, maximum_active: int) -> dict[s
             ledger_path,
             plan_requests(1979, 1, 2020, 12),
             maximum=available,
+            client=client,
         )
     result["state"] = "backfill_active" if active or result["submitted"] else "requests_complete"
     result["active_before_submit"] = active
@@ -71,7 +86,16 @@ def main() -> None:
     args = parse_args()
     if args.maximum_active < 1:
         raise ValueError("--maximum-active must be positive")
-    print(json.dumps(pump(args.ledger, args.output_root, maximum_active=args.maximum_active), sort_keys=True))
+    try:
+        result = pump(
+            args.ledger, args.output_root, maximum_active=args.maximum_active
+        )
+    except RDSUnavailable as error:
+        # The hourly cron is the retry scheduler. Record a concise source state
+        # and return cleanly rather than emitting a traceback for a remote
+        # routing/service outage.
+        result = {"state": "source_unavailable", "message": str(error)}
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

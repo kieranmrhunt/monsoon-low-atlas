@@ -54,6 +54,15 @@ class RunSpec:
         return versions[-1]
 
 
+@dataclass(frozen=True)
+class SourceSegment:
+    """One contiguous native-calendar experiment segment in a logical run."""
+
+    spec: RunSpec
+    core_start: str
+    core_end: str
+
+
 def _stamp(value: str, *, end: bool) -> pd.Timestamp:
     padded = value.ljust(14, "9" if end else "0")
     return pd.Timestamp(

@@ -38,6 +38,10 @@ SURFACE_TIMES = PRESSURE_TIMES
 LEDGER_SCHEMA = "lps-atlas-imdaa-rds-v1"
 
 
+class RDSUnavailable(RuntimeError):
+    """The remote RDS service could not be reached after bounded retries."""
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -135,19 +139,42 @@ class RDSClient:
     session: requests.Session
 
     @classmethod
-    def login(cls, *, timeout: float = 60.0) -> "RDSClient":
+    def login(
+        cls,
+        *,
+        timeout: float | tuple[float, float] = (10.0, 20.0),
+        attempts: int = 2,
+        retry_delay: float = 2.0,
+    ) -> "RDSClient":
         credentials = netrc.netrc().authenticators(NETRC_MACHINE)
         if credentials is None:
             raise RuntimeError(f"No {NETRC_MACHINE} entry is present in ~/.netrc")
         username, unused_account, password = credentials
-        session = requests.Session()
-        response = session.post(
-            f"{BASE_URL}/auth/login",
-            json={"email": username, "password": password},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return cls(session)
+        if attempts < 1:
+            raise ValueError("attempts must be positive")
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, attempts + 1):
+            session = requests.Session()
+            try:
+                response = session.post(
+                    f"{BASE_URL}/auth/login",
+                    json={"email": username, "password": password},
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                return cls(session)
+            except requests.RequestException as error:
+                session.close()
+                status = getattr(getattr(error, "response", None), "status_code", None)
+                if status is not None and status < 500:
+                    raise
+                last_error = error
+                if attempt < attempts:
+                    time.sleep(retry_delay * attempt)
+        raise RDSUnavailable(
+            f"NCMRWF RDS login unavailable after {attempts} attempts "
+            f"({type(last_error).__name__ if last_error else 'unknown error'})"
+        ) from last_error
 
     def submit(self, payload: Mapping[str, Any], *, timeout: float = 120.0) -> dict[str, Any]:
         response = self.session.post(
@@ -225,9 +252,10 @@ def submit_requests(
     requests_to_submit: Iterable[tuple[str, int, int, Sequence[str], Mapping[str, Any]]],
     *,
     maximum: int | None = None,
+    client: RDSClient | None = None,
 ) -> int:
     ledger = read_ledger(ledger_path)
-    client = RDSClient.login()
+    client = client or RDSClient.login()
     submitted = 0
     for key, year, month, days, payload in requests_to_submit:
         if key in ledger["requests"]:
@@ -253,9 +281,11 @@ def submit_requests(
     return submitted
 
 
-def refresh_status(ledger_path: Path) -> dict[str, int]:
+def refresh_status(
+    ledger_path: Path, *, client: RDSClient | None = None
+) -> dict[str, int]:
     ledger = read_ledger(ledger_path)
-    client = RDSClient.login()
+    client = client or RDSClient.login()
     remote = {str(row.get("id")): row for row in client.jobs()}
     counts: dict[str, int] = {}
     for record in ledger["requests"].values():
@@ -271,9 +301,15 @@ def refresh_status(ledger_path: Path) -> dict[str, int]:
     return counts
 
 
-def download_completed(ledger_path: Path, output_root: Path, *, maximum: int | None = None) -> int:
+def download_completed(
+    ledger_path: Path,
+    output_root: Path,
+    *,
+    maximum: int | None = None,
+    client: RDSClient | None = None,
+) -> int:
     ledger = read_ledger(ledger_path)
-    client = RDSClient.login()
+    client = client or RDSClient.login()
     completed_statuses = {"completed", "complete", "ready", "success", "succeeded"}
     downloaded = 0
     for key in sorted(ledger["requests"]):
@@ -347,4 +383,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

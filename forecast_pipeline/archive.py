@@ -250,6 +250,8 @@ def archive_manifest_entry(
         "forecast_tracks": len(payload.get("tracks", [])),
         "forecast_systems": len(payload.get("systems", [])),
         "forecast_track_points": sum(len(track.get("points", [])) for track in payload.get("tracks", [])),
+        "members_available": payload.get("members", {}).get("available"),
+        "members_expected": payload.get("members", {}).get("expected"),
         "valid_time_count": len(payload.get("valid_times", [])),
         "complete_valid_time_axis": bool(payload.get("archive_coverage", {}).get("complete_valid_time_axis")),
         "weather_fields": sorted(

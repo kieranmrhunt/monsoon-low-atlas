@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .plan import PeriodPlan, build_plan
-from .source import DEFAULT_ROOT, RunSpec
+from .source import DEFAULT_ROOT, RunSpec, SourceSegment
 from .warming import DEFAULT_GWL_TABLE
 
 
@@ -124,7 +124,10 @@ def plan_gwl_runs(
     runnable = []
     rows = [["run_id", "source_id", "member_id", "scenario", "level_c", "central_year", "run_root"]]
     for record in records:
-        if record["status"] != "scenario-window":
+        if record["status"] not in {
+            "scenario-window",
+            "requires-historical-scenario-stitch",
+        }:
             continue
         source_id = record["source_id"]
         source = MODEL_SOURCES.get(source_id)
@@ -134,19 +137,45 @@ def plan_gwl_runs(
         level_label = str(record["level_c"]).replace(".", "p")
         run_id = f"{_slug(source_id)}-{scenario}-gwl{level_label}"
         run_root = output_root / run_id
+        scenario_spec = RunSpec(
+            "ScenarioMIP",
+            source.institution,
+            source_id,
+            scenario,
+            record["member_id"],
+            "gn",
+        )
+        source_segments: tuple[SourceSegment, ...] = ()
+        if record["status"] == "requires-historical-scenario-stitch":
+            source_segments = (
+                SourceSegment(
+                    RunSpec(
+                        "CMIP",
+                        source.institution,
+                        source_id,
+                        "historical",
+                        record["member_id"],
+                        "gn",
+                    ),
+                    f"{record['start_year']}01",
+                    f"{SCENARIO_START_YEAR - 1}12",
+                ),
+                SourceSegment(
+                    scenario_spec,
+                    f"{SCENARIO_START_YEAR}01",
+                    f"{record['end_year']}12",
+                ),
+            )
+            record["processing"] = "continuous-historical-scenario-stitch"
+        else:
+            record["processing"] = "scenario-only"
         period = PeriodPlan(
-            RunSpec(
-                "ScenarioMIP",
-                source.institution,
-                source_id,
-                scenario,
-                record["member_id"],
-                "gn",
-            ),
+            scenario_spec,
             f"{record['start_year']}01",
             f"{record['end_year']}12",
             "full",
             source.calendar,
+            source_segments,
         )
         manifest = build_plan(
             run_root,
@@ -185,7 +214,9 @@ def plan_gwl_runs(
             "task_file": str(task_file.resolve()),
             "method": (
                 "Each runnable period is the published IPCC AR6 centred 20-year GWL window. "
-                "The frozen atlas detector and linker use the same model/member fields and native calendar as the fixed-window runs."
+                "Windows crossing 2015 use one continuous native-calendar analysis clock with "
+                "historical and ScenarioMIP source segments joined before detection. The frozen "
+                "atlas detector and linker use the same model/member fields as the fixed-window runs."
             ),
         },
     )

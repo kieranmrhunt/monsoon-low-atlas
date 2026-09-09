@@ -7,6 +7,13 @@ PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/pyth
 CYCLES="${1:-recent}"
 FORCE="${2:-false}"
 
+mkdir -p "$ATLAS_ROOT/.forecast-runs"
+exec 9>"$ATLAS_ROOT/.forecast-runs/weathernext2-submit.lock"
+if ! /usr/bin/flock -n 9; then
+  echo "Another WeatherNext 2 submission planner is active; no duplicate submitted."
+  exit 0
+fi
+
 ADC_PATH="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
 if [[ ! -r "$ADC_PATH" ]]; then
   echo "WeatherNext 2 skipped: Google Application Default Credentials are not configured at $ADC_PATH."
@@ -14,6 +21,10 @@ if [[ ! -r "$ADC_PATH" ]]; then
 fi
 
 if [[ "$FORCE" != "true" ]]; then
+  if ! QUEUED_JOBS="$(timeout 30 squeue -h -u "$USER" -o '%j')"; then
+    echo "Could not inspect the Slurm queue; no WeatherNext 2 duplicate-risk submission made."
+    exit 0
+  fi
   while IFS= read -r job_name; do
     case "$job_name" in
       mla-wn2-member|mla-wn2-final)
@@ -21,7 +32,7 @@ if [[ "$FORCE" != "true" ]]; then
         exit 0
         ;;
     esac
-  done < <(timeout 30 squeue -h -u "$USER" -o '%j')
+  done <<< "$QUEUED_JOBS"
 fi
 
 if [[ "$CYCLES" == "recent" ]]; then

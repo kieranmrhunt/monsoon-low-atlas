@@ -14,6 +14,8 @@ ATLAS_ROOT="${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is required}"
 RUN_ROOT="${1:?run root is required}"
 CYCLES="${2:?comma-separated cycles are required}"
 TARGET="${3:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
+MEMBER_CACHE="${4:-$RUN_ROOT/members}"
+MINIMUM_MEMBERS="${LPS_AIGEFS_MINIMUM_MEMBERS:-11}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 BUILD_MANIFEST="$ATLAS_ROOT/assets/atlas-build-manifest.json"
 CORE_NAME="$("$PYTHON" -c "import json; print(json.load(open('$BUILD_MANIFEST'))['core'])")"
@@ -21,9 +23,9 @@ cd "$ATLAS_ROOT"
 IFS=',' read -ra CYCLE_VALUES <<< "$CYCLES"
 SUCCESS=0
 for CYCLE in "${CYCLE_VALUES[@]}"; do
-  MEMBER_ROOT="$RUN_ROOT/members/$CYCLE"
+  MEMBER_ROOT="$MEMBER_CACHE/$CYCLE"
   COUNT="$(find "$MEMBER_ROOT" -maxdepth 1 -type f -name 'p??.npz' 2>/dev/null | wc -l)"
-  if (( COUNT < 22 )); then
+  if (( COUNT < MINIMUM_MEMBERS )); then
     echo "Skipping AIGEFS $CYCLE: only $COUNT/31 member shards completed" >&2
     continue
   fi
@@ -32,7 +34,8 @@ for CYCLE in "${CYCLE_VALUES[@]}"; do
     --cycle "$CYCLE" \
     --members "$MEMBER_ROOT" \
     --output-root "$STAGING" \
-    --atlas-core "$ATLAS_ROOT/assets/$CORE_NAME"
+    --atlas-core "$ATLAS_ROOT/assets/$CORE_NAME" \
+    --minimum-members "$MINIMUM_MEMBERS"
   "$PYTHON" -m forecast_pipeline.merge_runs \
     --target "$TARGET" \
     --run-root "$STAGING" \

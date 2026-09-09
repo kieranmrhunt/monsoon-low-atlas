@@ -5,6 +5,17 @@ ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 OUTPUT="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_data/LPS/atlas-forecasts-v1}"
 
+mkdir -p "$ATLAS_ROOT/.forecast-runs"
+exec 9>"$ATLAS_ROOT/.forecast-runs/recent-submit.lock"
+if ! /usr/bin/flock -n 9; then
+  echo "Another rolling forecast-cycle planner is active; no duplicate submitted."
+  exit 0
+fi
+
+if ! QUEUED_JOBS="$(timeout 30 squeue -h -u "$USER" -o '%j')"; then
+  echo "Could not inspect the Slurm queue; no rolling duplicate-risk submission made."
+  exit 0
+fi
 while IFS= read -r job_name; do
   case "$job_name" in
     mla-fc-recent|mla-fc-recent-final)
@@ -12,7 +23,7 @@ while IFS= read -r job_name; do
       exit 0
       ;;
   esac
-done < <(timeout 30 squeue -h -u "$USER" -o '%j')
+done <<< "$QUEUED_JOBS"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_ROOT="$ATLAS_ROOT/.forecast-runs/recent-backfill-$RUN_ID"

@@ -122,6 +122,16 @@ def _atomic_tsv(path: Path, rows: list[list[object]]) -> None:
     os.replace(temporary, path)
 
 
+def _atomic_optional_tsv(path: Path, rows: list[list[object]]) -> None:
+    """Write a resumable task table, including a valid empty queue."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + f".part-{os.getpid()}")
+    with temporary.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter="\t", lineterminator="\n").writerows(rows)
+    os.replace(temporary, path)
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as stream:
@@ -820,6 +830,132 @@ def build_task_plan(run_root: Path, pair_roots: list[Path], geometry_asset: Path
     return manifest
 
 
+def _valid_impact_manifest(path: Path, schema: str) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        _metadata, payload, _asset = _manifest_payload(path)
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return False
+    return payload.get("schema") == schema
+
+
+def build_gwl_task_plan(
+    run_root: Path,
+    gwl_root: Path,
+    historical_pair_roots: list[Path],
+    geometry_asset: Path,
+) -> Path:
+    """Plan only missing precipitation impacts for completed GWL windows."""
+
+    run_root = run_root.resolve()
+    gwl_root = gwl_root.resolve()
+    geometry_asset = geometry_asset.resolve()
+    if not geometry_asset.is_file():
+        raise FileNotFoundError(geometry_asset)
+    gwl_manifest_path = gwl_root / "manifest.json"
+    gwl_manifest = json.loads(gwl_manifest_path.read_text(encoding="utf-8"))
+    if gwl_manifest.get("schema") != "lps-atlas-cmip6-gwl-plan-v1":
+        raise ValueError(f"unsupported GWL plan: {gwl_manifest_path}")
+
+    historical: dict[tuple[str, str], Path] = {}
+    for pair_root in historical_pair_roots:
+        for plan_path in Path(pair_root).resolve().glob("*/period-plan.json"):
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            run = plan["run"]
+            if run["experiment_id"] != "historical":
+                continue
+            impact_manifest = plan_path.parent / "impact" / "manifest.json"
+            if not _valid_impact_manifest(impact_manifest, RUN_SCHEMA):
+                raise FileNotFoundError(f"completed historical impact is required: {impact_manifest}")
+            identity = (str(run["source_id"]), str(run["member_id"]))
+            if identity in historical:
+                raise ValueError(f"duplicate historical impact baseline for {identity}")
+            historical[identity] = impact_manifest
+
+    run_rows: list[list[object]] = []
+    pair_rows: list[list[object]] = []
+    records: list[dict[str, Any]] = []
+    for record in gwl_manifest.get("records", []):
+        run_id = record.get("run_id")
+        plan_path_text = record.get("plan")
+        if not run_id or not plan_path_text:
+            records.append({**record, "impact_status": "gwl-track-window-incomplete"})
+            continue
+        plan_path = Path(plan_path_text)
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        periods = plan.get("periods", [])
+        if len(periods) != 1:
+            raise ValueError(f"GWL plan must contain one logical period: {plan_path}")
+        period_root = Path(periods[0]["paths"]["root"])
+        period_plan = period_root / "period-plan.json"
+        catalogue = period_root / "physics" / "cmip6-physical-events.parquet"
+        data_root = period_root / "data"
+        future_manifest = period_root / "impact" / "manifest.json"
+        identity = (str(record["source_id"]), str(record["member_id"]))
+        historical_manifest = historical.get(identity)
+        pair_manifest = run_root / "pairs" / str(run_id) / "manifest.json"
+        entry = {
+            "run_id": str(run_id),
+            "source_id": identity[0],
+            "member_id": identity[1],
+            "scenario": str(record["scenario"]),
+            "level_c": float(record["level_c"]),
+            "period_plan": str(period_plan),
+            "future_impact_manifest": str(future_manifest),
+            "historical_impact_manifest": str(historical_manifest) if historical_manifest else None,
+            "pair_manifest": str(pair_manifest),
+        }
+        if historical_manifest is None:
+            entry["impact_status"] = "historical-impact-unavailable"
+            records.append(entry)
+            continue
+        if not catalogue.is_file() or not (data_root / "standard" / "precipitation").is_dir():
+            entry["impact_status"] = "gwl-track-window-incomplete"
+            records.append(entry)
+            continue
+        if not _valid_impact_manifest(future_manifest, RUN_SCHEMA):
+            run_rows.append(
+                [
+                    len(run_rows) + 1,
+                    period_plan,
+                    catalogue,
+                    data_root,
+                    geometry_asset,
+                    future_manifest.parent,
+                ]
+            )
+        if not _valid_impact_manifest(pair_manifest, PAIR_SCHEMA):
+            pair_rows.append(
+                [
+                    len(pair_rows) + 1,
+                    historical_manifest,
+                    future_manifest,
+                    pair_manifest.parent,
+                ]
+            )
+        entry["impact_status"] = "queued-or-complete"
+        entry["run_required"] = not _valid_impact_manifest(future_manifest, RUN_SCHEMA)
+        entry["pair_required"] = not _valid_impact_manifest(pair_manifest, PAIR_SCHEMA)
+        records.append(entry)
+
+    _atomic_optional_tsv(run_root / "run.tsv", run_rows)
+    _atomic_optional_tsv(run_root / "pair.tsv", pair_rows)
+    manifest = run_root / "plan.json"
+    _atomic_json(
+        manifest,
+        {
+            "schema": "lps-atlas-cmip6-gwl-precipitation-impact-plan-v1",
+            "generated_utc": utc_now(),
+            "gwl_plan": {"path": str(gwl_manifest_path), "sha256": sha256(gwl_manifest_path)},
+            "geometry_asset": {"path": str(geometry_asset), "sha256": sha256(geometry_asset)},
+            "tasks": {"runs": len(run_rows), "pairs": len(pair_rows)},
+            "records": records,
+        },
+    )
+    return manifest
+
+
 def _manifest_payload(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any], Path]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     asset = Path(manifest["asset"]["path"])
@@ -1140,6 +1276,125 @@ def attach_to_climate_bundle(climate_manifest: Path, impact_manifests: list[Path
     return new_index
 
 
+def attach_gwl_impacts(
+    climate_manifest: Path,
+    impact_specs: list[tuple[float, Path]],
+) -> Path:
+    """Attach GWL impacts without confusing them with fixed-time SSP pairs."""
+
+    climate_manifest = climate_manifest.resolve()
+    output_dir = climate_manifest.parent
+    manifest = json.loads(climate_manifest.read_text(encoding="utf-8"))
+    index_path = output_dir / manifest["index"]["path"]
+    if sha256(index_path) != manifest["index"]["sha256"]:
+        raise ValueError(f"climate index checksum does not match {climate_manifest}")
+    index = _load_json(index_path)
+    individual_pairs = [
+        pair
+        for pair in index.get("pairs", [])
+        if pair.get("comparison_basis") == "gwl" and pair.get("kind") != "multi-model"
+    ]
+    pairs_by_identity = {
+        (
+            str(pair["source_label"]),
+            str(pair["member_id"]),
+            str((pair.get("comparison") or {}).get("scenario")),
+            float((pair.get("comparison") or {})["level_c"]),
+        ): pair
+        for pair in individual_pairs
+    }
+    assets_dir = output_dir / "assets"
+    entries_by_level: dict[float, list[dict[str, Any]]] = defaultdict(list)
+    seen: set[tuple[str, str, str, float]] = set()
+    for level, impact_manifest in impact_specs:
+        impact_manifest = impact_manifest.resolve()
+        impact_meta, impact_payload, impact_asset = _manifest_payload(impact_manifest)
+        if impact_payload.get("schema") != PAIR_SCHEMA:
+            raise ValueError(f"unsupported GWL impact pair schema in {impact_manifest}")
+        future = impact_payload["future"]
+        identity = (
+            str(future["source_id"]),
+            str(future["member_id"]),
+            str(future["experiment_id"]),
+            float(level),
+        )
+        if identity in seen:
+            raise ValueError(f"duplicate GWL impact pair {identity}")
+        seen.add(identity)
+        pair = pairs_by_identity.get(identity)
+        if pair is None:
+            raise ValueError(f"GWL impact pair {identity} is absent from the climate bundle")
+        destination = assets_dir / impact_asset.name
+        _copy_atomic(impact_asset, destination)
+        pair["impact"] = {
+            "url": f"assets/{destination.name}",
+            "sha256": impact_meta["asset"]["sha256"],
+            "bytes": destination.stat().st_size,
+        }
+        pair.setdefault("capabilities", {})["precipitation_impacts"] = True
+        historical_path = Path(impact_meta["historical_manifest"])
+        future_path = Path(impact_meta["future_manifest"])
+        entries_by_level[float(level)].append(
+            {
+                "id": pair["id"],
+                "source_label": pair["source_label"],
+                "pair": impact_payload,
+                "historical": _run_payload(historical_path),
+                "future": _run_payload(future_path),
+            }
+        )
+
+    pair_by_id = {str(pair["id"]): pair for pair in index.get("pairs", [])}
+    impact_counts: dict[str, int] = {}
+    for comparison in (index.get("gwl_comparisons") or {}).get("comparisons", []):
+        level = float(comparison["level_c"])
+        target_ids = [str(value) for value in comparison.get("model_pair_ids", [])]
+        entries = entries_by_level.get(level, [])
+        by_id = {str(entry["id"]): entry for entry in entries}
+        if set(by_id) != set(target_ids):
+            raise ValueError(
+                f"GWL +{level:g} impact pairs are {sorted(by_id)}; expected {sorted(target_ids)}"
+            )
+        ordered = [by_id[pair_id] for pair_id in target_ids]
+        if len(ordered) < 2:
+            raise ValueError(f"GWL +{level:g} impact ensemble requires at least two models")
+        ensemble_payload = aggregate_impact_payloads(ordered)
+        raw = json.dumps(ensemble_payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ensemble_path = assets_dir / f"climate-impact-gwl-ensemble.{hashlib.sha256(raw).hexdigest()[:12]}.json.gz"
+        atomic_gzip_json(ensemble_path, ensemble_payload)
+        ensemble_id = str(comparison["ensemble_id"])
+        ensemble = pair_by_id.get(ensemble_id)
+        if ensemble is None:
+            raise ValueError(f"GWL ensemble {ensemble_id} is absent from the climate bundle")
+        ensemble["impact"] = {
+            "url": f"assets/{ensemble_path.name}",
+            "sha256": sha256(ensemble_path),
+            "bytes": ensemble_path.stat().st_size,
+        }
+        ensemble.setdefault("capabilities", {})["precipitation_impacts"] = True
+        comparison["impact_model_count"] = len(ordered)
+        impact_counts[f"{level:g}"] = len(ordered)
+
+    index["generated_utc"] = utc_now()
+    raw_index = json.dumps(index, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    new_index = output_dir / f"climate-index.{hashlib.sha256(raw_index).hexdigest()[:12]}.json.gz"
+    atomic_gzip_json(new_index, index)
+    manifest.update(
+        {
+            "generated_utc": index["generated_utc"],
+            "index": {
+                "path": new_index.name,
+                "sha256": sha256(new_index),
+                "bytes": new_index.stat().st_size,
+            },
+            "gwl_impact_models_by_level": impact_counts,
+            "gwl_impact_schema": ENSEMBLE_SCHEMA,
+        }
+    )
+    _atomic_json(climate_manifest, manifest)
+    return new_index
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1147,6 +1402,11 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--run-root", type=Path, required=True)
     plan.add_argument("--pair-root", type=Path, action="append", required=True)
     plan.add_argument("--geometry-asset", type=Path, required=True)
+    gwl_plan = subparsers.add_parser("plan-gwl")
+    gwl_plan.add_argument("--run-root", type=Path, required=True)
+    gwl_plan.add_argument("--gwl-root", type=Path, required=True)
+    gwl_plan.add_argument("--historical-pair-root", type=Path, action="append", required=True)
+    gwl_plan.add_argument("--geometry-asset", type=Path, required=True)
     run = subparsers.add_parser("run")
     run.add_argument("--period-plan", type=Path, required=True)
     run.add_argument("--catalogue", type=Path, required=True)
@@ -1160,6 +1420,15 @@ def parse_args() -> argparse.Namespace:
     attach = subparsers.add_parser("attach")
     attach.add_argument("--climate-manifest", type=Path, required=True)
     attach.add_argument("--impact-manifest", type=Path, action="append", required=True)
+    gwl_attach = subparsers.add_parser("attach-gwl")
+    gwl_attach.add_argument("--climate-manifest", type=Path, required=True)
+    gwl_attach.add_argument(
+        "--gwl-impact",
+        nargs=2,
+        action="append",
+        metavar=("LEVEL_C", "MANIFEST"),
+        required=True,
+    )
     return parser.parse_args()
 
 
@@ -1167,12 +1436,24 @@ def main() -> None:
     args = parse_args()
     if args.command == "plan":
         result = build_task_plan(args.run_root, args.pair_root, args.geometry_asset)
+    elif args.command == "plan-gwl":
+        result = build_gwl_task_plan(
+            args.run_root,
+            args.gwl_root,
+            args.historical_pair_root,
+            args.geometry_asset,
+        )
     elif args.command == "run":
         result = build_run(args.period_plan, args.catalogue, args.data_root, args.geometry_asset, args.output_dir)
     elif args.command == "pair":
         result = build_pair(args.historical_manifest, args.future_manifest, args.output_dir)
-    else:
+    elif args.command == "attach":
         result = attach_to_climate_bundle(args.climate_manifest, args.impact_manifest)
+    else:
+        result = attach_gwl_impacts(
+            args.climate_manifest,
+            [(float(level), Path(path)) for level, path in args.gwl_impact],
+        )
     print(result)
 
 

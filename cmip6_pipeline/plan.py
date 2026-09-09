@@ -17,7 +17,7 @@ import pandas as pd
 from reanalysis_pipeline.common import sha256
 
 from .model_calendar import TimeAxis, native_stamp, time_axis
-from .source import DEFAULT_ROOT, RunSpec, files_overlapping_stamps
+from .source import DEFAULT_ROOT, RunSpec, SourceSegment, files_overlapping_stamps
 from .standardise import FIELD_TABLES, field_table
 
 
@@ -31,6 +31,7 @@ class PeriodPlan:
     core_end: str
     next_halo: str = "full"
     calendar: str = "proleptic_gregorian"
+    source_segments: tuple[SourceSegment, ...] = ()
 
 
 def utc_now() -> str:
@@ -87,6 +88,52 @@ def _verify_source_month(
         )
 
 
+def _validated_segments(item: PeriodPlan) -> tuple[SourceSegment, ...]:
+    segments = item.source_segments
+    if not segments:
+        return ()
+    ordered = tuple(sorted(segments, key=lambda value: value.core_start))
+    if ordered != segments:
+        raise ValueError("source segments must be ordered by native start month")
+    for index, segment in enumerate(segments):
+        if segment.core_start > segment.core_end:
+            raise ValueError(f"invalid source segment {segment.core_start}..{segment.core_end}")
+        if (
+            segment.spec.source_id != item.spec.source_id
+            or segment.spec.member_id != item.spec.member_id
+            or segment.spec.grid_label != item.spec.grid_label
+        ):
+            raise ValueError("stitched source segments must use one source, member and grid")
+        if index and _next(segments[index - 1].core_end) != segment.core_start:
+            raise ValueError("stitched source segments must be contiguous native months")
+    if segments[0].core_start != item.core_start or segments[-1].core_end != item.core_end:
+        raise ValueError("stitched source segments must exactly cover the logical core interval")
+    return segments
+
+
+def _segments_overlapping_analysis_month(
+    segments: tuple[SourceSegment, ...],
+    month: str,
+    axis: TimeAxis,
+) -> tuple[SourceSegment, ...]:
+    """Select native experiment segments touched by one analysis-clock month."""
+
+    start = pd.Period(month, freq="M").start_time - pd.Timedelta(hours=6)
+    end = (pd.Period(month, freq="M") + 1).start_time + pd.Timedelta(hours=6)
+    native_start, native_end = axis.native_bounds_for_analysis_interval(start, end)
+    lower, upper = native_stamp(native_start), native_stamp(native_end)
+    selected: list[SourceSegment] = []
+    for index, segment in enumerate(segments):
+        segment_lower = "00000000000000" if index == 0 else f"{segment.core_start}01000000"
+        next_month = _next(segment.core_end)
+        segment_upper = "99999999999999" if index == len(segments) - 1 else f"{next_month}01000000"
+        if upper >= segment_lower and lower <= segment_upper:
+            selected.append(segment)
+    if not selected:
+        raise ValueError(f"no stitched source segment covers analysis month {month}")
+    return tuple(selected)
+
+
 def build_plan(
     run_root: Path,
     periods: list[PeriodPlan],
@@ -126,52 +173,91 @@ def build_plan(
         )
         axis_path = period_root / "time-axis.json"
         _atomic_json(axis_path, axis.record())
+        segments = _validated_segments(item)
+        source_stitch_path: Path | None = None
+        if segments:
+            source_stitch_path = period_root / "source-stitch.json"
+            _atomic_json(
+                source_stitch_path,
+                {
+                    "schema": "lps-atlas-cmip6-source-stitch-v1",
+                    "calendar": item.calendar,
+                    "logical_run": asdict(item.spec),
+                    "native_core_start": item.core_start,
+                    "native_core_end": item.core_end,
+                    "segments": [
+                        {
+                            "run": asdict(segment.spec),
+                            "core_start": segment.core_start,
+                            "core_end": segment.core_end,
+                        }
+                        for segment in segments
+                    ],
+                },
+            )
         full_standard_months = [_previous(core[0]), *core]
         if item.next_halo == "full":
             full_standard_months.append(_next(core[-1]))
         full_standard_months = list(dict.fromkeys(full_standard_months))
 
         for month in full_standard_months:
-            _verify_source_month(badc_root, item.spec, month, tuple(FIELD_TABLES), axis)
-            standard_rows.append(
-                [
-                    len(standard_rows) + 1,
-                    item.spec.activity,
-                    item.spec.institution,
-                    item.spec.source_id,
-                    item.spec.experiment_id,
-                    item.spec.member_id,
-                    item.spec.grid_label,
-                    month,
-                    data_root,
-                    axis_path,
-                ]
+            source_specs = (
+                tuple(segment.spec for segment in _segments_overlapping_analysis_month(segments, month, axis))
+                if segments else (item.spec,)
             )
+            for source_spec in source_specs:
+                _verify_source_month(badc_root, source_spec, month, tuple(FIELD_TABLES), axis)
+            row: list[object] = [
+                len(standard_rows) + 1,
+                item.spec.activity,
+                item.spec.institution,
+                item.spec.source_id,
+                item.spec.experiment_id,
+                item.spec.member_id,
+                item.spec.grid_label,
+                month,
+                data_root,
+                axis_path,
+            ]
+            if source_stitch_path is not None:
+                row.append(source_stitch_path)
+            standard_rows.append(row)
         boundary_timestamp: str | None = None
         if item.next_halo == "boundary":
             boundary_month = _next(core[-1])
             boundary_timestamp = f"{boundary_month[:4]}-{boundary_month[4:]}-01T00:00:00"
-            _verify_source_month(
-                badc_root,
-                item.spec,
-                boundary_month,
-                ("ua", "va", "ta", "hus"),
-                axis,
+            source_specs = (
+                tuple(
+                    segment.spec
+                    for segment in _segments_overlapping_analysis_month(
+                        segments, boundary_month, axis
+                    )
+                )
+                if segments else (item.spec,)
             )
-            boundary_rows.append(
-                [
-                    len(boundary_rows) + 1,
-                    item.spec.activity,
-                    item.spec.institution,
-                    item.spec.source_id,
-                    item.spec.experiment_id,
-                    item.spec.member_id,
-                    item.spec.grid_label,
-                    boundary_timestamp,
-                    data_root,
-                    axis_path,
-                ]
-            )
+            for source_spec in source_specs:
+                _verify_source_month(
+                    badc_root,
+                    source_spec,
+                    boundary_month,
+                    ("ua", "va", "ta", "hus"),
+                    axis,
+                )
+            row = [
+                len(boundary_rows) + 1,
+                item.spec.activity,
+                item.spec.institution,
+                item.spec.source_id,
+                item.spec.experiment_id,
+                item.spec.member_id,
+                item.spec.grid_label,
+                boundary_timestamp,
+                data_root,
+                axis_path,
+            ]
+            if source_stitch_path is not None:
+                row.append(source_stitch_path)
+            boundary_rows.append(row)
         for month in core:
             detect_rows.append([len(detect_rows) + 1, month, data_root, tracking_root, static_file])
         link_rows.append([period_index, label, tracking_root, link_root])
@@ -193,6 +279,14 @@ def build_plan(
             },
             "standard_months": full_standard_months,
             "next_auxiliary_boundary": boundary_timestamp,
+            "source_stitch": (
+                {
+                    "path": str(source_stitch_path),
+                    "sha256": sha256(source_stitch_path),
+                    "segments": len(segments),
+                }
+                if source_stitch_path is not None else None
+            ),
             "paths": {
                 "root": str(period_root),
                 "data": str(data_root),

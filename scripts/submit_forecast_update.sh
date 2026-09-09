@@ -2,12 +2,21 @@
 set -euo pipefail
 
 ATLAS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-mkdir -p "$ATLAS_ROOT/hpc-logs"
+mkdir -p "$ATLAS_ROOT/hpc-logs" "$ATLAS_ROOT/.forecast-runs"
+exec 9>"$ATLAS_ROOT/.forecast-runs/operational-submit.lock"
+if ! /usr/bin/flock -n 9; then
+  echo "Another operational forecast submission planner is active; no duplicate submitted."
+  exit 0
+fi
 
 # Only suppress a submission when an operational refresh is already active.
 # Archive/backfill finalizers historically used the generic `mla-forecast`
 # name too, so matching that name caused unrelated archive work to skip a
 # six-hourly live update.
+if ! QUEUED_JOBS="$(timeout 30 squeue -h -u "$USER" -o '%j')"; then
+  echo "Could not inspect the Slurm queue; no operational duplicate-risk submission made."
+  exit 0
+fi
 while IFS= read -r job_name; do
   case "$job_name" in
     mla-fc-gfs|mla-fc-gefs|mla-fc-aigfs|\
@@ -21,7 +30,7 @@ while IFS= read -r job_name; do
       exit 0
       ;;
   esac
-done < <(timeout 30 squeue -h -u "$USER" -o '%j')
+done <<< "$QUEUED_JOBS"
 
 cd "$ATLAS_ROOT"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"

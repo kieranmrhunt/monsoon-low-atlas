@@ -6,8 +6,20 @@ TARGET="${LPS_FORECAST_OUT:-/home/users/kieran/incompass/public/kieran/track_dat
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
 CYCLES="${1:-recent}"
 FORCE="${2:-false}"
+MEMBER_CACHE="${LPS_AIGEFS_MEMBER_CACHE:-$ATLAS_ROOT/.forecast-runs/aigefs-member-cache}"
+
+mkdir -p "$ATLAS_ROOT/.forecast-runs" "$MEMBER_CACHE"
+exec 9>"$ATLAS_ROOT/.forecast-runs/aigefs-submit.lock"
+if ! /usr/bin/flock -n 9; then
+  echo "Another AIGEFS submission planner is active; no duplicate submitted."
+  exit 0
+fi
 
 if [[ "$FORCE" != "true" ]]; then
+  if ! QUEUED_JOBS="$(timeout 30 squeue -h -u "$USER" -o '%j')"; then
+    echo "Could not inspect the Slurm queue; no AIGEFS duplicate-risk submission made."
+    exit 0
+  fi
   while IFS= read -r job_name; do
     case "$job_name" in
       mla-aigefs-mem|mla-aigefs-final)
@@ -15,7 +27,7 @@ if [[ "$FORCE" != "true" ]]; then
         exit 0
         ;;
     esac
-  done < <(timeout 30 squeue -h -u "$USER" -o '%j')
+  done <<< "$QUEUED_JOBS"
 fi
 
 if [[ "$CYCLES" == "recent" ]]; then
@@ -49,9 +61,9 @@ for PASS in $(seq 1 "$PASSES"); do
   if [[ -n "$PREVIOUS" ]]; then
     DEPENDENCY=(--dependency="afterany:$PREVIOUS")
   fi
-  ARRAY_ID="$(sbatch --parsable "${DEPENDENCY[@]}" --array="1-$INDEX%$CONCURRENCY" scripts/aigefs_member_shard.slurm "$JOBS" "$RUN_ROOT")"
+  ARRAY_ID="$(sbatch --parsable "${DEPENDENCY[@]}" --array="1-$INDEX%$CONCURRENCY" scripts/aigefs_member_shard.slurm "$JOBS" "$RUN_ROOT" "$MEMBER_CACHE")"
   ARRAY_IDS+=("$ARRAY_ID")
   PREVIOUS="$ARRAY_ID"
 done
-FINAL_ID="$(sbatch --parsable --dependency="afterany:$PREVIOUS" scripts/finalize_aigefs_shards.slurm "$RUN_ROOT" "$CYCLES" "$TARGET")"
+FINAL_ID="$(sbatch --parsable --dependency="afterany:$PREVIOUS" scripts/finalize_aigefs_shards.slurm "$RUN_ROOT" "$CYCLES" "$TARGET" "$MEMBER_CACHE")"
 printf 'AIGEFS member arrays %s (%d shards, %d passes); finalizer %s\n' "${ARRAY_IDS[*]}" "$INDEX" "$PASSES" "$FINAL_ID"
