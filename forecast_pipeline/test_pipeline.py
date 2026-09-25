@@ -75,7 +75,8 @@ from forecast_pipeline.analysis_history import (
     analysis_centres,
     replace_analysis_entry,
 )
-from forecast_pipeline.archive import archive_manifest_entry, archive_payload
+from forecast_pipeline.archive import AtlasVerifier, archive_manifest_entry, archive_payload
+from forecast_pipeline.archive_verification import normalized_matches
 from forecast_pipeline.plan_recent import planned_recent_cycles
 from forecast_pipeline.update import replace_recent_entry
 from forecast_pipeline.v56_tracking import (
@@ -105,6 +106,42 @@ class StubVerifier:
 
 
 class ForecastPipelineContractTests(unittest.TestCase):
+
+    def test_archive_verification_is_one_to_one_within_each_member(self) -> None:
+        verifier = AtlasVerifier.__new__(AtlasVerifier)
+        candidates = {
+            "a": [(10.0, {"forecast_track_id": "a", "era5_track_id": 1, "member": "p01"}),
+                  (20.0, {"forecast_track_id": "a", "era5_track_id": 2, "member": "p01"})],
+            "b": [(11.0, {"forecast_track_id": "b", "era5_track_id": 1, "member": "p01"}),
+                  (12.0, {"forecast_track_id": "b", "era5_track_id": 2, "member": "p01"})],
+            "c": [(9.0, {"forecast_track_id": "c", "era5_track_id": 1, "member": "p02"})],
+        }
+        verifier._candidate_matches = lambda payload, track: candidates[track["id"]]
+        matches = verifier._one_to_one_matches({
+            "tracks": [
+                {"id": "a", "member": "p01"}, {"id": "b", "member": "p01"},
+                {"id": "c", "member": "p02"},
+            ]
+        })
+        self.assertEqual(
+            {(item["forecast_track_id"], item["era5_track_id"]) for item in matches},
+            {("a", 1), ("b", 2), ("c", 1)},
+        )
+
+    def test_legacy_archive_matches_are_deduplicated_per_member(self) -> None:
+        payload = {
+            "tracks": [
+                {"id": "p01-a", "member": "p01"}, {"id": "p01-b", "member": "p01"},
+                {"id": "p02-a", "member": "p02"},
+            ],
+            "verification": {"matches": [
+                {"forecast_track_id": "p01-a", "era5_track_id": 8, "median_distance_km": 20, "p90_distance_km": 30, "overlap_hours": 24},
+                {"forecast_track_id": "p01-b", "era5_track_id": 8, "median_distance_km": 80, "p90_distance_km": 90, "overlap_hours": 24},
+                {"forecast_track_id": "p02-a", "era5_track_id": 8, "median_distance_km": 25, "p90_distance_km": 35, "overlap_hours": 24},
+            ]},
+        }
+        matches = normalized_matches(payload)
+        self.assertEqual([item["forecast_track_id"] for item in matches], ["p01-a", "p02-a"])
 
     def test_weathernext2_decodes_native_zarr_member_onto_atlas_grid(self) -> None:
         import xarray as xr

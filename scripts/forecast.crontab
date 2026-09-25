@@ -14,3 +14,6 @@ CRON_TZ=UTC
 # request waits on tape staging, then harvest successful results independently.
 12,27,42,57 * * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/flock -n .forecast-runs/tigge-submit.lock /usr/bin/bash scripts/pump_tigge_submissions.sh >> hpc-logs/tigge-submit-cron.log 2>&1
 2,32 * * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/flock -n .forecast-runs/tigge-recovery.lock /usr/bin/bash scripts/pump_tigge_recovery.sh >> hpc-logs/tigge-recovery-cron.log 2>&1
+
+# Rebuild verification only when a forecast/archive publisher changes the client manifest.
+43 * * * * cd /gws/ssde/j25a/ncas_climate/vol1/users/kieran/work/tracking/era5-lps/monsoon-low-atlas && /usr/bin/bash scripts/rebuild_forecast_verification.sh >> hpc-logs/forecast-verification-cron.log 2>&1

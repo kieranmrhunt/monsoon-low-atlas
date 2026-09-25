@@ -11,7 +11,8 @@ let source = fs.readFileSync(path.join(repo, asset), 'utf8');
 source = source.replace('let reanalysisManifestPromise = null;', `
 globalThis.qa = {state, ensembleMeanMinimum, splitPlotPath, systemMeanGeometry,
   systemReferenceTrack, meanTrack, forecastMapPaths, forecastSystemAt,
-  systemMatchScore, selectedForecastGroup, systemItemKey}; return;
+  systemMatchScore, selectedForecastGroup, systemItemKey,
+  payloadVerificationMatches, verificationRows}; return;
 let reanalysisManifestPromise = null;`);
 const root = {querySelector: () => ({})};
 const sandbox = {
@@ -85,6 +86,26 @@ q.state.selectedSystem = {runKey: earlyAgreement.runKey, systemId: earlyAgreemen
 const restoredGroup = q.selectedForecastGroup([{items: [earlyAgreement, laterDivergence]}]);
 assert.equal(restoredGroup.items.length, 2, 'a legacy singleton URL must gain its newly matched model counterpart');
 assert.equal(q.state.selectedGroupKeys.size, 2, 'the upgraded group must be retained in the next shared URL');
+
+const verificationPayload = {tracks: [
+  {id: 'a', member: 'p01'}, {id: 'b', member: 'p01'}, {id: 'c', member: 'p02'}
+], verification: {matches: [
+  {forecast_track_id: 'a', era5_track_id: 7, median_distance_km: 20, p90_distance_km: 30, overlap_hours: 24},
+  {forecast_track_id: 'b', era5_track_id: 7, median_distance_km: 80, p90_distance_km: 90, overlap_hours: 24},
+  {forecast_track_id: 'c', era5_track_id: 7, median_distance_km: 25, p90_distance_km: 35, overlap_hours: 24}
+]}};
+assert.deepEqual(Array.from(q.payloadVerificationMatches(verificationPayload), item => item.forecast_track_id), ['a', 'c'],
+  'legacy verification is one-to-one within a member but independent across members');
+q.state.verificationModels = new Set(['a', 'b']);
+q.state.verificationGeneration = 'all';
+q.state.verificationCommon = true;
+const commonRows = q.verificationRows({position_cases: [
+  {model: 'a', version: 'v1', cycle: '2020010100', era5_track_id: 1, lead: 24, median_error_km: 50},
+  {model: 'b', version: 'v1', cycle: '2020010100', era5_track_id: 1, lead: 24, median_error_km: 60},
+  {model: 'a', version: 'v1', cycle: '2020010200', era5_track_id: 2, lead: 24, median_error_km: 70}
+], lifecycle_cases: []}, 'position');
+assert.equal(commonRows.length, 2);
+assert(commonRows.every(row => row.samples === 1), 'common-case comparison removes model-specific cases');
 
 if (process.argv[2]) {
   const payload = JSON.parse(zlib.gunzipSync(fs.readFileSync(process.argv[2])));

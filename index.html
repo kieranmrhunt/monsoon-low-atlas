@@ -629,6 +629,27 @@
 .mla-forecast-evolution-legend i { display: inline-block; width: 18px; height: 0; border-top: 3px solid var(--run-colour); border-radius: 999px; }
 .mla-forecast-evolution canvas { display: block; width: 100%; height: 340px; cursor: crosshair; touch-action: none; }
 .mla-forecast-evolution .mla-chart-readout { min-height: 1.2em; margin: 5px 0 0; color: var(--mla-muted); font-size: 11px; }
+.mla-forecast-verification { padding: 14px 12px 12px; border-top: 1px solid var(--mla-line); background: var(--mla-card); }
+.mla-forecast-verification[hidden] { display: none; }
+.mla-forecast-verification-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.mla-forecast-verification h3 { margin: 0; font-size: 17px; }
+.mla-forecast-verification-modes { display: flex; flex-wrap: wrap; gap: 5px; }
+.mla-forecast-verification-modes .mla-btn[aria-pressed="true"] { background: var(--mla-indigo-deep); border-color: var(--mla-indigo-deep); color: #fffdf6 !important; }
+.mla-forecast-verification-controls { display: grid; grid-template-columns: minmax(180px, .9fr) minmax(190px, 1fr) auto; gap: 9px; align-items: end; margin-bottom: 10px; }
+.mla-forecast-verification-models { display: flex; flex-wrap: wrap; gap: 5px; grid-column: 1 / -1; }
+.mla-forecast-verification-model { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--mla-line); border-radius: 999px; background: var(--mla-card); cursor: pointer; }
+.mla-forecast-verification-model:has(input:checked) { border-color: var(--model-colour); background: color-mix(in srgb, var(--model-colour) 9%, var(--mla-card)); }
+.mla-forecast-verification-model input { position: absolute; opacity: 0; pointer-events: none; }
+.mla-forecast-verification-model i { width: 9px; height: 9px; border: 2px solid var(--model-colour); border-radius: 50%; }
+.mla-forecast-verification-model input:checked + i { background: var(--model-colour); box-shadow: 0 0 0 2px var(--mla-card) inset; }
+.mla-forecast-verification-model input:focus-visible + i { outline: 2px solid var(--mla-ink); outline-offset: 2px; }
+.mla-forecast-verification-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-bottom: 8px; }
+.mla-forecast-verification-kpi { min-width: 0; padding: 8px 9px; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-well); }
+.mla-forecast-verification-kpi span, .mla-forecast-verification-kpi strong { display: block; }
+.mla-forecast-verification-kpi span { overflow: hidden; color: var(--mla-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mla-forecast-verification-kpi strong { margin-top: 2px; font-size: 18px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.mla-forecast-verification canvas { display: block; width: 100%; height: 320px; cursor: crosshair; touch-action: none; }
+.mla-forecast-verification .mla-chart-readout { min-height: 1.2em; margin: 5px 0 0; color: var(--mla-muted); font-size: 11px; }
 
 @media (max-width: 1180px) {
 	.mla-filter-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -700,6 +721,8 @@
 	.mla-forecast-evolution-head { display: grid; align-items: stretch; }
 	.mla-forecast-evolution-system { width: 100%; }
 	.mla-forecast-evolution canvas { height: 360px; }
+	.mla-forecast-verification-controls { grid-template-columns: 1fr 1fr; }
+	.mla-forecast-verification-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 460px) {
@@ -723,6 +746,10 @@
 	.mla-forecast-calendar-day { min-height: 40px; padding-inline: 2px; }
 	.mla-forecast-options { grid-template-columns: 1fr; }
 	.mla-forecast-map-stack { min-height: 310px; height: 48vh; }
+	.mla-forecast-verification-head { display: grid; align-items: stretch; }
+	.mla-forecast-verification-controls { grid-template-columns: 1fr; }
+	.mla-forecast-verification-models { grid-column: auto; }
+	.mla-forecast-verification canvas { height: 300px; }
 }
 
 @media (pointer: coarse), (max-width: 760px) {
@@ -947,6 +974,7 @@
 					<div class="mla-forecast-map-foot"><span id="mlaForecastMapStatus">Forecast data not loaded.</span><span class="mla-forecast-analysis-key" id="mlaForecastAnalysisKey" aria-label="Analysis-track colours" hidden></span><span class="mla-forecast-key" id="mlaForecastWeatherKey" hidden><span>0</span><i class="mla-forecast-key-ramp" aria-hidden="true"></i><span id="mlaForecastWeatherMaximum"></span></span><div class="mla-forecast-run-key" id="mlaForecastRunKey" aria-label="Forecast track colours" hidden></div></div>
 					<p class="mla-forecast-wn2-terms" id="mlaForecastWeatherNextTerms" hidden>Google Cloud Storage · © 2024-6 Google LLC, whose machine learning models were used to create the experimental data made available under the following licence terms <a href="https://storage.googleapis.com/weathernext-public/terms-of-use.pdf" rel="noopener">https://storage.googleapis.com/weathernext-public/terms-of-use.pdf</a>. This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.</p>
 					<section class="mla-forecast-evolution" id="mlaForecastEvolutionPanel" hidden><div class="mla-forecast-evolution-head"><h3>Storm evolution</h3><label class="mla-field mla-forecast-evolution-system"><span class="mla-label">Storm</span><select class="mla-select" id="mlaForecastEvolutionSystem" aria-label="Forecast-system group"></select></label></div><div class="mla-forecast-evolution-legend" id="mlaForecastEvolutionLegend" aria-label="Model and initialization colours"></div><canvas id="mlaForecastEvolution" role="img" tabindex="0" aria-label="Member and mean vorticity with available member or mean trailing 24-hour precipitation across matched model runs; drag to change valid time"></canvas><p class="mla-chart-readout" id="mlaForecastEvolutionStatus" role="status" aria-live="polite"></p></section>
+					<section class="mla-forecast-verification" id="mlaForecastVerificationPanel" hidden><div class="mla-forecast-verification-head"><h3>Forecast verification</h3><div class="mla-forecast-verification-modes" role="group" aria-label="Verification view"><button class="mla-btn mla-btn-small" id="mlaForecastVerificationSelected" type="button" aria-pressed="false">Selected storm</button><button class="mla-btn mla-btn-small" id="mlaForecastVerificationArchive" type="button" aria-pressed="true">Archive skill</button></div></div><div class="mla-forecast-verification-controls" id="mlaForecastVerificationControls"><label class="mla-field" for="mlaForecastVerificationMetric"><span class="mla-label">Measure</span><select class="mla-select" id="mlaForecastVerificationMetric"><option value="position">Position error by lead</option><option value="track">Lifecycle median position error</option><option value="genesis">Genesis timing error</option><option value="lysis">Lysis timing error</option><option value="category">Peak-category bias</option><option value="pod">Probability of detection</option><option value="far">False-alarm ratio</option><option value="csi">Critical-success index</option></select></label><label class="mla-field" for="mlaForecastVerificationGeneration"><span class="mla-label">Model generation</span><select class="mla-select" id="mlaForecastVerificationGeneration"><option value="latest">Latest available</option><option value="all">Pool all generations</option></select></label><label class="mla-map-toggle" id="mlaForecastVerificationCommonLabel" for="mlaForecastVerificationCommon"><input id="mlaForecastVerificationCommon" type="checkbox"> Common cases only</label><div class="mla-forecast-verification-models" id="mlaForecastVerificationModels" aria-label="Verification models"></div></div><div class="mla-forecast-verification-kpis" id="mlaForecastVerificationKpis"></div><canvas id="mlaForecastVerificationChart" role="img" tabindex="0" aria-label="Forecast archive verification chart"></canvas><p class="mla-chart-readout" id="mlaForecastVerificationStatus" role="status" aria-live="polite">Verification evidence loads with the archive.</p></section>
 				</section>
 				<aside class="mla-card mla-forecast-archive-sidebar" id="mlaForecastArchiveSidebar" hidden><h3 class="mla-sr-only">Forecast model and lead-time selection</h3><div class="mla-forecast-archive-results" id="mlaForecastArchiveResults" aria-live="polite"></div></aside>
 			</div>
@@ -1130,7 +1158,7 @@
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","analysisSeries":"assets/atlas-analysis-series.c5ee5001daff.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","climateChangeBase":"climate-change","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","reanalysisBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-reanalyses-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
 <script src="assets/atlas-app.3681542b6718.js"></script>
-<script src="assets/forecast-app.ce8b3cf934f2.js"></script>
+<script src="assets/forecast-app.a7c1bd59018c.js"></script>
 <script src="assets/climate-change-app.c7f85a2b71a1.js"></script>
 
 </body>

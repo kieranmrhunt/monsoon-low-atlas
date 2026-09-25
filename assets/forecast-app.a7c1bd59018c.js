@@ -48,6 +48,9 @@
 	const storedAnalyses = Array.isArray(storedPreferences.analysisSources)
 		? storedPreferences.analysisSources.filter(value => Object.hasOwn(ANALYSIS_TRACKS, value))
 		: storedPreferences.showEra5 === false ? [] : ['era5'];
+	const storedVerificationModels = Array.isArray(storedPreferences.verificationModels)
+		? storedPreferences.verificationModels.filter(value => typeof value === 'string')
+		: null;
 	const state = {
 		mode: storedPreferences.mode === 'archive' ? 'archive' : 'latest', manifest: null, payload: null, geo: null, boundary: null,
 		selectedModels: new Set(storedModels || []), hasModelPreference: storedModels !== null, latestPayloads: new Map(), modelLoads: new Map(),
@@ -63,7 +66,13 @@
 		mapCenterLat: DEFAULT_MAP.latitude,
 		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0, atlasContextTrack: null,
 		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null,
-		requestedArchiveRuns: null, requestedSystem: null, requestedValidTime: null
+		requestedArchiveRuns: null, requestedSystem: null, requestedValidTime: null,
+		verificationSummary: null, verificationLoad: null,
+		verificationView: storedPreferences.verificationView === 'selected' ? 'selected' : 'archive',
+		verificationMetric: ['position', 'track', 'genesis', 'lysis', 'category', 'pod', 'far', 'csi'].includes(storedPreferences.verificationMetric) ? storedPreferences.verificationMetric : 'position',
+		verificationGeneration: storedPreferences.verificationGeneration === 'all' ? 'all' : 'latest',
+		verificationCommon: Boolean(storedPreferences.verificationCommon),
+		verificationModels: new Set(storedVerificationModels || []), hasVerificationModelPreference: storedVerificationModels !== null
 	};
 	const meanTrackCaches = new WeakMap();
 	const systemTimelineCaches = new WeakMap();
@@ -85,7 +94,12 @@
 				archiveDate: state.archiveDate,
 				archiveHour: state.archiveHour,
 				showMembers: state.showMembers,
-				analysisSources: [...state.analysisSources]
+				analysisSources: [...state.analysisSources],
+				verificationView: state.verificationView,
+				verificationMetric: state.verificationMetric,
+				verificationGeneration: state.verificationGeneration,
+				verificationCommon: state.verificationCommon,
+				verificationModels: [...state.verificationModels]
 			}));
 		} catch (_) {
 			// Browsers with blocked storage still retain the same choices for this page view.
@@ -94,7 +108,8 @@
 
 	const FORECAST_URL_PARAMETERS = Object.freeze([
 		'fmode', 'fdate', 'fhour', 'fquery', 'fruns', 'fanalysis', 'fmodels', 'finit',
-		'fsystem', 'fgroup', 'ffocus', 'fmembers', 'fvalid', 'fweather', 'fweather_run', 'fzoom', 'fcentre'
+		'fsystem', 'fgroup', 'ffocus', 'fmembers', 'fvalid', 'fweather', 'fweather_run', 'fzoom', 'fcentre',
+		'fverify', 'fvmetric', 'fvgeneration', 'fvcommon', 'fvmodels'
 	]);
 
 	function writeForecastUrl() {
@@ -127,6 +142,13 @@
 		if (Math.abs(state.mapZoom - DEFAULT_MAP.zoom) > .01) url.searchParams.set('fzoom', state.mapZoom.toFixed(2));
 		if (Math.abs(state.mapCenterLon - DEFAULT_MAP.longitude) > .01 || Math.abs(state.mapCenterLat - DEFAULT_MAP.latitude) > .01) {
 			url.searchParams.set('fcentre', `${state.mapCenterLon.toFixed(2)},${state.mapCenterLat.toFixed(2)}`);
+		}
+		if (state.mode === 'archive') {
+			url.searchParams.set('fverify', state.verificationView);
+			url.searchParams.set('fvmetric', state.verificationMetric);
+			url.searchParams.set('fvgeneration', state.verificationGeneration);
+			if (state.verificationCommon) url.searchParams.set('fvcommon', '1');
+			if (state.verificationModels.size) url.searchParams.set('fvmodels', [...state.verificationModels].sort().join(','));
 		}
 		history.replaceState(null, '', url);
 	}
@@ -446,6 +468,26 @@
 		return state.archiveManifestLoad;
 	}
 
+	async function ensureArchiveVerification() {
+		if (state.verificationSummary) return state.verificationSummary;
+		if (state.verificationLoad) return state.verificationLoad;
+		state.verificationLoad = fetchGzipJson(
+			`${joinUrl(config.forecastBase, 'verification-summary.json.gz')}?v=${Date.now()}`,
+			'no-store'
+		).then(value => {
+			if (value.schema !== 'mla-forecast-archive-verification-v1') throw new Error('Unsupported forecast-verification evidence');
+			state.verificationSummary = value;
+			const models = Object.keys(value.models || {});
+			if (!state.hasVerificationModelPreference) {
+				const preferred = ['gfs', 'ifs', 'ukmo-global', 'tigge-ecmwf', 'tigge-ncep'];
+				state.verificationModels = new Set(preferred.filter(model => models.includes(model)));
+				if (!state.verificationModels.size) state.verificationModels = new Set(models.slice(0, 5));
+			}
+			return value;
+		}).finally(() => { state.verificationLoad = null; });
+		return state.verificationLoad;
+	}
+
 	function notice(message, tone, retry) {
 		const node = $('#mlaForecastNotice');
 		node.hidden = !message;
@@ -475,6 +517,10 @@
 	function colourChannels(value) {
 		const match = String(value).match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
 		return match ? match.slice(1).map(channel => parseInt(channel, 16)) : [0, 87, 184];
+	}
+
+	function colourWithAlpha(value, alpha) {
+		return `rgba(${colourChannels(value).join(',')},${clamp(Number(alpha), 0, 1)})`;
 	}
 
 	function mixColour(first, second, amount) {
@@ -1843,6 +1889,7 @@
 		state.selectedSystem = {runKey: selected.runKey, systemId: selected.system.id};
 		state.selectedGroupKeys = new Set(group.items.map(systemItemKey));
 		state.isolateSystem = true;
+		if (state.mode === 'archive') state.verificationView = 'selected';
 		state.hoveredSystemKey = '';
 		return true;
 	}
@@ -2565,6 +2612,336 @@
 		requestEvolutionWeather(group);
 	}
 
+	const VERIFICATION_METRICS = Object.freeze({
+		position: {label: 'Median position error', unit: 'km', decimals: 0, lead: true, lower: true},
+		track: {label: 'Lifecycle median position error', unit: 'km', decimals: 0, lower: true},
+		genesis: {label: 'Median absolute genesis-time error', unit: 'h', decimals: 0, lower: true},
+		lysis: {label: 'Median absolute lysis-time error', unit: 'h', decimals: 0, lower: true},
+		category: {label: 'Mean peak-category bias', unit: 'classes', decimals: 2, signed: true},
+		pod: {label: 'Probability of detection', unit: '%', decimals: 0, lead: true},
+		far: {label: 'False-alarm ratio', unit: '%', decimals: 0, lead: true, lower: true},
+		csi: {label: 'Critical-success index', unit: '%', decimals: 0, lead: true}
+	});
+
+	function verificationCanvasContext() {
+		const canvas = $('#mlaForecastVerificationChart');
+		const rectangle = canvas.getBoundingClientRect();
+		const width = Math.max(1, rectangle.width), height = Math.max(1, rectangle.height);
+		const ratio = Math.min(2, window.devicePixelRatio || 1);
+		if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
+			canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
+		}
+		const context = canvas.getContext('2d');
+		context.setTransform(ratio, 0, 0, ratio, 0, 0);
+		context.clearRect(0, 0, width, height);
+		return {canvas, context, width, height};
+	}
+
+	function finiteMedian(values) {
+		const finite = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+		if (!finite.length) return null;
+		const middle = Math.floor(finite.length / 2);
+		return finite.length % 2 ? finite[middle] : (finite[middle - 1] + finite[middle]) / 2;
+	}
+
+	function finiteQuantile(values, probability) {
+		const finite = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+		if (!finite.length) return null;
+		const index = (finite.length - 1) * probability, lower = Math.floor(index), upper = Math.ceil(index);
+		return finite[lower] + (finite[upper] - finite[lower]) * (index - lower);
+	}
+
+	function payloadVerificationMatches(payload) {
+		const tracks = new Map((payload.tracks || []).map(track => [String(track.id), track]));
+		const ranked = [...((payload.verification || {}).matches || [])].sort((a, b) => {
+			const score = item => Number(item.median_distance_km || Infinity) + .2 * Number(item.p90_distance_km || Infinity) - Math.min(Number(item.overlap_hours || 0), 72) * 2;
+			return score(a) - score(b) || String(a.forecast_track_id).localeCompare(String(b.forecast_track_id));
+		});
+		const forecastUsed = new Set(), eraUsed = new Set(), output = [];
+		for (const match of ranked) {
+			const track = tracks.get(String(match.forecast_track_id));
+			if (!track) continue;
+			const member = String(match.member || track.member || 'det');
+			const forecastKey = `${member}:${match.forecast_track_id}`, eraKey = `${member}:${match.era5_track_id}`;
+			if (forecastUsed.has(forecastKey) || eraUsed.has(eraKey)) continue;
+			forecastUsed.add(forecastKey); eraUsed.add(eraKey); output.push({...match, member});
+		}
+		return output;
+	}
+
+	function selectedVerificationSeries(group) {
+		if (!group) return [];
+		const output = [];
+		for (const item of group.items) {
+			const ids = new Set(item.system.track_ids || []);
+			const tracks = new Map((item.payload.tracks || []).filter(track => ids.has(track.id)).map(track => [String(track.id), track]));
+			const eraTracks = new Map((((item.payload.verification || {}).tracks) || []).map(track => [String(track.id), track]));
+			const matches = payloadVerificationMatches(item.payload).filter(match => tracks.has(String(match.forecast_track_id)) && eraTracks.has(String(match.era5_track_id)));
+			const support = new Map();
+			for (const match of matches) {
+				if (!support.has(String(match.era5_track_id))) support.set(String(match.era5_track_id), new Set());
+				support.get(String(match.era5_track_id)).add(match.member);
+			}
+			const dominant = [...support.entries()].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]))[0];
+			if (!dominant) continue;
+			const selected = matches.filter(match => String(match.era5_track_id) === dominant[0]);
+			const byStep = new Map(), lifecycle = [], categories = [];
+			for (const match of selected) {
+				const track = tracks.get(String(match.forecast_track_id)), era = eraTracks.get(String(match.era5_track_id));
+				const forecastClock = new Map((track.points || []).filter(point => point.length < 8 || String(point[7]).toLowerCase() === 'o').map(point => [Number(point[0]), point]));
+				const eraClock = new Map((era.points || []).map(point => [Number(point[0]), point]));
+				const errors = [];
+				for (const [step, point] of forecastClock) {
+					const reference = eraClock.get(step);
+					if (!reference) continue;
+					const error = haversineKm(point[1], point[2], reference[1], reference[2]);
+					errors.push(error);
+					if (!byStep.has(step)) byStep.set(step, []);
+					byStep.get(step).push(error);
+				}
+				if (errors.length) lifecycle.push(finiteMedian(errors));
+				if (track.maximum_provisional_category != null && era.category != null) categories.push(Number(track.maximum_provisional_category) - Number(era.category));
+			}
+			const cycle = new Date(item.payload.cycle_utc).getTime();
+			const points = [...byStep.entries()].sort((a, b) => a[0] - b[0]).map(([step, values]) => ({
+				step, time: cycle + step * HOUR_MS, value: finiteMedian(values), low: finiteQuantile(values, .25), high: finiteQuantile(values, .75), members: values.length
+			}));
+			const expected = Math.max(Number((item.payload.members || {}).expected || 0), Number((item.payload.members || {}).available || 0), Number(item.system.member_count || 0), 1);
+			output.push({
+				item, eraId: Number(dominant[0]), points, matchedMembers: dominant[1].size, expectedMembers: expected,
+				lifecycle: finiteMedian(lifecycle), categoryBias: finiteMedian(categories)
+			});
+		}
+		return output;
+	}
+
+	function setVerificationKpis(values) {
+		$('#mlaForecastVerificationKpis').innerHTML = values.map(item => `<div class="mla-forecast-verification-kpi"><span>${esc(item.label)}</span><strong>${esc(item.value)}</strong></div>`).join('');
+	}
+
+	function setVerificationStatus(value) {
+		const node = $('#mlaForecastVerificationStatus');
+		node.textContent = value;
+		node.dataset.baseStatus = value;
+	}
+
+	function drawVerificationMessage(message) {
+		const {canvas, context, width, height} = verificationCanvasContext();
+		context.font = '13px "effra", Effra, Arial, sans-serif'; context.fillStyle = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63';
+		context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(message, width / 2, height / 2);
+		canvas._verificationPoints = [];
+	}
+
+	function drawSelectedVerification(group) {
+		const records = selectedVerificationSeries(group);
+		if (!records.length) {
+			setVerificationKpis([{label: 'ERA5 matches', value: '0'}, {label: 'Matched members', value: '0'}, {label: 'Current error', value: '—'}, {label: 'Lifecycle median', value: '—'}]);
+			drawVerificationMessage('No one-to-one ERA5 match is available for this selected storm.');
+			setVerificationStatus('Verification is unavailable when the forecast lies outside the ERA5 v5.6 period or does not pass the spatial-overlap gate.');
+			return;
+		}
+		const current = currentValidTime();
+		const currentErrors = records.flatMap(record => record.points.filter(point => Math.abs(point.time - current) <= .6 * HOUR_MS).map(point => point.value));
+		const matched = records.reduce((sum, record) => sum + record.matchedMembers, 0), expected = records.reduce((sum, record) => sum + record.expectedMembers, 0);
+		const lifecycleMedian = finiteMedian(records.map(record => record.lifecycle));
+		setVerificationKpis([
+			{label: 'ERA5 systems', value: String(new Set(records.map(record => record.eraId)).size)},
+			{label: 'Matched members', value: `${matched}/${expected}`},
+			{label: 'Current error', value: currentErrors.length ? `${chartNumber(finiteMedian(currentErrors), 0)} km` : '—'},
+			{label: 'Lifecycle median', value: Number.isFinite(lifecycleMedian) ? `${chartNumber(lifecycleMedian, 0)} km` : '—'}
+		]);
+		const {canvas, context, width, height} = verificationCanvasContext();
+		const left = width < 560 ? 54 : 62, right = 18, top = 42, bottom = 43, plotWidth = Math.max(1, width - left - right), plotHeight = Math.max(1, height - top - bottom);
+		const times = records.flatMap(record => record.points.map(point => point.time));
+		const first = Math.min(...times), last = Math.max(...times), span = Math.max(HOUR_MS, last - first);
+		const values = records.flatMap(record => record.points.map(point => point.high));
+		const maximum = Math.max(50, finiteQuantile(values, .98) || 50) * 1.08;
+		const x = value => left + (value - first) / span * plotWidth, y = value => top + plotHeight * (1 - clamp(value / maximum, 0, 1));
+		const ink = getComputedStyle(root).getPropertyValue('--mla-ink').trim() || '#28211a', muted = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63', line = getComputedStyle(root).getPropertyValue('--mla-line').trim() || '#d8d0c4';
+		context.font = '12px "effra", Effra, Arial, sans-serif'; context.lineWidth = 1; context.strokeStyle = line; context.fillStyle = muted;
+		for (let index = 0; index <= 4; index++) {
+			const value = maximum * index / 4, yy = y(value); context.beginPath(); context.moveTo(left, yy); context.lineTo(width - right, yy); context.stroke();
+			context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(chartNumber(value, 0), left - 7, yy);
+		}
+		const ticks = width < 560 ? 3 : 5;
+		for (let index = 0; index <= ticks; index++) {
+			const time = first + span * index / ticks, xx = x(time), date = new Date(time); context.beginPath(); context.moveTo(xx, top); context.lineTo(xx, top + plotHeight); context.stroke();
+			context.textAlign = 'center'; context.textBaseline = 'top'; context.fillText(new Intl.DateTimeFormat('en-GB', {timeZone: 'UTC', day: '2-digit', month: 'short'}).format(date), xx, top + plotHeight + 7);
+			context.fillText(`${String(date.getUTCHours()).padStart(2, '0')}Z`, xx, top + plotHeight + 21);
+		}
+		const hover = [];
+		records.forEach((record, index) => {
+			const colour = runColour(record.item), points = record.points.filter(point => point.value <= maximum);
+			if (points.length > 1 && points.some(point => point.high > point.low)) {
+				context.beginPath(); points.forEach((point, pointIndex) => pointIndex ? context.lineTo(x(point.time), y(point.high)) : context.moveTo(x(point.time), y(point.high)));
+				for (let pointIndex = points.length - 1; pointIndex >= 0; pointIndex--) context.lineTo(x(points[pointIndex].time), y(points[pointIndex].low));
+				context.closePath(); context.fillStyle = colourWithAlpha(colour, .12); context.fill();
+			}
+			drawEvolutionLine(context, points, point => x(point), point => y(point), colour, [], true, 2.5, 1);
+			for (const point of points) hover.push({x: x(point.time), y: y(point.value), text: `${chartRunLabel(record.item, group)} · ${formatUtc(point.time)} · ${chartNumber(point.value, 0)} km · ${point.members} member${point.members === 1 ? '' : 's'}`});
+			context.fillStyle = colour; context.fillRect(left + index * Math.min(150, plotWidth / records.length), 12, 18, 3);
+			context.fillStyle = ink; context.textAlign = 'left'; context.textBaseline = 'middle'; context.fillText(record.item.model.label, left + 23 + index * Math.min(150, plotWidth / records.length), 14);
+		});
+		if (current >= first && current <= last) { context.save(); context.setLineDash([5, 4]); context.strokeStyle = ink; context.beginPath(); context.moveTo(x(current), top); context.lineTo(x(current), top + plotHeight); context.stroke(); context.restore(); }
+		context.save(); context.translate(15, top + plotHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.fillStyle = ink; context.fillText('Position error (km)', 0, 0); context.restore();
+		canvas._verificationPoints = hover;
+		canvas.setAttribute('aria-label', `Selected-storm ERA5 position error for ${records.length} forecast runs`);
+		const categories = records.map(record => record.categoryBias).filter(Number.isFinite);
+		setVerificationStatus(`One-to-one within each member · ${records.length} run${records.length === 1 ? '' : 's'} · peak-category bias ${categories.length ? (finiteMedian(categories) > 0 ? '+' : '') + chartNumber(finiteMedian(categories), 1) : 'unavailable'}`);
+	}
+
+	function latestVerificationVersions(summary) {
+		const output = new Map();
+		for (const row of [...(summary.position_cases || []), ...(summary.lifecycle_cases || [])]) {
+			const existing = output.get(row.model);
+			if (!existing || String(row.cycle) > existing.cycle) output.set(row.model, {version: row.version, cycle: String(row.cycle)});
+		}
+		return new Map([...output].map(([model, value]) => [model, value.version]));
+	}
+
+	function renderVerificationModels(summary) {
+		const latest = latestVerificationVersions(summary);
+		const available = Object.keys(summary.models || {});
+		for (const model of [...state.verificationModels]) if (!available.includes(model)) state.verificationModels.delete(model);
+		$('#mlaForecastVerificationModels').innerHTML = available.map(model => {
+			const definition = summary.models[model] || {}, colour = modelTrackColour(model, definition.colour), checked = state.verificationModels.has(model);
+			return `<label class="mla-forecast-verification-model" style="--model-colour:${esc(colour)}" title="${esc(latest.get(model) || '')}"><input type="checkbox" value="${esc(model)}" ${checked ? 'checked' : ''}><i aria-hidden="true"></i><span>${esc(definition.label || model)}</span></label>`;
+		}).join('');
+	}
+
+	function verificationRows(summary, metric) {
+		const selected = state.verificationModels;
+		const latest = latestVerificationVersions(summary);
+		const generationFilter = row => selected.has(row.model) && (state.verificationGeneration === 'all' || row.version === latest.get(row.model));
+		if (metric === 'position') {
+			let rows = (summary.position_cases || []).filter(generationFilter);
+			if (state.verificationCommon && selected.size > 1) {
+				const support = new Map();
+				for (const row of rows) {
+					const key = `${row.cycle}:${row.era5_track_id}:${row.lead}`;
+					if (!support.has(key)) support.set(key, new Set());
+					support.get(key).add(row.model);
+				}
+				rows = rows.filter(row => support.get(`${row.cycle}:${row.era5_track_id}:${row.lead}`).size === selected.size);
+			}
+			const grouped = new Map();
+			for (const row of rows) {
+				const key = `${row.model}:${row.lead}`;
+				if (!grouped.has(key)) grouped.set(key, {model: row.model, lead: Number(row.lead), values: [], events: new Set()});
+				grouped.get(key).values.push(Number(row.median_error_km)); grouped.get(key).events.add(Number(row.era5_track_id));
+			}
+			return [...grouped.values()].map(row => ({...row, value: finiteMedian(row.values), low: finiteQuantile(row.values, .25), high: finiteQuantile(row.values, .75), samples: row.values.length, eventCount: row.events.size}));
+		}
+		if (['track', 'genesis', 'lysis', 'category'].includes(metric)) {
+			const field = {track: 'median_position_error_km', genesis: 'genesis_error_hours', lysis: 'lysis_error_hours', category: 'peak_category_error'}[metric];
+			const grouped = new Map();
+			for (const row of (summary.lifecycle_cases || []).filter(generationFilter)) {
+				const raw = Number(row[field]); if (!Number.isFinite(raw)) continue;
+				if (!grouped.has(row.model)) grouped.set(row.model, {model: row.model, values: [], events: new Set()});
+				grouped.get(row.model).values.push(metric === 'genesis' || metric === 'lysis' ? Math.abs(raw) : raw); grouped.get(row.model).events.add(Number(row.era5_track_id));
+			}
+			return [...grouped.values()].map(row => ({...row, value: metric === 'category' ? row.values.reduce((sum, value) => sum + value, 0) / row.values.length : finiteMedian(row.values), low: finiteQuantile(row.values, .25), high: finiteQuantile(row.values, .75), samples: row.values.length, eventCount: row.events.size}));
+		}
+		const field = {pod: 'probability_of_detection', far: 'false_alarm_ratio', csi: 'critical_success_index'}[metric];
+		const grouped = new Map();
+		for (const row of (summary.occurrence_summary || []).filter(generationFilter)) {
+			const key = `${row.model}:${row.lead}`;
+			if (!grouped.has(key)) grouped.set(key, {model: row.model, lead: Number(row.lead), hits: 0, misses: 0, falseAlarms: 0, cycles: 0});
+			const value = grouped.get(key); value.hits += Number(row.hits || 0); value.misses += Number(row.misses || 0); value.falseAlarms += Number(row.false_alarms || 0); value.cycles += Number(row.cycles || 0);
+		}
+		return [...grouped.values()].map(row => {
+			const denominator = metric === 'pod' ? row.hits + row.misses : metric === 'far' ? row.hits + row.falseAlarms : row.hits + row.misses + row.falseAlarms;
+			const numerator = metric === 'far' ? row.falseAlarms : row.hits;
+			return {...row, value: denominator ? 100 * numerator / denominator : null, samples: row.cycles, eventCount: row.hits + row.misses};
+		}).filter(row => Number.isFinite(row.value));
+	}
+
+	function drawAggregateVerification(summary) {
+		renderVerificationModels(summary);
+		const metricKey = state.verificationMetric, metric = VERIFICATION_METRICS[metricKey], rows = verificationRows(summary, metricKey);
+		const common = $('#mlaForecastVerificationCommon'); common.checked = state.verificationCommon; common.disabled = metricKey !== 'position';
+		$('#mlaForecastVerificationCommonLabel').title = metricKey === 'position' ? 'Restrict every selected model to the same initialization, ERA5 event and lead' : 'Common-case filtering applies to lead-specific position errors';
+		if (!rows.length) {
+			setVerificationKpis([{label: 'Models', value: String(state.verificationModels.size)}, {label: 'Cases', value: '0'}, {label: 'ERA5 events', value: '0'}, {label: 'Catalogue through', value: String(summary.catalogue_coverage || []).slice(-10)}]);
+			drawVerificationMessage(state.verificationModels.size ? 'No verification cases satisfy these controls.' : 'Select one or more models.');
+			setVerificationStatus(metric.lead && ['pod', 'far', 'csi'].includes(metricKey) ? summary.sampling.occurrence_policy : 'Track skill is conditional on passing the ERA5 event-match gate.');
+			return;
+		}
+		const models = [...new Set(rows.map(row => row.model))], cases = rows.reduce((sum, row) => sum + Number(row.samples || 0), 0), events = Math.max(...rows.map(row => Number(row.eventCount || 0)));
+		const caseLabel = ['pod', 'far', 'csi'].includes(metricKey) ? 'Forecast cycles' : metric.lead ? 'Lead cases' : 'Storm cases';
+		const headline = metric.lower ? Math.min(...rows.map(row => row.value)) : Math.max(...rows.map(row => row.value));
+		const headlineModel = rows.find(row => row.value === headline).model;
+		setVerificationKpis([
+			{label: 'Models plotted', value: String(models.length)}, {label: caseLabel, value: cases.toLocaleString('en-GB')},
+			{label: 'Largest event sample', value: events.toLocaleString('en-GB')},
+			{label: metric.lower ? 'Lowest plotted value' : 'Highest plotted value', value: `${summary.models[headlineModel] ? summary.models[headlineModel].label : headlineModel} · ${chartNumber(headline, metric.decimals)}${metric.unit === '%' ? '%' : ` ${metric.unit}`}`}
+		]);
+		const {canvas, context, width, height} = verificationCanvasContext();
+		const left = width < 560 ? 55 : 64, right = 20, top = 45, bottom = metric.lead ? 43 : 72, plotWidth = Math.max(1, width - left - right), plotHeight = Math.max(1, height - top - bottom);
+		const ink = getComputedStyle(root).getPropertyValue('--mla-ink').trim() || '#28211a', muted = getComputedStyle(root).getPropertyValue('--mla-muted').trim() || '#716b63', line = getComputedStyle(root).getPropertyValue('--mla-line').trim() || '#d8d0c4';
+		let minimum = metric.signed ? Math.min(0, ...rows.map(row => row.value)) : 0, maximum = metric.unit === '%' ? 100 : Math.max(...rows.map(row => metric.lead ? Number(row.high || row.value) : Math.max(Math.abs(Number(row.low || row.value)), Math.abs(Number(row.high || row.value)))));
+		if (metric.signed) { const magnitude = Math.max(Math.abs(minimum), Math.abs(maximum), .5) * 1.15; minimum = -magnitude; maximum = magnitude; } else maximum = Math.max(metric.unit === '%' ? 100 : 1, maximum * 1.12);
+		const y = value => top + plotHeight * (1 - (Number(value) - minimum) / Math.max(.0001, maximum - minimum));
+		context.font = '12px "effra", Effra, Arial, sans-serif'; context.strokeStyle = line; context.fillStyle = muted;
+		for (let index = 0; index <= 4; index++) {
+			const value = minimum + (maximum - minimum) * index / 4, yy = y(value); context.beginPath(); context.moveTo(left, yy); context.lineTo(width - right, yy); context.stroke();
+			context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(chartNumber(value, metric.decimals), left - 7, yy);
+		}
+		const hover = [];
+		if (metric.lead) {
+			const maxLead = Math.max(...rows.map(row => Number(row.lead))), x = value => left + Number(value) / Math.max(1, maxLead) * plotWidth;
+			const ticks = Math.max(1, Math.min(6, Math.ceil(maxLead / 24)));
+			for (let index = 0; index <= ticks; index++) { const lead = Math.round(maxLead * index / ticks / 6) * 6, xx = x(lead); context.beginPath(); context.moveTo(xx, top); context.lineTo(xx, top + plotHeight); context.stroke(); context.textAlign = 'center'; context.textBaseline = 'top'; context.fillText(`+${lead} h`, xx, top + plotHeight + 8); }
+			models.forEach((model, modelIndex) => {
+				const values = rows.filter(row => row.model === model).sort((a, b) => a.lead - b.lead), colour = modelTrackColour(model, (summary.models[model] || {}).colour);
+				if (metricKey === 'position' && values.length > 1) { context.beginPath(); values.forEach((row, index) => index ? context.lineTo(x(row.lead), y(row.high)) : context.moveTo(x(row.lead), y(row.high))); for (let index = values.length - 1; index >= 0; index--) context.lineTo(x(values[index].lead), y(values[index].low)); context.closePath(); context.fillStyle = colourWithAlpha(colour, .1); context.fill(); }
+				drawEvolutionLine(context, values.map(row => ({time: row.lead, value: row.value})), value => x(value), value => y(value), colour, [], true, 2.4, 1);
+				for (const row of values) hover.push({x: x(row.lead), y: y(row.value), text: `${(summary.models[model] || {}).label || model} · +${row.lead} h · ${chartNumber(row.value, metric.decimals)}${metric.unit === '%' ? '%' : ` ${metric.unit}`} · n=${row.samples}`});
+				context.fillStyle = colour; context.fillRect(left + modelIndex * Math.min(145, plotWidth / models.length), 13, 18, 3); context.fillStyle = ink; context.textAlign = 'left'; context.textBaseline = 'middle'; context.fillText((summary.models[model] || {}).label || model, left + 23 + modelIndex * Math.min(145, plotWidth / models.length), 15);
+			});
+		} else {
+			const slot = plotWidth / rows.length, zero = y(0);
+			rows.sort((a, b) => a.value - b.value).forEach((row, index) => {
+				const centre = left + slot * (index + .5), barWidth = Math.min(52, slot * .62), colour = modelTrackColour(row.model, (summary.models[row.model] || {}).colour), yy = y(row.value);
+				context.fillStyle = colourWithAlpha(colour, .78); context.fillRect(centre - barWidth / 2, Math.min(yy, zero), barWidth, Math.max(2, Math.abs(zero - yy)));
+				context.fillStyle = ink; context.textAlign = 'center'; context.textBaseline = 'top'; context.save(); context.translate(centre, top + plotHeight + 8); context.rotate(-Math.PI / 5); context.fillText((summary.models[row.model] || {}).label || row.model, 0, 0); context.restore();
+				hover.push({x: centre, y: yy, text: `${(summary.models[row.model] || {}).label || row.model} · ${chartNumber(row.value, metric.decimals)} ${metric.unit} · n=${row.samples}`});
+			});
+		}
+		context.save(); context.translate(16, top + plotHeight / 2); context.rotate(-Math.PI / 2); context.textAlign = 'center'; context.fillStyle = ink; context.fillText(`${metric.label}${metric.unit === '%' ? ' (%)' : ` (${metric.unit})`}`, 0, 0); context.restore();
+		canvas._verificationPoints = hover; canvas.setAttribute('aria-label', `${metric.label} for ${models.length} forecast models`);
+		const conditional = [...state.verificationModels].some(model => (summary.sampling.event_conditioned_models || []).includes(model));
+		setVerificationStatus(['pod', 'far', 'csi'].includes(metricKey)
+			? summary.sampling.occurrence_policy
+			: `${state.verificationCommon && metricKey === 'position' ? 'Common model–initialization–event cases · ' : ''}${conditional ? 'event-conditioned collections show conditional track skill · ' : ''}one storm-case vote per model run`);
+	}
+
+	async function drawForecastVerification(systemGroups, renderSerial) {
+		const section = $('#mlaForecastVerificationPanel');
+		section.hidden = state.mode !== 'archive';
+		if (section.hidden) return;
+		const group = selectedForecastGroup(systemGroups);
+		const selectedAvailable = Boolean(group && selectedVerificationSeries(group).length);
+		if (state.verificationView === 'selected' && !selectedAvailable && !state.isolateSystem) state.verificationView = 'archive';
+		$('#mlaForecastVerificationSelected').disabled = !selectedAvailable;
+		$('#mlaForecastVerificationSelected').setAttribute('aria-pressed', String(state.verificationView === 'selected'));
+		$('#mlaForecastVerificationArchive').setAttribute('aria-pressed', String(state.verificationView === 'archive'));
+		$('#mlaForecastVerificationControls').hidden = state.verificationView !== 'archive';
+		if (state.verificationView === 'selected') { drawSelectedVerification(group); return; }
+		if (!state.verificationSummary) {
+			setVerificationKpis([{label: 'Models', value: '—'}, {label: 'Cases', value: '—'}, {label: 'ERA5 events', value: '—'}, {label: 'Catalogue through', value: '—'}]);
+			drawVerificationMessage('Loading archive verification…');
+			setVerificationStatus('Loading archive verification evidence.');
+			ensureArchiveVerification().then(() => scheduleRender()).catch(error => {
+				if (renderSerial !== state.renderSerial) return;
+				drawVerificationMessage('Archive verification is temporarily unavailable.');
+				setVerificationStatus(error.message || String(error));
+			});
+			return;
+		}
+		drawAggregateVerification(state.verificationSummary);
+	}
+
 	async function render() {
 		const serial = ++state.renderSerial;
 		drawBase();
@@ -2576,6 +2953,8 @@
 		const systemGroups = forecastSystemGroups();
 		const analysisCounts = drawTracks(systemGroups);
 		await drawForecastEvolution(systemGroups, serial);
+		if (serial !== state.renderSerial) return;
+		await drawForecastVerification(systemGroups, serial);
 		if (serial !== state.renderSerial) return;
 		updateTimeLabel();
 		const entries = displayEntries();
@@ -2810,6 +3189,39 @@
 
 	$('#mlaForecastModeLatest').addEventListener('click', () => setMode('latest'));
 	$('#mlaForecastModeArchive').addEventListener('click', () => setMode('archive'));
+	$('#mlaForecastVerificationSelected').addEventListener('click', () => {
+		if ($('#mlaForecastVerificationSelected').disabled) return;
+		state.verificationView = 'selected'; persistPreferences(); render();
+	});
+	$('#mlaForecastVerificationArchive').addEventListener('click', () => {
+		state.verificationView = 'archive'; persistPreferences(); render();
+	});
+	$('#mlaForecastVerificationMetric').addEventListener('change', event => {
+		state.verificationMetric = event.target.value; persistPreferences(); render();
+	});
+	$('#mlaForecastVerificationGeneration').addEventListener('change', event => {
+		state.verificationGeneration = event.target.value; persistPreferences(); render();
+	});
+	$('#mlaForecastVerificationCommon').addEventListener('change', event => {
+		state.verificationCommon = event.target.checked; persistPreferences(); render();
+	});
+	$('#mlaForecastVerificationModels').addEventListener('change', event => {
+		const input = event.target.closest('input[type="checkbox"]');
+		if (!input) return;
+		if (input.checked) state.verificationModels.add(input.value); else state.verificationModels.delete(input.value);
+		state.hasVerificationModelPreference = true; persistPreferences(); render();
+	});
+	$('#mlaForecastVerificationChart').addEventListener('pointermove', event => {
+		const canvas = $('#mlaForecastVerificationChart'), points = canvas._verificationPoints || [];
+		if (!points.length) return;
+		const rectangle = canvas.getBoundingClientRect(), x = event.clientX - rectangle.left, y = event.clientY - rectangle.top;
+		const nearest = points.map(point => ({point, distance: Math.hypot(point.x - x, point.y - y)})).sort((a, b) => a.distance - b.distance)[0];
+		if (nearest && nearest.distance <= 28) $('#mlaForecastVerificationStatus').textContent = nearest.point.text;
+		else $('#mlaForecastVerificationStatus').textContent = $('#mlaForecastVerificationStatus').dataset.baseStatus || '';
+	});
+	$('#mlaForecastVerificationChart').addEventListener('pointerleave', () => {
+		const node = $('#mlaForecastVerificationStatus'); node.textContent = node.dataset.baseStatus || '';
+	});
 	$('#mlaForecastArchiveReset').addEventListener('click', resetArchive);
 	$('#mlaForecastRetry').addEventListener('click', () => initialise(true));
 	$('#mlaForecastModelChecks').addEventListener('change', event => {
@@ -2985,6 +3397,14 @@
 			state.mapCenterLon = clamp(centre[0], DOMAIN.west, DOMAIN.east);
 			state.mapCenterLat = clamp(centre[1], DOMAIN.south, DOMAIN.north);
 		}
+		if (['selected', 'archive'].includes(parameters.get('fverify'))) state.verificationView = parameters.get('fverify');
+		if (Object.hasOwn(VERIFICATION_METRICS, parameters.get('fvmetric') || '')) state.verificationMetric = parameters.get('fvmetric');
+		if (['latest', 'all'].includes(parameters.get('fvgeneration'))) state.verificationGeneration = parameters.get('fvgeneration');
+		state.verificationCommon = parameters.get('fvcommon') === '1';
+		if (parameters.has('fvmodels')) {
+			state.verificationModels = new Set((parameters.get('fvmodels') || '').split(',').filter(Boolean));
+			state.hasVerificationModelPreference = true;
+		}
 		$('#mlaForecastArchiveSearch').value = parameters.get('fquery') || '';
 	}
 	const requestedArchiveDate = parameters.get('fdate');
@@ -2993,6 +3413,9 @@
 		state.archiveMonth = requestedArchiveDate.slice(0, 7);
 	}
 	if (['00', '06', '12', '18'].includes(parameters.get('fhour'))) state.archiveHour = parameters.get('fhour');
+	$('#mlaForecastVerificationMetric').value = state.verificationMetric;
+	$('#mlaForecastVerificationGeneration').value = state.verificationGeneration;
+	$('#mlaForecastVerificationCommon').checked = state.verificationCommon;
 	syncModeControls();
 	persistPreferences();
 })();
