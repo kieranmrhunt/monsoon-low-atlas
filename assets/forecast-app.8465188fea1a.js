@@ -12,16 +12,16 @@
 	const DEFAULT_ARCHIVE_DATE = '2016-07-01';
 	const PREFERENCES_KEY = 'monsoon-low-atlas.forecast.v2';
 	const MODEL_TRACK_COLOURS = {
-		gfs: '#d7191c', gefs: '#f07c00', ifs: '#2166ac', 'ifs-ens': '#00a6ca',
-		aigfs: '#7b2cbf', aigefs: '#d45087',
-		weathernext2: '#0066ff',
-		'graphcast-noaa': '#1b9e77', 'graphcast-ifs-noaa': '#00796b',
-		aifs: '#5e3c99', 'aifs-ens': '#b358c8', 'ukmo-global': '#8c510a', 'mogreps-g': '#4d4d4d',
-		'gefs-control': '#e66101', 'tigge-ecmwf': '#4575b4',
-		'tigge-bom': '#b8860b', 'tigge-cma': '#00a8a8', 'tigge-cptec': '#a65628',
-		'tigge-dwd': '#4daf4a', 'tigge-eccc': '#6a3d9a', 'tigge-imd': '#e7298a',
-		'tigge-jma': '#984ea3', 'tigge-kma': '#238b45', 'tigge-mf': '#9a8700',
-		'tigge-ncep': '#e41a1c', 'tigge-ncmrwf': '#ff7f00', 'tigge-ukmo': '#795548'
+		gfs: '#d43b20', gefs: '#ff1e78', ifs: '#0057b8', 'ifs-ens': '#a55a69',
+		aigfs: '#699600', aigefs: '#6969a5',
+		weathernext2: '#00694b',
+		'graphcast-noaa': '#008d9e', 'graphcast-ifs-noaa': '#754319',
+		aifs: '#d200ff', 'aifs-ens': '#782d78', 'ukmo-global': '#58636d', 'mogreps-g': '#961e00',
+		'gefs-control': '#a578c3', 'tigge-ecmwf': '#008b45',
+		'tigge-bom': '#0087d2', 'tigge-cma': '#c3784b', 'tigge-cptec': '#6978ff',
+		'tigge-dwd': '#c369a5', 'tigge-eccc': '#ff0fc3', 'tigge-imd': '#c21d9b',
+		'tigge-jma': '#964bff', 'tigge-kma': '#005a78', 'tigge-mf': '#4b5a00',
+		'tigge-ncep': '#7133bd', 'tigge-ncmrwf': '#a77900', 'tigge-ukmo': '#960f3c'
 	};
 	const ANALYSIS_TRACKS = Object.freeze({
 		era5: {label: 'ERA5', colour: '#000000', detail: 'all active systems'},
@@ -531,8 +531,11 @@
 	function modelLeadColour(id, fallback, lead, maximumLead) {
 		const base = modelTrackColour(id, fallback);
 		const fraction = maximumLead > 0 ? clamp(Number(lead) / Number(maximumLead), 0, 1) : 0;
-		// Model is encoded by hue; increasing lead is encoded by a restrained lightness ramp.
-		return mixColour(base, '#ffffff', .06 + .38 * fraction);
+		// Keep model hues recognisable at long leads; use dark-to-light shades
+		// without washing every model out towards the same pale background.
+		return fraction <= .5
+			? mixColour(base, '#000000', .18 * (1 - 2 * fraction))
+			: mixColour(base, '#ffffff', .24 * (2 * fraction - 1));
 	}
 
 	function setShowMembers(value) {
