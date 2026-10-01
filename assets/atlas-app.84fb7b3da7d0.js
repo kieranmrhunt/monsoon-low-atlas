@@ -4050,6 +4050,63 @@
 		context.textBaseline = 'alphabetic';
 	}
 
+	function drawSvgHeatmap(id, rows, columns, matrix, options) {
+		const svg = document.getElementById(id);
+		if (!svg || !svg.getClientRects().length || !svg.clientWidth || !svg.clientHeight) return;
+		const width = svg.clientWidth;
+		const height = svg.clientHeight;
+		svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+		svg.replaceChildren();
+		const node = (name, attributes, text) => {
+			const element = document.createElementNS('http://www.w3.org/2000/svg', name);
+			for (const [key, value] of Object.entries(attributes || {})) element.setAttribute(key, String(value));
+			if (text != null) element.textContent = text;
+			return element;
+		};
+		// Keep cells and labels vector-native, including when zooming or printing.
+		const cells = node('g', {'font-family': CANVAS_FONT, 'font-size': 11});
+		const labels = node('g', {'font-family': CANVAS_FONT, 'font-size': 11, fill: css('--mla-muted', '#685c4d')});
+		svg.append(cells, labels);
+		const rowLabels = rows.map(label => node('text', {'text-anchor': 'end', 'dominant-baseline': 'central'}, label));
+		const columnLabels = columns.map(label => node('text', {'text-anchor': 'middle'}, label));
+		labels.append(...rowLabels, ...columnLabels);
+		const rowLabelWidth = Math.max(0, ...rowLabels.map(label => label.getComputedTextLength()));
+		const left = Math.max(options && options.left || 72, Math.ceil(rowLabelWidth) + 14);
+		const provisionalCellWidth = (width - left - 14) / columns.length;
+		const rotateColumns = columnLabels.some(label => label.getComputedTextLength() > provisionalCellWidth - 7);
+		const padding = {left, right: 14, top: 20, bottom: rotateColumns ? 88 : 40};
+		const cellWidth = (width - padding.left - padding.right) / columns.length;
+		const cellHeight = (height - padding.top - padding.bottom) / rows.length;
+		const maximum = Math.max(1, ...matrix.flat().filter(Number.isFinite));
+		rows.forEach((label, row) => {
+			rowLabels[row].setAttribute('x', padding.left - 7);
+			rowLabels[row].setAttribute('y', padding.top + (row + .5) * cellHeight);
+			columns.forEach((columnLabel, column) => {
+				const value = matrix[row][column];
+				const x = padding.left + column * cellWidth;
+				const y = padding.top + row * cellHeight;
+				const cell = node('g', {'data-row': row, 'data-column': column, 'data-value': value});
+				cell.append(node('title', {}, `${label} · ${columnLabel}: ${fmt(value, options && options.decimals || 0)} systems/year`));
+				cell.append(node('rect', {x, y, width: Math.max(1, cellWidth - 1), height: Math.max(1, cellHeight - 1), fill: Number.isFinite(value) && value > 0 ? ramp(value / maximum) : 'rgba(90, 75, 55, .08)'}));
+				if (cellWidth > 34 && cellHeight > 22 && Number.isFinite(value) && value > 0) {
+					cell.append(node('text', {x: x + 4, y: y + cellHeight * .64, fill: value / maximum > .58 ? '#fffaf0' : '#282119'}, fmt(value, options && options.decimals || 0)));
+				}
+				cells.append(cell);
+			});
+		});
+		columnLabels.forEach((label, column) => {
+			const centre = padding.left + (column + .5) * cellWidth;
+			if (rotateColumns) {
+				label.setAttribute('transform', `translate(${centre} ${height - padding.bottom + 10}) rotate(-45)`);
+				label.setAttribute('text-anchor', 'end');
+				label.setAttribute('dominant-baseline', 'central');
+			} else {
+				label.setAttribute('x', centre);
+				label.setAttribute('y', height - 15);
+			}
+		});
+	}
+
 	function fixedProjection(width, height, bounds) {
 		const padding = 30;
 		const scale = Math.min((width - padding * 2) / (bounds.lonMax - bounds.lonMin), (height - padding * 2) / (bounds.latMax - bounds.latMin));
@@ -4252,7 +4309,7 @@
 			if (decadeIndex >= 0) classMatrix[decadeIndex][row[T.category] - 1]++;
 		}
 		classMatrix.forEach((row, index) => row.forEach((value, column) => { row[column] = value / exposure[index]; }));
-		drawHeatmap('mlaClassChart', decades.map((value, index) => `${String(value).slice(2)}s (${exposure[index]}y)`), ['L', 'D', 'DD', 'CS', 'SCS', 'VS+'], classMatrix, {left: 78, decimals: 1});
+		drawSvgHeatmap('mlaClassChart', decades.map((value, index) => `${String(value).slice(2)}s (${exposure[index]}y)`), ['L', 'D', 'DD', 'CS', 'SCS', 'VS+'], classMatrix, {left: 78, decimals: 1});
 		$('#mlaClassData').innerHTML = accessibleTable(['Decade', 'L/y', 'D/y', 'DD/y', 'CS/y', 'SCS/y', 'VS+/y'], decades.map((value, index) => [value, ...classMatrix[index].map(number => fmt(number, 2))]));
 
 		const flowCounts = Array.from({length: ENDPOINT_FLOW_LABELS.length}, () => Array(ENDPOINT_FLOW_LABELS.length).fill(0));
