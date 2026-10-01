@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-09-09T10:36:20Z",
+  "generated_utc": "2026-09-29T09:14:44Z",
   "gwl_comparisons": 2,
   "gwl_impact_models_by_level": {
     "1.5": 5,
@@ -12,27 +12,28 @@
   },
   "highresmip_models": 3,
   "highresmip_schema": "lps-atlas-cmip6-climate-index-v1",
-  "impact_models": 5,
-  "impact_pairs": 7,
+  "impact_models": 6,
+  "impact_pairs": 8,
   "impact_schema": "lps-atlas-cmip6-precipitation-impact-ensemble-v1",
   "included_pair_ids": [
     "8b9d1b05fc4d3d66",
     "cd2cf54dc5ded1df",
     "3aaf90618e6e5382",
     "c14b32487da8587e",
-    "202d09fe9eb81efb"
+    "202d09fe9eb81efb",
+    "a0a865a81a14c5cd"
   ],
   "index": {
-    "bytes": 55687,
-    "path": "climate-index.74afd429765f.json.gz",
-    "sha256": "c74197b87b756a7ecb5fdf26ecd23240d1647df10acd4ed32383e6baabd393c1"
+    "bytes": 59194,
+    "path": "climate-index.5e034f07826f.json.gz",
+    "sha256": "7d1575860e8194735e33ca7516b99cf8a1c13928d8e57d06b959c59f39702ecb"
   },
-  "models": 5,
-  "pairs": 24,
+  "models": 6,
+  "pairs": 25,
   "resolution_controls": 1,
   "review_sha256": null,
   "schema": "lps-atlas-cmip6-climate-index-v1",
   "status": "multi-model-awaiting-review",
-  "warming_pairs": 7,
+  "warming_pairs": 8,
   "warming_schema": "lps-atlas-cmip6-global-warming-v1"
 }

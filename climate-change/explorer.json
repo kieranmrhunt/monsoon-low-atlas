@@ -1,0 +1,192 @@
+{
+  "climate_index_sha256": "7d1575860e8194735e33ca7516b99cf8a1c13928d8e57d06b959c59f39702ecb",
+  "coordinate_precision_degrees": 0.001,
+  "runs": {
+    "assets/climate-gwl-future.01d7e619435d.json.gz": {
+      "bytes": 247254,
+      "sha256": "ac881b1d21eac8d07a0c8b004d686d0107d0fd846164c515c4fdf0f81b61f374",
+      "url": "assets/climate-events.150f80901d02.json.gz"
+    },
+    "assets/climate-gwl-future.20b56f6bb80c.json.gz": {
+      "bytes": 243614,
+      "sha256": "78f9ad711bb187e688ef55d3dffcc90a7d926ec9bd8b3160a2629150553ea370",
+      "url": "assets/climate-events.b6f4cd9a585a.json.gz"
+    },
+    "assets/climate-gwl-future.23b9d0bf6dfb.json.gz": {
+      "bytes": 306820,
+      "sha256": "0af95cdb7de908ca84320e8bd72fdaa59e89cfe3cc5dd364367bf0a904ee505f",
+      "url": "assets/climate-events.520c7e1e8ecc.json.gz"
+    },
+    "assets/climate-gwl-future.2dc7a0b5ca87.json.gz": {
+      "bytes": 217401,
+      "sha256": "02099ec6d89740953141669b662ea0a286ac02d09ca7ecc8778a3671d52262fd",
+      "url": "assets/climate-events.3796239df9ab.json.gz"
+    },
+    "assets/climate-gwl-future.728edb3b4825.json.gz": {
+      "bytes": 665256,
+      "sha256": "1d504a73abe1bb6bea7f70a6bb6739190a4646d002c79daefb715af03341e933",
+      "url": "assets/climate-events.4746132c0122.json.gz"
+    },
+    "assets/climate-gwl-future.a6faab636e26.json.gz": {
+      "bytes": 184509,
+      "sha256": "d420eb9994f5a5b953741ccf1f0fb228285fc2d8f9d53fe36c22bc6636d94520",
+      "url": "assets/climate-events.2d2d96a1420e.json.gz"
+    },
+    "assets/climate-gwl-future.aa8abe838cdb.json.gz": {
+      "bytes": 269734,
+      "sha256": "034efd0443fb9bd335bad93d96177e90591ce89705e7f20caf710c0f4d50940a",
+      "url": "assets/climate-events.648803220f5d.json.gz"
+    },
+    "assets/climate-gwl-future.adb0c31c2585.json.gz": {
+      "bytes": 694155,
+      "sha256": "d3670cfcadc8191d11df8c5f7431c7b2b2b9932d49c4741f47cc7bd4b2abaca2",
+      "url": "assets/climate-events.740775f03345.json.gz"
+    },
+    "assets/climate-gwl-future.e61c35e92185.json.gz": {
+      "bytes": 312919,
+      "sha256": "f60c568fc26cb6dab2c4af3c7f7ea1771ed2a5f1543d9a777943450d439e1d6d",
+      "url": "assets/climate-events.79a9a8708995.json.gz"
+    },
+    "assets/climate-gwl-future.f4021dd55a6e.json.gz": {
+      "bytes": 210964,
+      "sha256": "3c8a3e5e47f25757ee1d0042089fd6fad146cf8c096049a0e3563b349bbb60df",
+      "url": "assets/climate-events.5707bda8edf2.json.gz"
+    },
+    "assets/climate-gwl-historical.02cb85a533e7.json.gz": {
+      "bytes": 414711,
+      "sha256": "99a056186b6ef242b91c2f163ecf437c00d272d1be5f1a7d9960d5608439ecd1",
+      "url": "assets/climate-events.127ddc7b4613.json.gz"
+    },
+    "assets/climate-gwl-historical.28fec4b5e1a6.json.gz": {
+      "bytes": 541082,
+      "sha256": "b66b0cd63ccb498a73e3de04d173911e85bf4551eafe7d48dbe5bf734b756f1f",
+      "url": "assets/climate-events.672130f2766b.json.gz"
+    },
+    "assets/climate-gwl-historical.545d3a1aabac.json.gz": {
+      "bytes": 366416,
+      "sha256": "bc96af030d86e52457b396c1ffcdda22f956f13c30741d333860f4d9005471d4",
+      "url": "assets/climate-events.b0040761d04f.json.gz"
+    },
+    "assets/climate-gwl-historical.72da65d91ab7.json.gz": {
+      "bytes": 354044,
+      "sha256": "00e2a6e5e0fb206a59f0b77c600a21ae3b797fe6fcbcb697a0704265f13b4b7f",
+      "url": "assets/climate-events.3f5686b4e7c9.json.gz"
+    },
+    "assets/climate-gwl-historical.999607d52d3b.json.gz": {
+      "bytes": 1004862,
+      "sha256": "137708a62486cc97897352b588bb5a606a2c079e29baf4b26552924f6285d3db",
+      "url": "assets/climate-events.e9f43565b34d.json.gz"
+    },
+    "assets/climate-run.02cb85a533e7.json.gz": {
+      "bytes": 414711,
+      "sha256": "99a056186b6ef242b91c2f163ecf437c00d272d1be5f1a7d9960d5608439ecd1",
+      "url": "assets/climate-events.127ddc7b4613.json.gz"
+    },
+    "assets/climate-run.10c7aed024a4.json.gz": {
+      "bytes": 385524,
+      "sha256": "81ed12031f0d61c9e9605a0280fcb8bb363e4094339af881e6f5380c6c7ff370",
+      "url": "assets/climate-events.3341755902ee.json.gz"
+    },
+    "assets/climate-run.1787a6ab8b86.json.gz": {
+      "bytes": 993026,
+      "sha256": "8fed0ad39d8cd28b6dbef15491fed39e5c23bc74ccf80ba781eac88b1fbf2841",
+      "url": "assets/climate-events.edd4416bb302.json.gz"
+    },
+    "assets/climate-run.2713fb89ae49.json.gz": {
+      "bytes": 765880,
+      "sha256": "6c5036fc772048091cdc5437af45a72b7cdf58c946fd07c31c4cc001c229e6f0",
+      "url": "assets/climate-events.18823c022366.json.gz"
+    },
+    "assets/climate-run.28fec4b5e1a6.json.gz": {
+      "bytes": 541082,
+      "sha256": "b66b0cd63ccb498a73e3de04d173911e85bf4551eafe7d48dbe5bf734b756f1f",
+      "url": "assets/climate-events.672130f2766b.json.gz"
+    },
+    "assets/climate-run.426a6d88814a.json.gz": {
+      "bytes": 475493,
+      "sha256": "f4a190d192cca4826ee63feac45f48f5d24c52d2d8bd48583c7abcdaa1ee1436",
+      "url": "assets/climate-events.efbbee5f610a.json.gz"
+    },
+    "assets/climate-run.4410a1a4ef64.json.gz": {
+      "bytes": 796181,
+      "sha256": "ebf833f7c58b03ead4fe76f66fa520512ec8436728d9d9c562ebc134db9f3da4",
+      "url": "assets/climate-events.80933d1341f7.json.gz"
+    },
+    "assets/climate-run.545d3a1aabac.json.gz": {
+      "bytes": 366416,
+      "sha256": "bc96af030d86e52457b396c1ffcdda22f956f13c30741d333860f4d9005471d4",
+      "url": "assets/climate-events.b0040761d04f.json.gz"
+    },
+    "assets/climate-run.704bc47071e5.json.gz": {
+      "bytes": 360748,
+      "sha256": "c5213671ca7175118ed69d115cd0496661b9085ec00ae49fd6f2f08b12e8521f",
+      "url": "assets/climate-events.55edaec88fa6.json.gz"
+    },
+    "assets/climate-run.72da65d91ab7.json.gz": {
+      "bytes": 354044,
+      "sha256": "00e2a6e5e0fb206a59f0b77c600a21ae3b797fe6fcbcb697a0704265f13b4b7f",
+      "url": "assets/climate-events.3f5686b4e7c9.json.gz"
+    },
+    "assets/climate-run.75508d1cef6c.json.gz": {
+      "bytes": 859110,
+      "sha256": "97e6a3ea04e595380a0b10ec600f44ab7da2d67921dcd7850db9b9a935594765",
+      "url": "assets/climate-events.a9879d13ff84.json.gz"
+    },
+    "assets/climate-run.9489d55f687f.json.gz": {
+      "bytes": 392960,
+      "sha256": "8a57461d91d4994fa8fa70cc0f6b5356c9175282cd0a679b128922c0d034bcb1",
+      "url": "assets/climate-events.423c0b1b2568.json.gz"
+    },
+    "assets/climate-run.999607d52d3b.json.gz": {
+      "bytes": 1004862,
+      "sha256": "137708a62486cc97897352b588bb5a606a2c079e29baf4b26552924f6285d3db",
+      "url": "assets/climate-events.e9f43565b34d.json.gz"
+    },
+    "assets/climate-run.99c4e8f6d399.json.gz": {
+      "bytes": 740119,
+      "sha256": "733f2494bf764be481bcb2b56a61e43575b689d4920fa059cc0723abf72ecc8d",
+      "url": "assets/climate-events.8bfbd31d9ac4.json.gz"
+    },
+    "assets/climate-run.9fc1a8cbcae4.json.gz": {
+      "bytes": 491210,
+      "sha256": "e448a85a4834d1ae7fa2b84929a49fd3a61d797721ac8b12f84e8f71179a449b",
+      "url": "assets/climate-events.8f4744d369a6.json.gz"
+    },
+    "assets/climate-run.a53220d33db9.json.gz": {
+      "bytes": 740121,
+      "sha256": "e657a26e92edec00944f216f825675cb68313872d03bb0328edb0aa1ddfc06da",
+      "url": "assets/climate-events.fade4eecac4b.json.gz"
+    },
+    "assets/climate-run.a66965a49922.json.gz": {
+      "bytes": 585073,
+      "sha256": "03a4af51efc6d420740a80465f2caadc0ebf6045b23674d2d9fcc232059fdcaf",
+      "url": "assets/climate-events.baf1862ba763.json.gz"
+    },
+    "assets/climate-run.b5c9678c7439.json.gz": {
+      "bytes": 643954,
+      "sha256": "9b2442bad3cba08a4e0c5e28a005dae5604070f808ef9e700042daaa36bc6541",
+      "url": "assets/climate-events.02ab94d46b15.json.gz"
+    },
+    "assets/climate-run.c9cba670c015.json.gz": {
+      "bytes": 651494,
+      "sha256": "0b575138e258c6e0e98870978d8bfffc52e9161eadb46775b444d80273f78039",
+      "url": "assets/climate-events.c6b92e87cbf8.json.gz"
+    },
+    "assets/climate-run.dd4e2b046809.json.gz": {
+      "bytes": 905661,
+      "sha256": "dbdb73761e29bd388acd475add0951aaed1d346a2fe87ba3707b0ba5ab4ba098",
+      "url": "assets/climate-events.c7d46e5137ef.json.gz"
+    },
+    "assets/climate-run.e535349ee9e2.json.gz": {
+      "bytes": 666016,
+      "sha256": "0b14ffe26427715e37f40123c0a6a3b63eeea5af03eed6aa131c83918f0367d8",
+      "url": "assets/climate-events.6b300c482fe1.json.gz"
+    },
+    "assets/climate-run.f6e685b130a2.json.gz": {
+      "bytes": 342746,
+      "sha256": "c8131e9d3eca34488a96c26c394d5b83f87c6079d312d023e9b27f188b60501a",
+      "url": "assets/climate-events.67e60fceafa4.json.gz"
+    }
+  },
+  "schema": "lps-climate-explorer-index-v1"
+}

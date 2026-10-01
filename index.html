@@ -435,12 +435,25 @@
 .mla-climate-controls { position: sticky; top: 8px; z-index: 18; display: grid; grid-template-columns: minmax(150px, .65fr) minmax(190px, 1fr) minmax(210px, 1.15fr) minmax(130px, .55fr) minmax(240px, 1.2fr); gap: 10px; align-items: end; padding: 12px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(24, 31, 54, .08); }
 .mla-climate-control-meta { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 8px 14px; flex-wrap: wrap; padding-top: 2px; }
 .mla-climate-control-summary { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.mla-climate-controls { top: 62px; }
 .mla-climate-metric-note { color: var(--mla-muted); font-size: 12px; }
 .mla-climate-metric-search::placeholder { color: var(--mla-faint); }
 .mla-climate-control-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-climate-view-nav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 2px 1px 10px; margin-bottom: 4px; }
+.mla-climate-explore { margin-bottom: 10px; padding: 10px 14px; }
+.mla-climate-explore summary { cursor: pointer; }
+.mla-climate-explore-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: 10px; margin-top: 12px; }
+.mla-climate-models { display: flex; gap: 8px 16px; flex-wrap: wrap; padding: 12px 0; }
+.mla-climate-models label { display: flex; gap: 5px; align-items: center; }
+.mla-climate-models label::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--model-colour); }
+.mla-climate-box { display: grid; grid-template-columns: repeat(4,minmax(50px,1fr)); gap: 6px; }
+.mla-climate-box input { width: 100%; min-width: 0; }
+.mla-climate-explore-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.mla-climate-map-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.mla-climate-selection-note { font-size: 12px; color: var(--mla-muted); margin: 8px 0; }
+@media (max-width: 700px) { .mla-climate-stats { grid-template-columns: repeat(2,minmax(0,1fr)); } .mla-climate-stats strong { font-size: 20px; } }
 .mla-climate-view-button { flex: 0 0 auto; border: 1px solid var(--mla-line); border-radius: 999px; background: var(--mla-card); color: var(--mla-muted); padding: 7px 13px; font: 600 12px/1 var(--mla-font); cursor: pointer; }
-.mla-climate-view-button[aria-selected="true"] { border-color: var(--mla-indigo); background: var(--mla-indigo); color: #fff; }
+#monsoon-low-atlas .mla-climate-view-button[aria-selected="true"] { border-color: var(--mla-indigo); background: var(--mla-indigo); color: #fff; }
 .mla-climate-view[hidden] { display: none !important; }
 .mla-climate-view-notice { margin: 0 0 12px; padding: 11px 13px; border: 1px dashed var(--mla-line); border-radius: 10px; color: var(--mla-muted); background: color-mix(in srgb, var(--mla-card) 88%, var(--mla-sea)); font-size: 13px; }
 .mla-climate-card-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
@@ -455,7 +468,7 @@
 .mla-climate-map-grid.mla-climate-density-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .mla-climate-map-panel { min-width: 0; }
 .mla-climate-map-panel h4 { margin: 0 0 6px; font-size: 14px; font-weight: 500; text-align: center; }
-.mla-climate-map { display: block; width: 100%; height: auto; aspect-ratio: 1.24 / 1; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-sea); }
+.mla-climate-map { display: block; width: 100%; height: auto; aspect-ratio: 1.24 / 1; border: 1px solid var(--mla-line); border-radius: 9px; background: var(--mla-sea); touch-action: none; }
 .mla-climate-footprint-map { aspect-ratio: 1 / 1; background: #fff; }
 .mla-climate-diagnostic { height: 320px; }
 .mla-climate-diagnostic-data table { width: 100%; border-collapse: collapse; }
@@ -1077,9 +1090,23 @@
 				<label class="mla-field" for="mlaClimateMetricSearch" id="mlaClimateMetricField"><span class="mla-label">Measure</span><input class="mla-control mla-climate-metric-search" id="mlaClimateMetricSearch" type="search" list="mlaClimateMetricOptions" autocomplete="off" placeholder="Search measures"></label><datalist id="mlaClimateMetricOptions"></datalist><select id="mlaClimateMetric" hidden aria-hidden="true" tabindex="-1"></select>
 				<div class="mla-climate-control-meta"><div class="mla-climate-control-summary"><span class="mla-badge" data-tone="review" id="mlaClimateScope">Research preview</span><span class="mla-climate-metric-note" id="mlaClimateMetricNote"></span></div><div class="mla-climate-control-actions"><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateCopyLink" type="button">Copy link</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateDownloadCsv" type="button">Download CSV</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateSavePng" type="button">Save figure</button></div></div>
 			</section>
+			<details class="mla-card mla-climate-explore" id="mlaClimateExploreControls"><summary>Models &amp; track subset <span id="mlaClimateSubsetSummary"></span></summary>
+				<div id="mlaClimateModels" class="mla-climate-models" role="group" aria-label="Models included in comparisons"></div>
+				<div class="mla-climate-explore-grid">
+					<label class="mla-field"><span class="mla-label">Region</span><select class="mla-select" id="mlaClimateRegion"><option value="all">Whole domain</option><option value="box">Draw / enter a box</option></select></label>
+					<label class="mla-field"><span class="mla-label">Track location</span><select class="mla-select" id="mlaClimateLocation"><option value="passage">Passes through region</option><option value="genesis">Genesis in region</option><option value="lysis">Lysis in region</option></select></label>
+					<label class="mla-field"><span class="mla-label">Genesis month</span><select class="mla-select" id="mlaClimateMonth"><option value="0">Use selected season</option></select></label>
+					<label class="mla-field"><span class="mla-label">Peak intensity</span><select class="mla-select" id="mlaClimateCategory"><option value="1">All LPSs</option><option value="2">Depressions and stronger</option><option value="3">Deep depressions and stronger</option><option value="4">Cyclonic storms and stronger</option></select></label>
+				</div>
+				<div id="mlaClimateBoxFields" class="mla-climate-box" hidden><label>West<input class="mla-control" id="mlaClimateBoxWest" type="number" step="0.1" value="70"></label><label>South<input class="mla-control" id="mlaClimateBoxSouth" type="number" step="0.1" value="10"></label><label>East<input class="mla-control" id="mlaClimateBoxEast" type="number" step="0.1" value="90"></label><label>North<input class="mla-control" id="mlaClimateBoxNorth" type="number" step="0.1" value="30"></label></div>
+				<p id="mlaClimateSubsetStatus" class="mla-climate-selection-note" role="status"></p>
+				<div class="mla-climate-explore-actions"><button class="mla-btn mla-btn-small" id="mlaClimateApplySubset" type="button">Apply subset</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateResetSubset" type="button">Reset subset</button></div>
+			</details>
+			<div class="mla-climate-selection-note" id="mlaClimateFocusStatus" hidden></div>
 			<nav class="mla-climate-view-nav" aria-label="Climate change views">
 				<button class="mla-climate-view-button" type="button" data-climate-view-button="overview" aria-selected="true">Overview</button>
 				<button class="mla-climate-view-button" type="button" data-climate-view-button="tracks" aria-selected="false">Tracks &amp; pathways</button>
+				<button class="mla-climate-view-button" type="button" data-climate-view-button="relationships" aria-selected="false">Relationships</button>
 				<button class="mla-climate-view-button" type="button" data-climate-view-button="rainfall" aria-selected="false">Rainfall &amp; impacts</button>
 				<button class="mla-climate-view-button" type="button" data-climate-view-button="structure" aria-selected="false">Storm structure</button>
 				<button class="mla-climate-view-button" type="button" data-climate-view-button="evaluation" aria-selected="false">Evaluation &amp; availability</button>
@@ -1088,6 +1115,7 @@
 			<div id="mlaClimateContent" hidden>
 				<div class="mla-stat-grid mla-climate-stats" id="mlaClimateStats"></div>
 				<div class="mla-chart-grid">
+					<section class="mla-card mla-chart-card mla-chart-wide" id="mlaClimateScatterCard"><h3>Compare physical measures</h3><div class="mla-climate-explore-grid"><label class="mla-field"><span class="mla-label">Horizontal axis</span><select class="mla-select" id="mlaClimateScatterX"></select></label><label class="mla-field"><span class="mla-label">Vertical axis</span><select class="mla-select" id="mlaClimateScatterY"></select></label><label class="mla-field"><span class="mla-label">Values</span><select class="mla-select" id="mlaClimateScatterMode"><option value="change">Projected change</option><option value="historical">Historical mean</option><option value="future">Future mean</option></select></label><label class="mla-field"><span class="mla-label">Uncertainty</span><select class="mla-select" id="mlaClimateScatterIntervals"><option value="yes">90% change intervals</option><option value="no">Points only</option></select></label></div><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateScatter" role="img" aria-label="Relationship between two physical climate diagnostics by model" tabindex="0"></canvas><p class="mla-chart-status" id="mlaClimateScatterStatus"></p><details class="mla-a11y-data"><summary>Values and model selection</summary><div id="mlaClimateScatterData"></div></details></section>
 					<section class="mla-card mla-chart-card mla-chart-wide"><h3>Model-by-model change</h3><p>Paired change; whiskers show each model’s 90% year-resampling interval.</p><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateModelChange" role="img" aria-label="Paired climate change and uncertainty for each CMIP6 model"></canvas><p class="mla-chart-status" id="mlaClimateModelChangeStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Model change values</summary><div id="mlaClimateModelChangeData"></div></details></section>
 					<section class="mla-card mla-chart-card"><h3>Historical agreement with ERA5</h3><p>Ratio to native ERA5; 1 is exact agreement and the black control shows ERA5 sampled to the common 1° grid.</p><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateHistoricalSkill" role="img" aria-label="Historical CMIP6 model agreement with ERA5"></canvas><p class="mla-chart-status" id="mlaClimateHistoricalSkillStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Historical agreement values</summary><div id="mlaClimateHistoricalSkillData"></div></details></section>
 					<section class="mla-card mla-chart-card mla-chart-wide"><h3>Time-slice response per degree</h3><p>Each paired percentage change divided by that model’s global warming across the same fixed windows.</p><canvas class="mla-chart mla-climate-diagnostic" id="mlaClimateWarmingChange" role="img" aria-label="LPS response per degree of global warming for each CMIP6 model"></canvas><p class="mla-chart-status" id="mlaClimateWarmingStatus"></p><details class="mla-a11y-data mla-climate-diagnostic-data"><summary>Warming-normalised values</summary><div id="mlaClimateWarmingData"></div></details></section>
@@ -1159,7 +1187,8 @@
 
 <script src="assets/atlas-app.3681542b6718.js"></script>
 <script src="assets/forecast-app.8465188fea1a.js"></script>
-<script src="assets/climate-change-app.c7f85a2b71a1.js"></script>
+<script src="assets/climate-subsets.js?v=bc50c058d2e6"></script>
+<script src="assets/climate-change-app.6a76cd86a702.js"></script>
 
 </body>
 </html>

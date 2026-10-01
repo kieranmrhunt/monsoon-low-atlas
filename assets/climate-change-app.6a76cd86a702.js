@@ -27,6 +27,7 @@
 	const FUTURE_COLOUR = '#c6473b';
 	const MODEL_COLOURS = ['#0072b2', '#d55e00', '#009e73', '#8f3b76', '#e69f00', '#cc79a7', '#8c6d1f', '#00a6a6', '#b2182b', '#6f4c9b', '#56b4e9', '#4d4d4d'];
 	const MODEL_SOURCE_COLOURS = {
+		'CMCC-CM2-SR5': '#b2182b',
 		'HadGEM3-GC31-LL': '#0072b2',
 		'HadGEM3-GC31-MM': '#d55e00',
 		'MIROC6': '#009e73',
@@ -61,12 +62,20 @@
 		heavy_50mm_exposed_cell_day_share: {label: '50 mm heavy-rain cell-days exposed', unit: '%', digits: 1, fraction: true, changeMode: 'points'}
 	};
 	const VALID_SEASONS = new Set(['all', 'jjas', 'mam', 'ond', 'djf']);
-	const VALID_VIEWS = new Set(['overview', 'tracks', 'rainfall', 'structure', 'evaluation']);
+	const VALID_VIEWS = new Set(['overview', 'tracks', 'relationships', 'rainfall', 'structure', 'evaluation']);
 	const VALID_MAP_METRICS = new Set(['track_density', 'genesis_density', 'lysis_density']);
 	const VALID_PROFILES = new Set(['vorticity', 'rh', 'q', 'temperature', 'core_temperature']);
 	const PUBLISHED_STATUSES = new Set(['validated-production-window', 'multi-model-awaiting-review']);
 	const state = {pair: '', basis: 'gwl', comparison: '', season: 'jjas', metric: 'systems', metricGroup: 'Frequency and class', rainMetric: 'exposed_mean_mm_day', mapMetric: 'track_density', profileMetric: 'vorticity', view: 'overview'};
+	const subsets = window.LPSClimateSubsets;
+	const interactiveDefaults = {models: [], focus: '', region: 'all', location: 'passage', month: 0, category: 1, box: [70,10,90,30], scatterX: 'systems', scatterY: 'mean_peak_24h_precipitation_mm', scatterMode: 'change', scatterIntervals: 'yes', rainRegion: 'all', mapBounds: [50,-5,110,40]};
+	Object.assign(state, structuredClone(interactiveDefaults));
+	let baseCurrent = null, explorerIndex = null, interactionSerial = 0, mapMode = 'pan', mapDrag = null;
+	let modelEntries = [], scatterRows = [];
+	const mapFrames = new Map();
 	const cache = new Map();
+	const jsonQueue = [];
+	let jsonInFlight = 0;
 	let index = null;
 	let current = null;
 	let resolutionControls = [];
@@ -80,6 +89,7 @@
 	function readState() {
 		try {
 			const stored = JSON.parse(localStorage.getItem('mla-climate-state-v2') || localStorage.getItem('mla-climate-state-v1') || '{}');
+			for (const key of Object.keys(interactiveDefaults)) if (Object.hasOwn(stored, key)) state[key] = stored[key];
 			if (typeof stored.pair === 'string') state.pair = stored.pair;
 			if (['gwl', 'time-slice'].includes(stored.basis)) state.basis = stored.basis;
 			if (typeof stored.comparison === 'string') state.comparison = stored.comparison;
@@ -94,6 +104,17 @@
 			// Private browsing can disable storage without disabling the atlas.
 		}
 		const parameters = new URLSearchParams(window.location.search);
+		for (const key of Object.keys(interactiveDefaults)) {
+			const raw = parameters.get(`cm${key.toLowerCase()}`);
+			if (raw !== null) { try { state[key] = JSON.parse(raw); } catch (_) { state[key] = raw; } }
+			else if (parameters.has('cmpair')) state[key] = structuredClone(interactiveDefaults[key]);
+		}
+		if (!Array.isArray(state.models)) state.models = [];
+		if (!['passage','genesis','lysis'].includes(state.location)) state.location = 'passage';
+		if (!['change','historical','future'].includes(state.scatterMode)) state.scatterMode = 'change';
+		if (!Number.isInteger(Number(state.month)) || Number(state.month) < 0 || Number(state.month) > 12) state.month = 0;
+		if (![1,2,3,4].includes(Number(state.category))) state.category = 1;
+		for (const key of ['box','mapBounds']) if (!validBox(state[key])) state[key] = [...interactiveDefaults[key]];
 		if (parameters.has('cmpair')) state.pair = parameters.get('cmpair');
 		if (['gwl', 'time-slice'].includes(parameters.get('cmbasis'))) state.basis = parameters.get('cmbasis');
 		if (parameters.has('cmcomparison')) state.comparison = parameters.get('cmcomparison');
@@ -121,6 +142,10 @@
 		url.searchParams.set('cmmap', state.mapMetric);
 		url.searchParams.set('cmprofile', state.profileMetric);
 		url.searchParams.set('cmview', state.view);
+		for (const key of Object.keys(interactiveDefaults)) {
+			if(JSON.stringify(state[key])===JSON.stringify(interactiveDefaults[key]))url.searchParams.delete(`cm${key.toLowerCase()}`);
+			else url.searchParams.set(`cm${key.toLowerCase()}`, JSON.stringify(state[key]));
+		}
 		history.replaceState(null, '', url);
 	}
 
@@ -142,8 +167,23 @@
 		return new Response(stream).json();
 	}
 
+	function queuedJson(task) {
+		return new Promise((resolve, reject) => {
+			jsonQueue.push({task, resolve, reject});
+			function pump() {
+				while (jsonInFlight < 4 && jsonQueue.length) {
+					const job = jsonQueue.shift(); jsonInFlight++;
+					Promise.resolve().then(job.task).then(job.resolve, job.reject).finally(() => { jsonInFlight--; pump(); });
+				}
+			}
+			pump();
+		});
+	}
+
 	async function fetchJson(url, cacheMode = 'force-cache') {
-		if (!cache.has(url)) cache.set(url, fetch(url, {cache: cacheMode}).then(decodeJson));
+		if (!cache.has(url)) cache.set(url, queuedJson(() => fetch(url, {cache: cacheMode}).then(decodeJson)
+			.catch(() => fetch(url, {cache: 'reload'}).then(decodeJson)))
+			.catch(error => { cache.delete(url); throw new Error(`${new URL(url).pathname.split('/').pop()}: ${error.message}`); }));
 		return cache.get(url);
 	}
 
@@ -280,7 +320,7 @@
 	function populateMetricControls() {
 		const available = availableMetricSet();
 		const requestedMetric = state.metric;
-		if (!Object.hasOwn(METRICS, state.metric) || !available.has(state.metric)) state.metric = available.has('systems') ? 'systems' : [...available][0];
+		if (!Object.hasOwn(METRICS, state.metric)) state.metric = available.has('systems') ? 'systems' : [...available][0];
 		const groups = new Map();
 		for (const [key, metric] of Object.entries(METRICS)) {
 			if (!groups.has(metric.group)) groups.set(metric.group, []);
@@ -319,6 +359,14 @@
 			return option;
 		}));
 		groupControl.value = state.metricGroup;
+		for (const [id, key] of [['mlaClimateScatterX','scatterX'],['mlaClimateScatterY','scatterY']]) {
+			const control = $(`#${id}`);
+			control.replaceChildren(...[...metricControl.children].map(node => node.cloneNode(true)));
+			if (!METRICS[state[key]]) state[key] = state.metric;
+			control.value = state[key];
+		}
+		$('#mlaClimateScatterMode').value = state.scatterMode;
+		$('#mlaClimateScatterIntervals').value = state.scatterIntervals;
 	}
 
 	function selectSearchedMetric() {
@@ -403,6 +451,7 @@
 		const stats = $('#mlaClimateStats');
 		const definitions = {
 			overview: ['#mlaClimateModelChange', '#mlaClimateAnnualChart', '#mlaClimateMetricFamilyCard'],
+			relationships: ['#mlaClimateScatterCard'],
 			tracks: ['#mlaClimateDensityGrid', '#mlaClimateMonthlyChart', '#mlaClimateClassChart'],
 			rainfall: ['#mlaClimateRainfallCard', '#mlaClimateRainDriversCard', '#mlaClimateRegionalRainfallCard', '#mlaClimateFootprintCard'],
 			structure: ['#mlaClimateVerticalProfileCard', '#mlaClimateCompositeExpansionCard'],
@@ -665,7 +714,7 @@
 	}
 
 	function signedPercent(value) {
-		if (!Number.isFinite(Number(value))) return '—';
+		if (!numberAvailable(value)) return '—';
 		const number = Number(value);
 		return `${number > 0 ? '+' : ''}${number.toFixed(1)}%`;
 	}
@@ -980,6 +1029,7 @@
 		const {context, width, height} = setupCanvas(canvas);
 		const status = $('#mlaClimateHistoricalSkillStatus');
 		const data = $('#mlaClimateHistoricalSkillData');
+		canvas.closest('.mla-card').querySelector('p').textContent=trackSubsetActive()?'Whole-domain historical evaluation, not recalculated for the track subset. Ratio to ERA5; black is the common-grid ERA5 control.':'Ratio to native ERA5; 1 is exact agreement and the black control shows ERA5 sampled to the common 1° grid.';
 		const records = historicalScreenRecords().map((record, ordinal) => {
 			const screen = screenForSeason(record);
 			return {id: record.id, label: record.source_label || modelLabel(record.id), value: historicalRatio(screen), colour: record.is_resolution_control ? '#111111' : modelColour(record.id, ordinal), isControl: record.is_resolution_control};
@@ -1008,7 +1058,8 @@
 			const y = top + (ordinal + .5) * rowGap;
 			context.fillStyle = ink; context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(record.label, left - 9, y);
 			context.strokeStyle = record.colour; context.globalAlpha = .35; context.lineWidth = 2; context.beginPath(); context.moveTo(x(0), y); context.lineTo(x(record.value), y); context.stroke(); context.globalAlpha = 1;
-			context.fillStyle = record.colour; context.beginPath(); context.arc(x(record.value), y, 5, 0, Math.PI * 2); context.fill();
+		context.fillStyle = record.colour; context.beginPath(); context.arc(x(record.value), y, 5, 0, Math.PI * 2); context.fill();
+			if(!record.isControl)chartHits.push({canvas,x:x(record.value),y,radius:12,pairId:record.id,text:`${record.label}: ${record.value.toFixed(2)} × ERA5`});
 		});
 		context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText('model / ERA5', (left + right) / 2, height - 2);
 		const modelRecords = records.filter(record => !record.isControl);
@@ -1021,7 +1072,7 @@
 
 	function rainfallRecords() {
 		if (!current.impact) return [];
-		const change = current.impact.india_jjas_changes[state.rainMetric];
+		const change = rainfallChange();
 		if (!change) return [];
 		if (current.pair.kind === 'multi-model' && Array.isArray(change.models)) {
 			return change.models.map((record, ordinal) => ({
@@ -1031,6 +1082,11 @@
 			}));
 		}
 		return [{...change, id: current.pair.id, label: current.pair.source_label, colour: modelColour(current.pair.id, 0)}];
+	}
+	function rainfallChange() {
+		if(!current.impact)return null;
+		const key=state.rainRegion==='all'?state.rainMetric:(RAIN_METRICS[state.rainMetric].regionalKey||state.rainMetric);
+		return state.rainRegion==='all'?current.impact.india_jjas_changes[key]:current.impact.regional_india_jjas_changes?.[state.rainRegion]?.changes?.[key];
 	}
 
 	function rainValueText(value, metric) {
@@ -1071,7 +1127,8 @@
 		})).filter(record => numberAvailable(record.plotChange));
 		const status = $('#mlaClimateRainfallStatus');
 		const data = $('#mlaClimateRainfallData');
-		const change = current.impact.india_jjas_changes[state.rainMetric];
+		const change = rainfallChange();
+		card.querySelector('h3').textContent=`${state.rainRegion==='all'?'Indian':regionLabel(state.rainRegion)} rainfall response`;
 		if (!records.length || !change) {
 			context.fillStyle = css('--mla-muted', '#5f6574');
 			context.textAlign = 'center';
@@ -1116,6 +1173,7 @@
 			}
 			context.fillStyle = record.colour;
 			context.beginPath(); context.arc(x(record.plotChange), y, 5, 0, Math.PI * 2); context.fill();
+			chartHits.push({canvas,x:x(record.plotChange),y,radius:12,pairId:record.id,text:`${record.label}: ${rainChangeText(record.plotChange,metric)}`});
 		});
 		context.fillStyle = muted;
 		context.textAlign = 'center';
@@ -1127,7 +1185,7 @@
 		const plotLow = rainChangeNumber(change, metric, 'low');
 		const plotHigh = rainChangeNumber(change, metric, 'high');
 		status.textContent = current.pair.kind === 'multi-model'
-			? `${rainChangeText(plotChange, metric)} equal-model mean (${rainChangeText(plotLow, metric)} to ${rainChangeText(plotHigh, metric)}) · ${positive}/${records.length} models increase · ${robust}/${records.length} individual intervals exclude zero`
+			? `${rainChangeText(plotChange, metric)} equal-model mean${Number.isFinite(plotLow)&&Number.isFinite(plotHigh)?` (${rainChangeText(plotLow, metric)} to ${rainChangeText(plotHigh, metric)})`:''} · ${positive}/${records.length} models increase · ${robust}/${records.length} individual intervals exclude zero`
 			: `${rainChangeText(plotChange, metric)} (${rainChangeText(plotLow, metric)} to ${rainChangeText(plotHigh, metric)})`;
 		data.innerHTML = `<table><thead><tr><th>Model</th><th>Historical</th><th>Future</th><th>Change</th><th>90% interval</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${esc(rainValueText(record.historical, metric))}</td><td>${esc(rainValueText(record.future, metric))}</td><td>${esc(rainChangeText(record.plotChange, metric))}</td><td>${esc(numberAvailable(record.plotLow) ? `${rainChangeText(record.plotLow, metric)} to ${rainChangeText(record.plotHigh, metric)}` : '—')}</td></tr>`).join('')}</tbody></table>`;
 	}
@@ -1136,7 +1194,7 @@
 		if (!current.impact || !current.impact.regional_india_jjas_changes) return [];
 		const metric = RAIN_METRICS[state.rainMetric];
 		const metricKey = metric.regionalKey || state.rainMetric;
-		return Object.values(current.impact.regional_india_jjas_changes).map(region => {
+		return Object.entries(current.impact.regional_india_jjas_changes).map(([regionId,region]) => {
 			const change = region.changes && region.changes[metricKey];
 			if (!change) return null;
 			const modelValues = Array.isArray(change.models)
@@ -1146,6 +1204,7 @@
 			const negativeModels = modelValues.filter(value => value < 0).length;
 			return {
 				...region,
+				regionId,
 				...change,
 				plotChange: rainChangeNumber(change, metric),
 				plotLow: rainChangeNumber(change, metric, 'low'),
@@ -1188,6 +1247,7 @@
 				for (const value of [record.plotLow, record.plotHigh]) { context.beginPath(); context.moveTo(x(value), y - 4); context.lineTo(x(value), y + 4); context.stroke(); }
 			}
 			context.fillStyle = colour; context.beginPath(); context.arc(x(record.plotChange), y, 5, 0, Math.PI * 2); context.fill();
+			chartHits.push({canvas,x:x(record.plotChange),y,radius:12,regionId:record.regionId,text:`${record.label}: ${rainChangeText(record.plotChange,metric)} · tap for model comparison`});
 		});
 		context.fillStyle = muted; context.textAlign = 'center'; context.textBaseline = 'bottom';
 		context.fillText(metric.changeMode === 'points' ? 'future − historical (percentage points)' : 'future − historical (%)', (left + right) / 2, height - 2);
@@ -1367,12 +1427,15 @@
 
 	function drawDensityMap(canvas, density, years, mode, scale) {
 		const {context, width, height} = setupCanvas(canvas);
-		const bounds = {west: 50, east: 110, south: -5, north: 40};
+		const bounds = {west: state.mapBounds[0], east: state.mapBounds[2], south: state.mapBounds[1], north: state.mapBounds[3]};
 		const plot = {left: 38, right: width - 10, top: 10, bottom: height - 34};
 		const project = (lon, lat) => [
 			plot.left + (lon - bounds.west) / (bounds.east - bounds.west) * (plot.right - plot.left),
 			plot.bottom - (lat - bounds.south) / (bounds.north - bounds.south) * (plot.bottom - plot.top)
 		];
+		mapFrames.set(canvas,{plot,bounds,density,years,mode,project});
+		canvas.style.touchAction='none';
+		context.save();context.beginPath();context.rect(plot.left,plot.top,plot.right-plot.left,plot.bottom-plot.top);context.clip();
 		context.fillStyle = css('--mla-sea', '#e9f2f3');
 		context.fillRect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
 		drawGeography(context, project, true);
@@ -1398,20 +1461,25 @@
 			}
 		}
 		drawGeography(context, project, false);
+		context.strokeStyle='#111';context.lineWidth=2;
+		if(state.region==='box'){const a=project(state.box[0],state.box[3]),b=project(state.box[2],state.box[1]);context.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);}
+		else if(state.region!=='all')for(const s of geography?.states||[])if((subsets.regions[state.region]||[state.region]).includes(s.id))for(const ring of s.rings||[]){context.beginPath();pathRing(context,ring,project);context.stroke();}
+		context.restore();
 		context.fillStyle = css('--mla-muted', '#5f6574');
 		context.textBaseline = 'top';
 		context.textAlign = 'center';
-		for (const lon of [50, 70, 90, 110]) {
+		const lonStep=bounds.east-bounds.west<25?5:20,latStep=bounds.north-bounds.south<20?5:10;
+		for (let lon=Math.ceil(bounds.west/lonStep)*lonStep;lon<=bounds.east;lon+=lonStep) {
 			const [x] = project(lon, bounds.south);
 			context.fillText(`${lon}°E`, x, plot.bottom + 7);
 		}
 		context.textAlign = 'right';
 		context.textBaseline = 'middle';
-		for (const lat of [0, 10, 20, 30, 40]) {
+		for (let lat=Math.ceil(bounds.south/latStep)*latStep;lat<=bounds.north;lat+=latStep) {
 			const [, y] = project(bounds.west, lat);
-			context.fillText(lat === 0 ? '0°' : `${lat}°N`, plot.left - 5, y);
+			context.fillText(lat === 0 ? '0°' : `${Math.abs(lat)}°${lat<0?'S':'N'}`, plot.left - 5, y);
 		}
-		const legendWidth = Math.min(118, (plot.right - plot.left) * .34);
+		const legendWidth = Math.min(mode === 'agreement' ? 160 : 118, (plot.right - plot.left) * .65);
 		const legendX = plot.right - legendWidth;
 		const legendY = plot.top + 7;
 		for (let index = 0; index < legendWidth; index += 1) {
@@ -1450,6 +1518,10 @@
 
 	function drawMaps() {
 		const spatialKey = state.mapMetric;
+		const agreement = spatialKey === 'track_density' && current.pair.kind === 'multi-model'
+			&& current.change.track_density_agreement && current.change.track_density_agreement[state.season];
+		$('#mlaClimateAgreementPanel').hidden = !agreement;
+		$('#mlaClimateDensityGrid').classList.toggle('mla-climate-density-grid', Boolean(agreement));
 		const historical = current.historical.seasonal[state.season][spatialKey] || current.historical.seasonal[state.season].track_density;
 		const future = current.future.seasonal[state.season][spatialKey] || current.future.seasonal[state.season].track_density;
 		const labels = {track_density: ['Track-density change', 'Unique tracks per 1° cell per year; systems are grouped by genesis season.'], genesis_density: ['Genesis-density change', 'First published centres per 1° cell per year.'], lysis_density: ['Lysis-density change', 'Last published centres per 1° cell per year.']};
@@ -1466,9 +1538,6 @@
 		drawDensityMap($('#mlaClimateHistoricalMap'), historical, historicalYears, 'sequential', sequentialScale);
 		drawDensityMap($('#mlaClimateFutureMap'), future, futureYears, 'sequential', sequentialScale);
 		drawDensityMap($('#mlaClimateChangeMap'), difference, 1, 'change', differenceScale);
-		const agreement = spatialKey === 'track_density' && current.pair.kind === 'multi-model'
-			&& current.change.track_density_agreement
-			&& current.change.track_density_agreement[state.season];
 		const agreementPanel = $('#mlaClimateAgreementPanel');
 		const agreementDetails = $('#mlaClimateDensityAgreementDetails');
 		const densityGrid = $('#mlaClimateDensityGrid');
@@ -1576,7 +1645,7 @@
 				const value = Number(record.value), magnitude = Math.min(1, Math.abs(value) / maximum);
 				context.fillStyle = interpolateColour(value < 0 ? negative : positive, .25 + .75 * magnitude);
 				context.fillRect(x + cellGap / 2, y + 2, cellWidth - cellGap, Math.max(8, rowGap - 4));
-				chartHits.push({canvas, x: x + cellWidth / 2, y: y + rowGap / 2, radius: Math.max(9, cellWidth / 2), pairId: record.id, text: `${modelLabel(record.id)} · ${row.metric.label}: ${changeText(value, row.metric)}`});
+				chartHits.push({canvas, x: x + cellWidth / 2, y: y + rowGap / 2, rect: [x,y,cellWidth,rowGap], radius: 9, pairId: record.id, metricKey: row.key, text: `${modelLabel(record.id)} · ${row.metric.label}: ${changeText(value, row.metric)}`});
 			});
 			context.font = `600 11px ${FONT}`;
 			context.textAlign = 'left';
@@ -1670,7 +1739,7 @@
 		context.strokeStyle = css('--mla-line', '#d8d9df'); context.beginPath(); context.moveTo(x(0), top); context.lineTo(x(0), bottom); context.stroke();
 		records.forEach((record, ordinal) => { const y = top + (ordinal + .5) * rowGap; context.fillStyle = css('--mla-ink', '#202334'); context.textAlign = 'right'; context.textBaseline = 'middle'; context.fillText(record.label, left - 8, y); context.fillStyle = record.value >= 0 ? '#2166ac' : '#b2182b'; const start = x(Math.min(0, record.value)), end = x(Math.max(0, record.value)); context.fillRect(start, y - 7, Math.max(1, end - start), 14); context.textAlign = record.value >= 0 ? 'left' : 'right'; context.fillText(`${record.value > 0 ? '+' : ''}${record.value.toFixed(1)}`, x(record.value) + (record.value >= 0 ? 5 : -5), y); });
 		context.fillStyle = css('--mla-muted', '#5f6574'); context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText('contribution to log change (%)', (left + right) / 2, height - 2);
-		status.textContent = `Observed rainfall-share log change ${observed > 0 ? '+' : ''}${observed.toFixed(1)}% · components sum to ${explained > 0 ? '+' : ''}${explained.toFixed(1)}%.`;
+		status.textContent = `Modelled rainfall-share log change ${observed > 0 ? '+' : ''}${observed.toFixed(1)}% · four contributions ${explained > 0 ? '+' : ''}${explained.toFixed(1)}%${Math.abs(residual)>.01?` + aggregation residual ${residual>0?'+':''}${residual.toFixed(1)}%`:''}.`;
 		data.innerHTML = `<table><thead><tr><th>Component</th><th>Log-change contribution</th></tr></thead><tbody>${records.map(record => `<tr><td>${esc(record.label)}</td><td>${record.value > 0 ? '+' : ''}${record.value.toFixed(2)}%</td></tr>`).join('')}</tbody></table>`;
 	}
 
@@ -1705,7 +1774,7 @@
 	}
 
 	function valueText(value, metric, signed = false) {
-		if (!Number.isFinite(Number(value))) return '—';
+		if (!numberAvailable(value)) return '—';
 		const number = Number(value);
 		const prefix = signed && number > 0 ? '+' : '';
 		return `${prefix}${number.toFixed(metric.digits)} ${metric.unit}`;
@@ -1770,6 +1839,129 @@
 		}));
 	}
 
+	function validBox(box) {
+		return Array.isArray(box) && box.length === 4 && box.every(Number.isFinite) && box[0] < box[2] && box[1] < box[3] && box[0] >= 40 && box[2] <= 125 && box[1] >= -20 && box[3] <= 50;
+	}
+
+	function trackSubsetActive() { return state.region !== 'all' || Number(state.month) !== 0 || Number(state.category) !== 1; }
+	function availablePairs() { return baseCurrent.pair.kind === 'multi-model' ? baseCurrent.pair.model_ids.map(modelPair).filter(Boolean) : [baseCurrent.pair]; }
+	function regionLabel(id = state.region) {
+		if (id === 'all') return 'Whole domain';
+		if (id === 'box') return `${state.box[0]}–${state.box[2]}°E, ${state.box[1]}–${state.box[3]}°N`;
+		return geography?.states?.find(s => s.id === id)?.name || ({northwest:'Northwest',north_central:'North-central',east:'East',northeast:'Northeast',west_coast:'West coast',south_peninsula:'South peninsula'})[id] || id.replaceAll('_',' ');
+	}
+	function populateInteractiveControls() {
+		const region = $('#mlaClimateRegion');
+		const opts = [['all','Whole domain'],['box','Draw / enter a box'],...Object.keys(subsets.regions).map(id=>[id,regionLabel(id)]),...(geography?.states || []).map(s=>[s.id,s.name || s.id.replaceAll('_',' ')])];
+		region.innerHTML = opts.map(([id,label])=>`<option value="${esc(id)}">${esc(label)}</option>`).join('');
+		if (!opts.some(([id])=>id===state.region)) state.region='all';
+		region.value=state.region;
+		$('#mlaClimateLocation').value=state.location;
+		$('#mlaClimateMonth').innerHTML='<option value="0">Use selected season</option>'+MONTHS.map((m,i)=>`<option value="${i+1}">${m}</option>`).join('');
+		$('#mlaClimateMonth').value=state.month;
+		$('#mlaClimateCategory').value=state.category;
+		['West','South','East','North'].forEach((k,i)=>{$(`#mlaClimateBox${k}`).value=state.box[i];});
+		$('#mlaClimateBoxFields').hidden=state.region!=='box';
+		const pairs=availablePairs();
+		// A selection absent from a new scenario must not silently become an empty ensemble.
+		state.models=state.models.filter(source=>pairs.some(p=>p.source_label===source));
+		$('#mlaClimateModels').innerHTML=pairs.map((p,i)=>`<label style="--model-colour:${modelColour(p.id,i)}"><input type="checkbox" value="${esc(p.source_label)}" ${!state.models.length||state.models.includes(p.source_label)?'checked':''}>${esc(p.source_label)}</label>`).join('');
+		$('#mlaClimateSubsetSummary').textContent=trackSubsetActive()?`· ${regionLabel()}${state.month?` · ${MONTHS[state.month-1]}`:''}`:state.models.length?`· ${state.models.length} models`:'';
+		let select=$('#mlaClimateRainRegion');
+		if(!select){const label=document.createElement('label');label.className='mla-field';label.innerHTML='<span class="mla-label">Rain falling within</span><select class="mla-select" id="mlaClimateRainRegion"></select>';$('#mlaClimateRainfallCard .mla-chart-head').append(label);select=$('#mlaClimateRainRegion');select.addEventListener('change',()=>{state.rainRegion=select.value;writeState();render();});}
+		select.innerHTML='<option value="all">All India</option>'+Object.keys(subsets.regions).map(id=>`<option value="${id}">${regionLabel(id)}</option>`).join('');select.value=state.rainRegion;
+		if(!$('#mlaClimateMapActions')) {
+			const actions=document.createElement('div');actions.id='mlaClimateMapActions';actions.className='mla-climate-map-actions';
+			actions.innerHTML='<button type="button" class="mla-btn mla-btn-small" data-climate-map-action="in" aria-label="Zoom climate maps in">+</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="out" aria-label="Zoom climate maps out">−</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="reset">Reset view</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="pan" aria-pressed="true">Pan / pick state</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="box" aria-pressed="false">Select box</button>';
+			$('#mlaClimateDensityGrid').before(actions);
+		}
+	}
+
+	async function applyInteractive() {
+		const serial=++interactionSerial, base=baseCurrent;
+		if(!base)return;
+		const options={...state,box:[...state.box]}, active=trackSubsetActive();
+		const picks=availablePairs().filter(p=>!state.models.length||state.models.includes(p.source_label));
+		$('#mlaClimateSubsetStatus').textContent=active?'Loading event data and recalculating subset…':'';
+		$('#mlaClimateApplySubset').disabled=true;
+		try {
+			if (!active && !state.models.length) { current=base; modelEntries=[]; }
+			else {
+				const entries=await Promise.all(picks.map(loadPair));
+				if(active) {
+					if(!explorerIndex)explorerIndex=await fetchJson(assetUrl('explorer.json'),'no-store');
+					await Promise.all(entries.map(async entry=>{
+						for(const role of ['historical','future']) {
+							const ref=explorerIndex.runs[entry.pair[role].url];
+							if(!ref)throw new Error(`Event detail not available for ${entry.pair.source_label}`);
+							const payload=await fetchJson(assetUrl(ref.url));
+							entry[role]=subsets.subsetRun(entry[role],payload,options,geography);
+						}
+						entry.change={...entry.change,seasonal_changes:{...entry.change.seasonal_changes,[options.season]:subsets.changeRun(entry.historical,entry.future,options.season,METRICS)}};
+					}));
+				}
+				if(serial!==interactionSerial)return;
+				modelEntries=entries;
+				current=subsets.combine(entries,base,options.season,METRICS);
+				if(current.pair.kind==='multi-model') {current.historical.run={...base.historical.run};current.future.run={...base.future.run};}
+			}
+			if(serial!==interactionSerial)return;
+			$('#mlaClimateContent').hidden=false;
+			populateMetricControls();populateInteractiveControls();writeState();render();
+			const counts=active?modelEntries.map(e=>`${e.pair.source_label}: ${e.historical.selectedEvents.length} → ${e.future.selectedEvents.length}`).join('; '):'';
+			$('#mlaClimateSubsetStatus').textContent=active?`${regionLabel()} · ${state.location} · historical → future events: ${counts}. Empty years count as zero systems; missing physics stays missing.`:state.models.length?'All diagnostics use the selected models. Individual intervals are retained; model spread is shown separately.':'';
+		} catch(error) { if(serial===interactionSerial){$('#mlaClimateSubsetStatus').textContent=`Subset unavailable: ${error.message}. Reset the subset to return to the full comparison.`;$('#mlaClimateContent').hidden=true;} }
+		finally {if(serial===interactionSerial)$('#mlaClimateApplySubset').disabled=false;}
+	}
+
+	function scatterRecords() {
+		const metrics=[state.scatterX,state.scatterY], records=metrics.map(key=>{
+			const change=current.change.seasonal_changes[state.season][key]||{};
+			return current.pair.kind==='multi-model'?change.models||[]:[{id:current.pair.id,...change}];
+		});
+		return records[0].flatMap(a=>{
+			const b=records[1].find(b=>b.id===a.id);if(!b)return [];
+			const values=[a,b].map((record,i)=>{
+				const fields=changeFields(METRICS[metrics[i]]);
+				return {value:record[state.scatterMode==='change'?fields.value:state.scatterMode],low:state.scatterMode==='change'?record[fields.low]:null,high:state.scatterMode==='change'?record[fields.high]:null};
+			});
+			return values.every(v=>numberAvailable(v.value))?[{id:a.id,label:modelLabel(a.id),x:values[0],y:values[1]}]:[];
+		});
+	}
+	function drawScatter() {
+		const canvas=$('#mlaClimateScatter'),{context,width,height}=setupCanvas(canvas);
+		const rows=scatterRows=scatterRecords(),mx=METRICS[state.scatterX],my=METRICS[state.scatterY];
+		const intervals=state.scatterIntervals==='yes'&&state.scatterMode==='change';
+		const xr=extent(rows.flatMap(r=>intervals?[r.x.value,r.x.low,r.x.high]:[r.x.value]),false),yr=extent(rows.flatMap(r=>intervals?[r.y.value,r.y.low,r.y.high]:[r.y.value]),false);
+		const plot={left:58,right:width-24,top:38,bottom:height-65};
+		const unit=m=>state.scatterMode==='change'&&m.changeMode!=='absolute'?'%':m.unit;
+		const x=v=>plot.left+(v-xr[0])/(xr[1]-xr[0])*(plot.right-plot.left),y=v=>plot.bottom-(v-yr[0])/(yr[1]-yr[0])*(plot.bottom-plot.top);
+		drawAxes(context,plot,yr,unit(my));
+		context.textAlign='center';context.textBaseline='top';context.fillStyle=css('--mla-muted','#555');
+		for(let j=0;j<=4;j++){const value=xr[0]+j/4*(xr[1]-xr[0]);context.fillText(value.toFixed(Math.abs(value)<10?1:0),x(value),plot.bottom+7);}
+		if(state.scatterMode==='change') {context.strokeStyle='#858585';context.setLineDash([3,3]);if(xr[0]<=0&&xr[1]>=0){context.beginPath();context.moveTo(x(0),plot.top);context.lineTo(x(0),plot.bottom);context.stroke();}if(yr[0]<=0&&yr[1]>=0){context.beginPath();context.moveTo(plot.left,y(0));context.lineTo(plot.right,y(0));context.stroke();}context.setLineDash([]);}
+		rows.forEach((r,i)=>{const colour=modelColour(r.id,i);context.globalAlpha=state.focus&&state.focus!==modelLabel(r.id)?.35:1;context.strokeStyle=colour;context.fillStyle=colour;context.lineWidth=1.3;
+			if(intervals){if(numberAvailable(r.x.low)&&numberAvailable(r.x.high)){context.beginPath();context.moveTo(x(r.x.low),y(r.y.value));context.lineTo(x(r.x.high),y(r.y.value));context.stroke();}if(numberAvailable(r.y.low)&&numberAvailable(r.y.high)){context.beginPath();context.moveTo(x(r.x.value),y(r.y.low));context.lineTo(x(r.x.value),y(r.y.high));context.stroke();}}
+			context.beginPath();context.arc(x(r.x.value),y(r.y.value),6,0,Math.PI*2);context.fill();context.globalAlpha=1;
+			chartHits.push({canvas,x:x(r.x.value),y:y(r.y.value),radius:13,pairId:r.id,text:`${r.label} · ${mx.label}: ${r.x.value.toFixed(2)} ${unit(mx)} · ${my.label}: ${r.y.value.toFixed(2)} ${unit(my)}`});
+		});
+		context.fillStyle=css('--mla-ink','#202334');context.textAlign='center';
+		const wrapped=(text,x,y,maxWidth)=>{const words=text.split(' '),lines=[''];for(const word of words){const j=lines.length-1;if(context.measureText(`${lines[j]} ${word}`).width>maxWidth&&lines[j])lines.push(word);else lines[j]+=(lines[j]?' ':'')+word;}lines.slice(0,3).forEach((line,i)=>context.fillText(line,x,y+i*13));};
+		wrapped(`${mx.label} (${unit(mx)})`,(plot.left+plot.right)/2,height-36,plot.right-plot.left);
+		context.textAlign='left';wrapped(`${my.label} (${unit(my)})`,plot.left,2,plot.right-plot.left);
+		let legend=$('#mlaClimateScatterLegend');if(!legend){legend=document.createElement('div');legend.id='mlaClimateScatterLegend';legend.className='mla-climate-explore-actions';canvas.after(legend);}
+		legend.innerHTML=rows.map((r,i)=>`<button type="button" class="mla-btn mla-btn-small" data-climate-focus="${esc(r.label)}" aria-pressed="${state.focus===r.label}" style="border-left:4px solid ${modelColour(r.id,i)}">${esc(r.label)}</button>`).join('');
+		$('#mlaClimateScatterStatus').textContent=`${rows.length} paired models · ${state.scatterMode==='change'?'changes relative to each model’s historical baseline':'mean of annual values'} · tap to highlight across figures.`;
+		$('#mlaClimateScatterData').innerHTML=`<table><thead><tr><th>Model</th><th>${esc(mx.label)} (${esc(unit(mx))})</th><th>${esc(my.label)} (${esc(unit(my))})</th></tr></thead><tbody>${rows.map(r=>`<tr><td><button type="button" class="mla-btn mla-btn-small" data-climate-focus="${esc(r.label)}">${esc(r.label)}</button></td><td>${r.x.value.toFixed(3)}</td><td>${r.y.value.toFixed(3)}</td></tr>`).join('')}</tbody></table>`;
+		if(!rows.length){context.textAlign='center';context.fillText('No paired values for this subset.',width/2,height/2);}
+	}
+
+	function drawFocus() {
+		const node=$('#mlaClimateFocusStatus');node.hidden=!state.focus;
+		node.innerHTML=state.focus?`Highlighted: ${esc(state.focus)} <button type="button" class="mla-btn mla-btn-small" data-climate-focus="">Clear highlight</button>`:'';
+		for(const hit of chartHits)if(hit.pairId&&modelLabel(hit.pairId)===state.focus){const ctx=hit.canvas.getContext('2d');ctx.strokeStyle='#111';ctx.lineWidth=2;ctx.beginPath();if(hit.rect)ctx.rect(...hit.rect);else ctx.arc(hit.x,hit.y,8,0,2*Math.PI);ctx.stroke();}
+	}
+
 	function render() {
 		if (!current || panel.hidden) return;
 		const metric = METRICS[state.metric];
@@ -1792,21 +1984,24 @@
 		const warmingCard = $('#mlaClimateWarmingChange').closest('.mla-card');
 		warmingCard.hidden = comparisonBasis(current.pair) === 'gwl';
 		const rainNotice = $('#mlaClimateRainfallNotice');
-		rainNotice.hidden = Boolean(current.impact) && state.season === 'jjas';
+		rainNotice.hidden = Boolean(current.impact) && state.season === 'jjas' && !trackSubsetActive();
 		rainNotice.textContent = current.impact
 			? 'India-wide and regional attribution is currently JJAS-only; the storm-centred footprint below follows the selected genesis season.'
 			: `India-wide and storm-footprint rainfall diagnostics are not yet available for ${comparisonLabel(current.pair)}. Track-centred precipitation remains available in Overview.`;
+		if(trackSubsetActive())rainNotice.textContent='Rainfall attribution below uses all LPSs in the selected models, not the filtered track subset. Choose where rain falls using the regional selector. Filtered track-centred rainfall is available in Overview and Relationships.';
 		chartHits = [];
 		requestAnimationFrame(() => {
 			if (state.view === 'overview') {
 				renderStats();
 				drawModelChanges();
 				drawAnnual();
-				drawMetricFamily();
+				 drawMetricFamily();
 			} else if (state.view === 'tracks') {
 				drawMaps();
 				drawMonthly();
 				drawClasses();
+			} else if (state.view === 'relationships') {
+				drawScatter();
 			} else if (state.view === 'rainfall') {
 				drawRainfallChanges();
 				drawRainDrivers();
@@ -1820,6 +2015,7 @@
 				if (comparisonBasis(current.pair) !== 'gwl') drawWarmingNormalisedChanges();
 				drawPublishedGwl();
 			}
+			drawFocus();
 		});
 	}
 
@@ -1831,6 +2027,7 @@
 	}
 
 	async function selectPair() {
+		interactionSerial++;
 		const serial = ++pairSerial;
 		const pair = index.pairs.find(candidate => candidate.id === state.pair) || index.pairs[0];
 		state.pair = pair.id;
@@ -1839,7 +2036,7 @@
 		$('#mlaClimateContent').hidden = true;
 		const loaded = await loadPair(pair);
 		if (serial !== pairSerial) return;
-		current = loaded;
+		current = baseCurrent = loaded;
 		mergeMetricDefinitions(current.historical);
 		if (!current.historical.seasonal[state.season] || !current.future.seasonal[state.season]) state.season = 'all';
 		populatePairControls();
@@ -1847,8 +2044,8 @@
 		$('#mlaClimateLoading').hidden = true;
 		$('#mlaClimateContent').hidden = false;
 		setView(state.view, false);
-		writeState();
-		render();
+		populateInteractiveControls();
+		await applyInteractive();
 	}
 
 	async function activate() {
@@ -1861,7 +2058,7 @@
 					resolutionControls = await loadResolutionControls();
 					populatePairControls();
 				}
-				if (!current || current.pair.id !== state.pair) await selectPair();
+				if (!baseCurrent || baseCurrent.pair.id !== state.pair) await selectPair();
 				else render();
 			} catch (error) {
 				showLoadError(error);
@@ -1896,14 +2093,21 @@
 
 	function downloadCurrentCsv() {
 		const metric = METRICS[state.metric], fields = changeFields(metric);
-		const rows = selectedModelChanges().map(record => [comparisonBasis(current.pair), comparisonLabel(current.pair), state.season, state.metric, metric.label, record.label, record.historical, record.future, record[fields.value], record[fields.low], record[fields.high], metric.changeMode, metric.unit]);
-		const header = ['comparison_basis', 'comparison', 'genesis_season', 'metric', 'metric_label', 'model', 'historical', 'future', 'change', 'ci05', 'ci95', 'change_mode', 'unit'];
+		let rows = selectedModelChanges().map(record => [comparisonBasis(current.pair), comparisonLabel(current.pair), state.season, state.metric, metric.label, record.label, record.historical, record.future, record[fields.value], record[fields.low], record[fields.high], metric.changeMode, metric.unit]);
+		let header = ['comparison_basis', 'comparison', 'genesis_season', 'metric', 'metric_label', 'model', 'historical', 'future', 'change', 'ci05', 'ci95', 'change_mode', 'unit'];
+		if(state.view==='relationships') {header=['model','x_metric','y_metric','values','x','y','x_ci05','x_ci95','y_ci05','y_ci95'];rows=scatterRecords().map(r=>[r.label,state.scatterX,state.scatterY,state.scatterMode,r.x.value,r.y.value,r.x.low,r.x.high,r.y.low,r.y.high]);}
+		else if(state.view==='rainfall') {header=['model','rain_region','metric','historical','future','change','ci05','ci95','change_unit'];const m=RAIN_METRICS[state.rainMetric];rows=rainfallRecords().map(r=>[r.label,state.rainRegion,state.rainMetric,r.historical*(m.fraction?100:1),r.future*(m.fraction?100:1),rainChangeNumber(r,m),rainChangeNumber(r,m,'low'),rainChangeNumber(r,m,'high'),m.changeMode==='points'?'percentage points':'%']);}
+		else if(state.view==='tracks') {header=['longitude','latitude','density_metric','historical_per_year','future_per_year','change_per_year'];rows=[];const h=current.historical.seasonal[state.season][state.mapMetric],f=current.future.seasonal[state.season][state.mapMetric];h.unique_track_counts.forEach((row,r)=>row.forEach((v,c)=>{const a=v/current.historical.coverage.years,b=f.unique_track_counts[r][c]/current.future.coverage.years;rows.push([h.longitude_edges[c]+.5,h.latitude_edges[r]+.5,state.mapMetric,a,b,b-a]);}));}
+		else if(state.view==='structure') {header=['level_hpa','metric','unit','historical','future','change'];rows=PROFILE_METRICS[state.profileMetric].keys.map((key,i)=>{const c=current.change.seasonal_changes[state.season][key]||{};return [[850,700,500][i],key,METRICS[key].unit,c.historical,c.future,c.absolute_change];});}
+		else if(state.view==='evaluation') {header=['dataset','metric','ratio_to_era5'];rows=historicalScreenRecords().map(r=>[r.source_label,state.metric,historicalRatio(screenForSeason(r))]);}
+		const context=[comparisonLabel(current.pair),state.season,state.month||'',regionLabel(),state.location,state.category,window.location.href];
+		header.push('selected_comparison','selected_season','selected_genesis_month','track_region','track_location','minimum_peak_category','view_url');rows=rows.map(row=>[...row,...context]);
 		const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n') + '\n';
-		downloadBlob(new Blob([csv], {type: 'text/csv;charset=utf-8'}), `lps-climate-${state.metric}-${state.season}.csv`);
+		downloadBlob(new Blob([csv], {type: 'text/csv;charset=utf-8'}), `lps-climate-${state.view}-${state.metric}-${state.season}.csv`);
 	}
 
 	function saveCurrentFigure() {
-		const primary = {overview: '#mlaClimateModelChange', tracks: '#mlaClimateChangeMap', rainfall: current.impact ? (state.season === 'jjas' ? '#mlaClimateRainfallChange' : '#mlaClimateFootprintChange') : null, structure: '#mlaClimateVerticalProfile', evaluation: '#mlaClimateHistoricalSkill'}[state.view];
+		const primary = {overview: '#mlaClimateModelChange', relationships:'#mlaClimateScatter', tracks: '#mlaClimateChangeMap', rainfall: current.impact ? (state.season === 'jjas' ? '#mlaClimateRainfallChange' : '#mlaClimateFootprintChange') : null, structure: '#mlaClimateVerticalProfile', evaluation: '#mlaClimateHistoricalSkill'}[state.view];
 		const canvas = primary && $(primary);
 		if (!canvas) return;
 		canvas.toBlob(blob => { if (blob) downloadBlob(blob, `lps-climate-${state.view}-${state.metric}.png`); }, 'image/png');
@@ -1913,7 +2117,7 @@
 		if (!(event.target instanceof HTMLCanvasElement)) return null;
 		const bounds = event.target.getBoundingClientRect();
 		const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
-		return chartHits.filter(hit => hit.canvas === event.target).find(hit => Math.hypot(hit.x - x, hit.y - y) <= hit.radius) || null;
+		return chartHits.filter(hit => hit.canvas === event.target).find(hit => hit.rect ? x>=hit.rect[0]&&x<=hit.rect[0]+hit.rect[2]&&y>=hit.rect[1]&&y<=hit.rect[1]+hit.rect[3] : Math.hypot(hit.x - x, hit.y - y) <= hit.radius) || null;
 	}
 
 	readState();
@@ -1937,9 +2141,8 @@
 	});
 	$('#mlaClimateSeason').addEventListener('change', event => {
 		state.season = event.target.value;
-		populateMetricControls();
-		writeState();
-		render();
+		state.month=0;
+		void applyInteractive();
 	});
 	$('#mlaClimateMetric').addEventListener('change', event => {
 		state.metric = event.target.value;
@@ -1980,13 +2183,14 @@
 	});
 	panel.querySelectorAll('[data-climate-view-button]').forEach(button => button.addEventListener('click', () => setView(button.dataset.climateViewButton)));
 	$('#mlaClimateCopyLink').addEventListener('click', async event => {
+		const button = event.currentTarget;
 		writeState();
 		try {
 			await navigator.clipboard.writeText(window.location.href);
-			event.currentTarget.textContent = 'Link copied';
-			setTimeout(() => { event.currentTarget.textContent = 'Copy link'; }, 1400);
+			button.textContent = 'Link copied';
+			setTimeout(() => { button.textContent = 'Copy link'; }, 1400);
 		} catch (_) {
-			event.currentTarget.textContent = 'Use address bar';
+			button.textContent = 'Use address bar';
 		}
 	});
 	$('#mlaClimateDownloadCsv').addEventListener('click', downloadCurrentCsv);
@@ -2002,11 +2206,49 @@
 	});
 	panel.addEventListener('pointerleave', () => { if (tooltip) tooltip.hidden = true; });
 	panel.addEventListener('click', event => {
+		const focus=event.target.closest('[data-climate-focus]');if(focus){state.focus=focus.dataset.climateFocus;writeState();render();return;}
 		const hit = hitAt(event);
-		if (!hit || !hit.pairId || !current || current.pair.kind !== 'multi-model') return;
-		const pair = index.pairs.find(item => item.id === hit.pairId);
-		if (pair) choosePair(pair);
+		if (!hit || !current) return;
+		if(hit.regionId){state.rainRegion=hit.regionId;$('#mlaClimateRainRegion').value=state.rainRegion;writeState();render();return;}
+		if(hit.pairId){const label=modelLabel(hit.pairId);state.focus=state.focus===label?'':label;}
+		if(hit.metricKey){state.metric=hit.metricKey;state.metricGroup=METRICS[state.metric].group;populateMetricControls();}
+		writeState();render();
 	});
+	$('#mlaClimateApplySubset').addEventListener('click',()=>{
+		const checked=[...$('#mlaClimateModels').querySelectorAll('input:checked')].map(n=>n.value);
+		if(!checked.length){$('#mlaClimateSubsetStatus').textContent='Select at least one model.';return;}
+		const box=['West','South','East','North'].map(k=>Number($(`#mlaClimateBox${k}`).value));
+		if($('#mlaClimateRegion').value==='box'&&!validBox(box)){$('#mlaClimateSubsetStatus').textContent='Enter a valid box: west < east, south < north, within 40–125°E and 20°S–50°N.';return;}
+		state.models=checked.length===availablePairs().length?[]:checked;
+		state.region=$('#mlaClimateRegion').value;state.location=$('#mlaClimateLocation').value;state.month=Number($('#mlaClimateMonth').value);state.category=Number($('#mlaClimateCategory').value);state.box=box;
+		void applyInteractive();
+	});
+	$('#mlaClimateRegion').addEventListener('change',()=>{$('#mlaClimateBoxFields').hidden=$('#mlaClimateRegion').value!=='box';});
+	$('#mlaClimateResetSubset').addEventListener('click',()=>{Object.assign(state,{models:[],focus:'',region:'all',month:0,category:1,location:'passage'});void applyInteractive();});
+	for(const [id,key] of [['ScatterX','scatterX'],['ScatterY','scatterY'],['ScatterMode','scatterMode'],['ScatterIntervals','scatterIntervals']])$(`#mlaClimate${id}`).addEventListener('change',event=>{state[key]=event.target.value;writeState();render();});
+
+	function mapPoint(event,frame) {const rect=event.target.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,p=frame.plot,b=frame.bounds;return [b.west+(x-p.left)/(p.right-p.left)*(b.east-b.west),b.north-(y-p.top)/(p.bottom-p.top)*(b.north-b.south)];}
+	function setMapBounds(box) {
+		const w=Math.min(75,Math.max(8,box[2]-box[0])),h=Math.min(60,Math.max(6,box[3]-box[1]));
+		const west=Math.max(45,Math.min(120-w,box[0])),south=Math.max(-15,Math.min(45-h,box[1]));state.mapBounds=[west,south,west+w,south+h];writeState();render();
+	}
+	function zoomMap(factor,centre) {const b=state.mapBounds,c=centre||[(b[0]+b[2])/2,(b[1]+b[3])/2];setMapBounds([c[0]+(b[0]-c[0])*factor,c[1]+(b[1]-c[1])*factor,c[0]+(b[2]-c[0])*factor,c[1]+(b[3]-c[1])*factor]);}
+	panel.addEventListener('click',event=>{const action=event.target.closest('[data-climate-map-action]')?.dataset.climateMapAction;if(!action)return;if(action==='in'||action==='out')zoomMap(action==='in'?.8:1.25);else if(action==='reset')setMapBounds([...interactiveDefaults.mapBounds]);else{mapMode=action;for(const b of panel.querySelectorAll('[data-climate-map-action="pan"],[data-climate-map-action="box"]'))b.setAttribute('aria-pressed',String(b.dataset.climateMapAction===action));}});
+	panel.addEventListener('wheel',event=>{const frame=mapFrames.get(event.target);if(!frame||state.view!=='tracks')return;event.preventDefault();zoomMap(event.deltaY>0?1.12:.89,mapPoint(event,frame));},{passive:false});
+	panel.addEventListener('pointerdown',event=>{const frame=mapFrames.get(event.target);if(!frame||state.view!=='tracks')return;const point=mapPoint(event,frame);if(point[0]<frame.bounds.west||point[0]>frame.bounds.east||point[1]<frame.bounds.south||point[1]>frame.bounds.north)return;mapDrag={frame,start:point,client:[event.clientX,event.clientY],bounds:[...state.mapBounds],canvas:event.target};event.target.setPointerCapture(event.pointerId);});
+	panel.addEventListener('pointermove',event=>{
+		const frame=mapFrames.get(event.target);if(!frame||state.view!=='tracks')return;
+		if(mapDrag){const point=mapPoint(event,mapDrag.frame);if(mapMode==='pan'){const dx=point[0]-mapDrag.start[0],dy=point[1]-mapDrag.start[1];setMapBounds(mapDrag.bounds.map((v,i)=>v-(i%2?dy:dx)));}else{drawMaps();const p=mapDrag.frame.project,ctx=event.target.getContext('2d'),a=p(...mapDrag.start),b=p(...point);ctx.strokeStyle='#111';ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);ctx.setLineDash([]);}return;}
+		const point=mapPoint(event,frame),r=Math.floor(point[1])-frame.density.latitude_edges[0],c=Math.floor(point[0])-frame.density.longitude_edges[0],raw=frame.density.unique_track_counts[r]?.[c];
+		if(raw===undefined)return;tooltip.textContent=`${point[1].toFixed(1)}°N, ${point[0].toFixed(1)}°E · ${(raw/frame.years).toFixed(2)} ${frame.mode==='agreement'?'signed agreement':'tracks yr⁻¹'} · tap a state to select`;tooltip.hidden=false;tooltip.style.left=`${Math.max(8,Math.min(window.innerWidth-290,event.clientX+12))}px`;tooltip.style.top=`${Math.min(window.innerHeight-70,event.clientY+12)}px`;
+	});
+	panel.addEventListener('pointerup',event=>{
+		if(!mapDrag)return;const drag=mapDrag;mapDrag=null;const point=mapPoint(event,drag.frame),moved=Math.hypot(event.clientX-drag.client[0],event.clientY-drag.client[1])>6;
+		if(drag.canvas.hasPointerCapture(event.pointerId))drag.canvas.releasePointerCapture(event.pointerId);
+		if(mapMode==='box'&&moved){const box=[Math.min(point[0],drag.start[0]),Math.min(point[1],drag.start[1]),Math.max(point[0],drag.start[0]),Math.max(point[1],drag.start[1])].map(x=>Math.round(x*10)/10);if(validBox(box)){state.region='box';state.box=box;void applyInteractive();}}
+		else if(!moved){const picked=(geography?.states||[]).find(s=>subsets.inState(point,s));if(picked){state.region=picked.id;state.location='passage';void applyInteractive();}}
+	});
+	panel.addEventListener('pointercancel',()=>{mapDrag=null;render();});
 	let resizeTimer = null;
 	window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 120); });
 	window.addEventListener('mla:climate-visible', event => {
