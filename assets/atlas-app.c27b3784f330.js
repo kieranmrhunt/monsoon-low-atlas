@@ -207,6 +207,7 @@
 		focusTimeMs: null,
 		focusPointIndex: null,
 		focusSource: '',
+		focusSearchQuery: '',
 		hovered: null,
 		active: [],
 		activeBit: null,
@@ -1346,16 +1347,17 @@
 		if (root.dataset.ready !== 'true') setLoading('Rendering filter state and time controls…');
 		if (exactSearchIndex != null) state.selected = exactSearchIndex;
 		exactSearchConflicts = state.selected != null && !bits[state.selected] ? filterFailures(state.selected, search, {ignoreSearch: exactSearchIndex != null}) : [];
-		if (search.exactDateStart != null) {
+		if (search.exactDateStart != null && !(state.focusSearchQuery === search.query && Number.isFinite(state.focusTimeMs))) {
 			state.focusStartMs = search.exactDateStart;
 			state.focusEndMs = search.exactDateEnd;
 			state.focusTimeMs = search.exactTime;
 			state.focusPointIndex = state.selected != null && search.exactTime != null ? pointIndexAtTime(state.selected, search.exactTime) : null;
 			state.focusSource = 'search';
 			if (search.exactTime != null && state.weatherLayer !== 'none') syncWeatherToFocus();
-		} else if (state.focusSource === 'search') {
+		} else if (search.exactDateStart == null && ['search', 'date'].includes(state.focusSource)) {
 			clearTimeFocus({keepWeather: true});
 		}
+		state.focusSearchQuery = search.query;
 		rainfallMapCache = null;
 		updateFilterReadout();
 		updateTimeControls();
@@ -1818,7 +1820,7 @@
 		if (!state.ibtracsOverlay) parameters.set('ibtrack', '0');
 		if (state.weatherLayer !== 'none') parameters.set('weather', state.weatherLayer);
 		if (state.weatherTracks) parameters.set('weathertracks', '1');
-		if (state.focusSource === 'point' && Number.isFinite(state.focusTimeMs)) parameters.set('time', new Date(state.focusTimeMs).toISOString().slice(0, 13));
+		if (['point', 'date'].includes(state.focusSource) && Number.isFinite(state.focusTimeMs)) parameters.set('time', new Date(state.focusTimeMs).toISOString().slice(0, 13));
 		if (state.evolutionMetric !== 'deficit') parameters.set('evolve', state.evolutionMetric);
 		if (state.compositePrecipSource !== 'era5') parameters.set('compositeprecip', state.compositePrecipSource);
 		if (state.compositeSectionVariable !== 'relative_vorticity') parameters.set('compositesection', state.compositeSectionVariable);
@@ -1935,7 +1937,8 @@
 				state.focusEndMs = parsed;
 				state.focusTimeMs = parsed;
 				state.focusPointIndex = state.selected == null ? null : pointIndexAtTime(state.selected, parsed);
-				state.focusSource = 'point';
+				state.focusSource = state.selected == null && parsedSearch().exactDate ? 'date' : 'point';
+				state.focusSearchQuery = parsedSearch().query;
 			}
 		}
 	}
@@ -2082,21 +2085,47 @@
 
 	const scheduleSliderWeather = debounce(syncWeatherToFocus, 80);
 
+	function searchedDayStart() {
+		const search = parsedSearch();
+		return search.exactDate && state.active.length ? Date.parse(`${search.exactDate}T00:00:00Z`) : null;
+	}
+
+	function setSearchedDayHour(hour, options) {
+		const start = searchedDayStart();
+		if (start == null) return;
+		const timeMs = start + clamp(Math.round(hour), 0, 23) * HOUR_MS;
+		state.focusStartMs = timeMs;
+		state.focusEndMs = timeMs;
+		state.focusTimeMs = timeMs;
+		state.focusPointIndex = null;
+		state.focusSource = 'date';
+		state.focusSearchQuery = parsedSearch().query;
+		updateTimeControls();
+		mapScheduler.invalidate(MAP_DIRTY.WEATHER | MAP_DIRTY.DATA | MAP_DIRTY.OVERLAY);
+		scheduleSliderWeather();
+		if (!(options && options.noUrl)) writeUrl('replace');
+	}
+
 	function moveTrackHourSlider(event) {
-		if (state.selected == null) return;
+		if (state.selected == null) {
+			setSearchedDayHour(Number(event.target.value) || 0, {noUrl: true});
+			return;
+		}
 		const pointIndex = clamp(Number(event.target.value) || 0, 0, paths.decoded[state.selected].length - 1);
 		setTrackPointFocus(state.selected, pointIndex, {activateWeather: false, noSeek: true, noUrl: true});
 		scheduleSliderWeather();
 	}
 
 	function commitTrackHourSlider() {
-		if (state.selected == null) return;
-		renderDossier();
+		if (state.selected != null) renderDossier();
 		writeUrl('replace');
 	}
 
 	function stepTrackHour(direction) {
-		if (state.selected == null) return;
+		if (state.selected == null) {
+			setSearchedDayHour((Number($('#mlaTrackHour').value) || 0) + direction);
+			return;
+		}
 		const current = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
 		setTrackPointFocus(state.selected, clamp(current + direction, 0, paths.decoded[state.selected].length - 1), {activateWeather: false});
 	}
@@ -2156,16 +2185,24 @@
 			$('#mlaWeatherKeyMax').textContent = weatherDefinition.keyMax;
 			$('#mlaWeatherRamp').dataset.field = state.weatherLayer;
 		}
-		$('#mlaPreviousHour').disabled = state.selected == null;
-		$('#mlaNextHour').disabled = state.selected == null;
+		const dayStart = state.selected == null ? searchedDayStart() : null;
+		const hasTimeline = state.selected != null || dayStart != null;
+		$('#mlaPreviousHour').disabled = !hasTimeline;
+		$('#mlaNextHour').disabled = !hasTimeline;
 		const slider = $('#mlaTrackHour');
-		slider.disabled = state.selected == null;
+		slider.disabled = !hasTimeline;
+		$('#mlaTrackHourLabel').textContent = dayStart != null ? 'Hour (UTC)' : 'Track hour';
+		slider.setAttribute('aria-label', dayStart != null ? 'Hour of searched day (UTC)' : 'Selected track hour');
 		if (state.selected != null) {
 			const lastPoint = paths.decoded[state.selected].length - 1;
 			const pointIndex = Number.isInteger(state.focusPointIndex) && state.focusPointIndex >= 0 ? state.focusPointIndex : 0;
 			slider.max = String(lastPoint);
 			slider.value = String(clamp(pointIndex, 0, lastPoint));
 			slider.setAttribute('aria-valuetext', Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : 'Move to choose a track hour');
+		} else if (dayStart != null) {
+			slider.max = '23';
+			slider.value = String(Number.isFinite(state.focusTimeMs) ? clamp(Math.round((state.focusTimeMs - dayStart) / HOUR_MS), 0, 23) : 0);
+			slider.setAttribute('aria-valuetext', Number.isFinite(state.focusTimeMs) ? dateTime(state.focusTimeMs) : 'Move to choose an hour of this day');
 		} else {
 			slider.max = '0';
 			slider.value = '0';

@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict';
+const {chromium}=await import(new URL('../.test-cache/climate-browser/node_modules/playwright-core/index.mjs',import.meta.url));
+const base=process.argv[2]||'http://127.0.0.1:4173/';
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/home/users/kieran/.cache/ms-playwright/chromium_headless_shell-1187/chrome-linux/headless_shell',ignoreDefaultArgs:['--disable-dev-shm-usage'],args:['--no-sandbox']});
+try {
+ const page=await browser.newPage({viewport:{width:1440,height:1100}}), errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ const ready=()=>page.waitForFunction(()=>document.querySelector('[data-ready="true"]'),{timeout:90000});
+ await page.goto(base+'?q=2025-07-12');await ready();
+ const slider=page.locator('#mlaTrackHour');
+ assert.equal(await slider.isEnabled(),true);
+ assert.equal(await slider.getAttribute('max'),'23');
+ assert.match(await page.locator('#mlaFocusTime').innerText(),/2 systems active/);
+ await slider.scrollIntoViewIfNeeded();
+ const box=await slider.boundingBox();
+ await page.mouse.move(box.x+9,box.y+box.height/2);await page.mouse.down();
+ await page.mouse.move(box.x+box.width-9,box.y+box.height/2,{steps:24});await page.mouse.up();
+ assert.ok(Number(await slider.inputValue())>=22);
+ assert.match(await page.locator('#mlaFocusTime').innerText(),/2025-07-12.*2 systems active/);
+ assert.equal(await page.inputValue('#mlaWeatherLayer'),'none');
+ const shared=page.url();assert.ok(new URL(shared).searchParams.has('time'));
+ await page.evaluate(()=>localStorage.clear());await page.goto(shared);await ready();
+ assert.ok(Number(await slider.inputValue())>=22);
+ await page.click('#mlaPreviousHour');const hour=Number(await slider.inputValue());
+ await page.click('#mlaNextHour');assert.equal(Number(await slider.inputValue()),hour+1);
+ const before=await page.$eval('#mlaMapOverlay',canvas=>canvas.toDataURL());
+ await slider.focus();await slider.press('Home');await page.waitForTimeout(200);
+ const after=await page.$eval('#mlaMapOverlay',canvas=>canvas.toDataURL());
+ assert.notEqual(before,after,'map centres redraw as the day is scrubbed');
+ assert.equal(await slider.inputValue(),'0');
+ // The second event only begins at 16 UTC; its centre must not exist at 00.
+ assert.match(await page.locator('#mlaFocusTime').innerText(),/1 systems active/);
+ console.log('PASS date-search drag, map updates, hour buttons and shared URL');
+ await page.locator('#mlaTopTable [data-select-track]').first().click();
+ assert.equal(await page.locator('#mlaTrackHourLabel').textContent(),'Track hour');
+ assert.ok(Number(await slider.getAttribute('max'))>23);
+ await slider.focus();await slider.press('End');
+ assert.equal(await slider.inputValue(),await slider.getAttribute('max'));
+ assert.equal(await page.inputValue('#mlaWeatherLayer'),'none');
+ const selectedLink=page.url();await page.goto(selectedLink);await ready();
+ assert.equal(await slider.inputValue(),await slider.getAttribute('max'));
+ console.log('PASS selected-track lifetime slider and shared URL');
+ await page.goto(base+'?q=2025-07-12');await ready();await page.setViewportSize({width:390,height:844});
+ await slider.scrollIntoViewIfNeeded();await slider.focus();await slider.press('End');
+ assert.equal(await slider.inputValue(),'23');
+ await page.locator('#mlaTimeControls').screenshot({path:'.test-cache/era5-browser/date-slider-mobile.png'});
+ assert.deepEqual(errors,[]);console.log('PASS mobile and zero page errors');
+} finally {await browser.close();}

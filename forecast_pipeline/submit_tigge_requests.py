@@ -234,6 +234,9 @@ def pump(
     }
     cursor = int(state.get("cursor", initial_cursor if not state_exists else 0)) % len(cycles)
     ordered = list(enumerate(cycles[cursor:], cursor)) + list(enumerate(cycles[:cursor]))
+    # Explicit case studies come before the rolling backlog, independently of
+    # its saved cursor. Stable sorting leaves ordinary backlog order untouched.
+    ordered.sort(key=lambda pair: pair[1].get("priority_rank", float("inf")))
     for plan_index, item in ordered:
         key = (str(item["model"]), str(item["cycle"]))
         if key in public:
@@ -289,7 +292,8 @@ def pump(
                 if adapter._is_queue_limit_error(error):
                     queue_full = True
                     break
-                next_cursor = (int(item["_plan_index"]) + 1) % len(cycles)
+                if "priority_rank" not in item:
+                    next_cursor = (int(item["_plan_index"]) + 1) % len(cycles)
                 continue
             record = {
                 "model": model,
@@ -299,10 +303,12 @@ def pump(
                 "status": "accepted",
                 "horizon_hours": int(item["horizon_hours"]),
                 "first_step_hours": int(item.get("first_step_hours", 0)),
+                "priority_cases": item.get("priority_cases", []),
             }
             state.setdefault("attempts", []).append(record)
             submitted.append(record)
-            next_cursor = (int(item["_plan_index"]) + 1) % len(cycles)
+            if "priority_rank" not in item:
+                next_cursor = (int(item["_plan_index"]) + 1) % len(cycles)
 
     summary = {
         "schema": SCHEMA,
@@ -317,6 +323,11 @@ def pump(
         "queue_capacity": capacity,
         "available_slots": available_slots,
         "eligible_cycles": len(candidates),
+        "eligible_priority_cycles": sum("priority_rank" in item for item in candidates),
+        "next_priority_cycles": [
+            {key: item[key] for key in ("model", "cycle", "priority_cases", "priority_rank")}
+            for item in candidates if "priority_rank" in item
+        ][:20],
         "selected_for_submission": len(selected),
         "submitted": len(submitted),
         "queue_full": queue_full,

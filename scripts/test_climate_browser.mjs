@@ -10,6 +10,16 @@ try{
  page.on('crash',()=>console.log('BROWSER PAGE CRASHED'));
  await page.goto(base+'?tab=climate-change');
  await page.waitForFunction(()=>document.querySelector('#mlaClimateScope')?.textContent.includes('models'));
+ assert.equal(await page.locator('#mlaClimateMetric').isVisible(),true);
+ assert.equal(await page.locator('#mlaClimateMetricSearch, #mlaClimateMetricOptions').count(),0);
+ assert.equal(await page.locator('#mlaClimateMetric option').count(),59);
+ assert.ok(await page.locator('#mlaClimateMetric optgroup').count()>1);
+ await page.selectOption('#mlaClimateMetric','mean_rh500_pct');
+ const metricLink=page.url();await page.evaluate(()=>localStorage.clear());await page.goto(metricLink);
+ await page.waitForFunction(()=>document.querySelector('#mlaClimateScope')?.textContent.includes('models'));
+ assert.equal(await page.inputValue('#mlaClimateMetric'),'mean_rh500_pct');
+ console.log('PASS dropdown-only measure and shared selection');
+ await page.selectOption('#mlaClimateMetric','systems');
  const view=v=>page.locator(`[data-climate-view-button="${v}"]`).click();
  await view('relationships');
  await page.waitForFunction(()=>document.querySelectorAll('#mlaClimateScatterData tbody tr').length===5);
@@ -54,7 +64,10 @@ try{
  await page.$$eval('#mlaClimateModels input',els=>els.forEach(e=>e.checked=['MIROC6','MPI-ESM1-2-HR'].includes(e.value)));
  await page.click('#mlaClimateApplySubset');await page.waitForFunction(()=>document.querySelector('#mlaClimateScope').textContent.startsWith('2 models'));
  console.log('PASS empty subset and model selection');
- await page.setViewportSize({width:390,height:844});await page.$eval('#mlaClimateExploreControls',e=>e.open=false);await view('relationships');
+ await page.setViewportSize({width:390,height:844});await page.$eval('#mlaClimateExploreControls',e=>e.open=false);await view('overview');
+ assert.equal(await page.locator('#mlaClimateMetric').isVisible(),true);
+ await page.locator('.mla-climate-controls').screenshot({path:'.test-cache/era5-browser/climate-measure-mobile.png'});
+ await view('relationships');
  await page.locator('#mlaClimateScatterCard').scrollIntoViewIfNeeded();await page.waitForTimeout(300);
  await page.screenshot({path:'.test-cache/era5-browser/climate-new-mobile.png'});
  assert.equal(errors.length,0);console.log('PASS mobile and zero page errors');

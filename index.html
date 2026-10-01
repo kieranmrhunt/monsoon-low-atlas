@@ -303,16 +303,17 @@
 }
 .mla-map-tip[data-visible="true"] { opacity: 1; }
 .mla-time-controls {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 7px;
-	flex-wrap: wrap;
 	padding: 9px 12px;
 	border-top: 1px solid var(--mla-line);
 	background: color-mix(in srgb, var(--mla-well) 74%, transparent);
 }
 .mla-time-controls output { margin-right: auto; font-variant-numeric: tabular-nums; font-weight: 650; }
-.mla-track-time-control { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: min(320px, 100%); }
+.mla-time-meta { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.mla-track-time-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mla-track-time-control span { color: var(--mla-faint); font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .mla-time-slider { width: 100%; min-width: 150px; accent-color: var(--mla-indigo-deep); cursor: pointer; }
 .mla-time-slider:disabled { cursor: not-allowed; opacity: .5; }
@@ -437,7 +438,6 @@
 .mla-climate-control-summary { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
 .mla-climate-controls { top: 62px; }
 .mla-climate-metric-note { color: var(--mla-muted); font-size: 12px; }
-.mla-climate-metric-search::placeholder { color: var(--mla-faint); }
 .mla-climate-control-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .mla-climate-view-nav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 2px 1px 10px; margin-bottom: 4px; }
 .mla-climate-explore { margin-bottom: 10px; padding: 10px 14px; }
@@ -1023,12 +1023,12 @@
 					</div>
 					<div class="mla-time-controls" id="mlaTimeControls" hidden>
 						<button class="mla-btn mla-btn-small" id="mlaPreviousHour" type="button" aria-label="Previous track hour">−1 h</button>
-						<label class="mla-track-time-control" for="mlaTrackHour"><span>Track hour</span><input class="mla-time-slider" id="mlaTrackHour" type="range" min="0" max="0" value="0" step="1" aria-label="Selected track hour"></label>
+						<label class="mla-track-time-control" for="mlaTrackHour"><span id="mlaTrackHourLabel">Track hour</span><input class="mla-time-slider" id="mlaTrackHour" type="range" min="0" max="0" value="0" step="1" aria-label="Selected track hour"></label>
 						<button class="mla-btn mla-btn-small" id="mlaNextHour" type="button" aria-label="Next track hour">+1 h</button>
-						<output id="mlaFocusTime" aria-live="polite"></output>
+						<div class="mla-time-meta"><output id="mlaFocusTime" aria-live="polite"></output>
 						<label class="mla-map-toggle" id="mlaWeatherTracksControl" for="mlaWeatherTracks" hidden><input id="mlaWeatherTracks" type="checkbox"> Show subset tracks</label>
 						<span class="mla-weather-key" id="mlaWeatherKey" hidden><span id="mlaWeatherKeyMin">0</span><span class="mla-weather-ramp" id="mlaWeatherRamp" aria-hidden="true"></span><span id="mlaWeatherKeyMax"></span></span>
-						<button class="mla-btn mla-btn-small" id="mlaRetryWeather" type="button" hidden>Retry weather field</button>
+						<button class="mla-btn mla-btn-small" id="mlaRetryWeather" type="button" hidden>Retry weather field</button></div>
 					</div>
 					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered subset. Density counts each track at most once per half-degree cell. Individual systems use a uniform track style throughout.</p>
 					<div class="mla-map-foot">
@@ -1087,7 +1087,7 @@
 				<label class="mla-field" for="mlaClimateComparison"><span class="mla-label">Scenario / level</span><select class="mla-select" id="mlaClimateComparison"></select></label>
 				<label class="mla-field" for="mlaClimateDataset"><span class="mla-label">Dataset</span><select class="mla-select" id="mlaClimateDataset"></select></label>
 				<label class="mla-field" for="mlaClimateSeason"><span class="mla-label">Genesis season</span><select class="mla-select" id="mlaClimateSeason"><option value="jjas">JJAS</option><option value="all">All months</option><option value="mam">MAM</option><option value="ond">OND</option><option value="djf">DJF</option></select></label>
-				<label class="mla-field" for="mlaClimateMetricSearch" id="mlaClimateMetricField"><span class="mla-label">Measure</span><input class="mla-control mla-climate-metric-search" id="mlaClimateMetricSearch" type="search" list="mlaClimateMetricOptions" autocomplete="off" placeholder="Search measures"></label><datalist id="mlaClimateMetricOptions"></datalist><select id="mlaClimateMetric" hidden aria-hidden="true" tabindex="-1"></select>
+				<label class="mla-field" for="mlaClimateMetric" id="mlaClimateMetricField"><span class="mla-label">Measure</span><select class="mla-select" id="mlaClimateMetric"></select></label>
 				<div class="mla-climate-control-meta"><div class="mla-climate-control-summary"><span class="mla-badge" data-tone="review" id="mlaClimateScope">Research preview</span><span class="mla-climate-metric-note" id="mlaClimateMetricNote"></span></div><div class="mla-climate-control-actions"><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateCopyLink" type="button">Copy link</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateDownloadCsv" type="button">Download CSV</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateSavePng" type="button">Save figure</button></div></div>
 			</section>
 			<details class="mla-card mla-climate-explore" id="mlaClimateExploreControls"><summary>Models &amp; track subset <span id="mlaClimateSubsetSummary"></span></summary>
@@ -1185,10 +1185,10 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","analysisSeries":"assets/atlas-analysis-series.c5ee5001daff.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","climateChangeBase":"climate-change","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","reanalysisBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-reanalyses-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.3681542b6718.js"></script>
+<script src="assets/atlas-app.c27b3784f330.js"></script>
 <script src="assets/forecast-app.8465188fea1a.js"></script>
 <script src="assets/climate-subsets.js?v=bc50c058d2e6"></script>
-<script src="assets/climate-change-app.6a76cd86a702.js"></script>
+<script src="assets/climate-change-app.26f013cb6156.js"></script>
 
 </body>
 </html>

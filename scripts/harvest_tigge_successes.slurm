@@ -17,7 +17,10 @@ PLAN="${2:?TIGGE plan is required}"
 PUBLIC_ROOT="${3:?public forecast root is required}"
 CREATED_AFTER="${4:?inclusive ECDS creation timestamp is required}"
 PYTHON="${LPS_FORECAST_PYTHON:-/home/users/kieran/miniconda3/envs/py311/bin/python}"
-MODELS="${LPS_TIGGE_RECOVERY_MODELS:-tigge-imd,tigge-ncmrwf}"
+MODELS="${LPS_TIGGE_RECOVERY_MODELS:-}"
+if [[ -z "$MODELS" ]]; then
+  MODELS="$("$PYTHON" -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))["models"]))' "$PLAN")"
+fi
 
 cd "$ATLAS_ROOT"
 "$PYTHON" -m forecast_pipeline.recover_tigge_jobs \

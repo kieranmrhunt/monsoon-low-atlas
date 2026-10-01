@@ -340,15 +340,6 @@
 			return node;
 		}));
 		metricControl.value = state.metric;
-		const metricOptions = $('#mlaClimateMetricOptions');
-		metricOptions.replaceChildren(...Object.entries(METRICS).filter(([key]) => available.has(key)).map(([key, metric]) => {
-			const option = document.createElement('option');
-			option.value = metric.label;
-			option.label = `${metric.group}${metric.unit ? ` · ${metric.unit}` : ''}${metric.resolutionSensitive ? ' · resolution-sensitive' : ''}`;
-			option.dataset.metric = key;
-			return option;
-		}));
-		$('#mlaClimateMetricSearch').value = METRICS[state.metric].label;
 		const selectedGroup = METRICS[state.metric] && METRICS[state.metric].group;
 		if (state.metric !== requestedMetric || !groups.has(state.metricGroup)) state.metricGroup = selectedGroup || [...groups.keys()][0];
 		const groupControl = $('#mlaClimateMetricGroup');
@@ -367,33 +358,6 @@
 		}
 		$('#mlaClimateScatterMode').value = state.scatterMode;
 		$('#mlaClimateScatterIntervals').value = state.scatterIntervals;
-	}
-
-	function selectSearchedMetric() {
-		const control = $('#mlaClimateMetricSearch');
-		const query = control.value.trim().toLowerCase();
-		if (!query) {
-			control.value = METRICS[state.metric].label;
-			return false;
-		}
-		const available = availableMetricSet();
-		const candidates = Object.entries(METRICS).filter(([key]) => available.has(key));
-		const exact = candidates.find(([key, metric]) => key.toLowerCase() === query || metric.label.toLowerCase() === query);
-		const partial = exact || candidates.find(([key, metric]) => `${metric.label} ${metric.group} ${key}`.toLowerCase().includes(query));
-		if (!partial) {
-			control.setCustomValidity('Choose an available measure from the suggestions.');
-			control.reportValidity();
-			return false;
-		}
-		control.setCustomValidity('');
-		state.metric = partial[0];
-		state.metricGroup = partial[1].group;
-		$('#mlaClimateMetric').value = state.metric;
-		$('#mlaClimateMetricGroup').value = state.metricGroup;
-		control.value = partial[1].label;
-		writeState();
-		render();
-		return true;
 	}
 
 	function populatePairControls() {
@@ -2150,16 +2114,6 @@
 		$('#mlaClimateMetricGroup').value = state.metricGroup;
 		writeState();
 		render();
-	});
-	$('#mlaClimateMetricSearch').addEventListener('input', event => {
-		event.currentTarget.setCustomValidity('');
-	});
-	$('#mlaClimateMetricSearch').addEventListener('change', selectSearchedMetric);
-	$('#mlaClimateMetricSearch').addEventListener('keydown', event => {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			selectSearchedMetric();
-		}
 	});
 	$('#mlaClimateMetricGroup').addEventListener('change', event => {
 		state.metricGroup = event.target.value;

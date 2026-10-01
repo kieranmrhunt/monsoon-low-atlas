@@ -11,6 +11,7 @@ from pathlib import Path
 
 from forecast_pipeline.sources import TiggeAdapter
 from forecast_pipeline.submit_tigge_requests import pump
+from forecast_pipeline.prioritise_tigge_cases import merge_cases
 
 
 class FakeJobs:
@@ -43,6 +44,55 @@ class FakeClient:
 
 
 class TiggeSubmissionTests(unittest.TestCase):
+    def test_priority_precedes_cursor_and_keeps_background_position(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cycles = [
+                {"model": "tigge-ecmwf", "cycle": cycle, "horizon_hours": 24, "first_step_hours": 0}
+                for cycle in ("2016062700", "2016062800", "2016070100", "2025071200")
+            ]
+            cycles[2].update(priority_rank=0, priority_cases=["INCOMPASS"])
+            cycles[3].update(priority_rank=1, priority_cases=["India 2025"])
+            plan = root / "plan.json"
+            plan.write_text(json.dumps({"models": ["tigge-ecmwf"], "cycles": cycles}))
+            state = root / "ecds-submit-state.json"
+            state.write_text(json.dumps({"schema": "mla-ecds-tigge-submit-state-v1", "cursor": 1, "attempts": []}))
+            client = FakeClient([], {})
+            result = pump(plan, root, root / "public", client, max_submissions=2)
+            self.assertEqual([request["date"] for _, request in client.submissions], ["2016-07-01", "2025-07-12"])
+            self.assertEqual(result["eligible_priority_cycles"], 2)
+            self.assertEqual(result["cursor_next"], 1)
+            # Active priorities must not block the ordinary backlog or submit twice.
+            client.jobs = [{"jobID": "new-1", "status": "accepted"}, {"jobID": "new-2", "status": "running"}]
+            result = pump(plan, root, root / "public", client, max_submissions=1)
+            self.assertEqual(result["skipped"]["active"], 2)
+            self.assertEqual(client.submissions[-1][1]["date"], "2016-06-28")
+            self.assertEqual(result["cursor_next"], 2)
+
+    def test_case_merge_interleaves_and_preserves_existing_indices(self) -> None:
+        class Availability:
+            def available_steps(self, model, cycle):
+                return [] if model == "tigge-imd" and cycle.year < 2020 else list(range(0, 25, 6))
+
+        original = {"models": ["tigge-ecmwf"], "cycles": [
+            {"model": "tigge-ecmwf", "cycle": "2016070100", "horizon_hours": 24}
+        ]}
+        cases = [
+            dict(name="INCOMPASS", start="2016063012", end="2016070112", anchor="2016070100"),
+            dict(name="India2025", start="2025071112", end="2025071212", anchor="2025071200"),
+        ]
+        result = merge_cases(original, cases, ["tigge-imd", "tigge-ecmwf"], Availability())
+        self.assertEqual(result["cycles"][0]["cycle"], original["cycles"][0]["cycle"])
+        self.assertNotIn("priority_rank", original["cycles"][0])
+        ranked = sorted(result["cycles"], key=lambda item: item["priority_rank"])
+        self.assertEqual([(item["model"], item["cycle"]) for item in ranked[:4]], [
+            ("tigge-ecmwf", "2016070100"), ("tigge-imd", "2025071200"),
+            ("tigge-ecmwf", "2016063012"), ("tigge-ecmwf", "2025071200"),
+        ])
+        again = merge_cases(result, cases, ["tigge-imd", "tigge-ecmwf"], Availability())
+        self.assertEqual(again["cycles"], result["cycles"])
+        self.assertEqual(len(result["cycles"]), 9)
+
     def test_ecds_request_contains_one_complete_cycle(self) -> None:
         adapter = TiggeAdapter("tigge-imd", workers=1)
         request = adapter.ecds_request(
