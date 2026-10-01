@@ -68,6 +68,10 @@
 	let catalogueBounds;
 	let fallbackLabels = [];
 	let nearStateCache = new Map();
+	let regionBoxCache = null;
+	let regionDrawing = false;
+	let regionDraft = null;
+	let regionKeyboardCursor = null;
 	let profileCache = new Map();
 	let genesisRegions = [];
 	let lysisRegions = [];
@@ -188,6 +192,7 @@
 		mjo: 'all',
 		enso: 'all',
 		stateIndex: -1,
+		regionBox: null,
 		stateMin: 0,
 		search: '',
 		mapLayer: 'auto',
@@ -1215,7 +1220,25 @@
 
 	function filterSignature() {
 		const percentiles = FILTER_METRIC_KEYS.map(key => `${key}:${state.percentileMins[key]}`).join(',');
-		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.lysisRegion, state.bsiso, state.mjo, state.enso, state.stateIndex, state.stateMin, state.search].join('|');
+		return [state.timeMode, state.yearMin, state.yearMax, state.dateMin, state.dateMax, [...state.months].sort((a, b) => a - b).join('.'), state.monthMode, [...state.classes].sort().join('.'), state.metric, percentiles, state.match, state.qc, state.genesisRegion, state.lysisRegion, state.bsiso, state.mjo, state.enso, state.stateIndex, state.stateMin, state.search, state.regionBox && state.regionBox.join(',')].join('|');
+	}
+
+	function regionBoxLabel() {
+		const box = state.regionBox;
+		return box ? `Passes box: ${box[0]}–${box[2]}°E, ${box[1]}–${box[3]}°N` : '';
+	}
+
+	function regionBoxPass(index) {
+		const box = state.regionBox;
+		if (!box) return true;
+		const key = box.join(',');
+		if (!regionBoxCache || regionBoxCache.key !== key) regionBoxCache = {key, values: new Int8Array(CORE.tracks.length).fill(-1)};
+		if (regionBoxCache.values[index] < 0) {
+			const bounds = CORE.bounds[index];
+			const overlaps = bounds[0] <= box[2] && bounds[2] >= box[0] && bounds[1] <= box[3] && bounds[3] >= box[1];
+			regionBoxCache.values[index] = overlaps && window.LPSAtlasRegions.pathIntersects(box, paths.decoded[index], paths.breakBefore, paths.offsets[index]) ? 1 : 0;
+		}
+		return Boolean(regionBoxCache.values[index]);
 	}
 
 	function parsedSearch() {
@@ -1285,6 +1308,7 @@
 		if (ignoredClimate !== 'mjo' && state.mjo !== 'all' && CLIMATE.mjo.phase[index] !== Number(state.mjo)) failures.push({key: 'mjo', label: `MJO: ${$('#mlaMjo').selectedOptions[0].textContent}`});
 		if (ignoredClimate !== 'enso' && state.enso !== 'all' && CLIMATE.enso.class[index] !== Number(state.enso)) failures.push({key: 'enso', label: `ENSO: ${$('#mlaEnso').selectedOptions[0].textContent}`});
 		if (!statePass(index)) failures.push({key: 'state', label: `Crosses ${CORE.states[state.stateIndex]}`});
+		if (!regionBoxPass(index)) failures.push({key: 'region-box', label: regionBoxLabel()});
 		if (!(options && options.ignoreSearch) && search.query) {
 			if (search.exactDateStart != null && (row[T.end_ms] < search.exactDateStart || row[T.start_ms] > search.exactDateEnd)) failures.push({key: 'search', label: `Active on ${search.exactDate}`});
 			else if (search.exactDateStart == null && search.exactYear != null && row[T.start_year] !== search.exactYear) failures.push({key: 'search', label: `Search: ${search.query}`});
@@ -1310,6 +1334,7 @@
 		else if (key === 'mjo') state.mjo = 'all';
 		else if (key === 'enso') state.enso = 'all';
 		else if (key === 'state') { state.stateIndex = -1; state.stateMin = 0; }
+		else if (key === 'region-box') { state.regionBox = null; setRegionDrawing(false); }
 		else if (key === 'search') state.search = '';
 	}
 
@@ -1327,6 +1352,7 @@
 		if (state.mjo !== 'all') descriptors.push({key: 'mjo', label: `MJO: ${$('#mlaMjo').selectedOptions[0].textContent}`, group: 'context'});
 		if (state.enso !== 'all') descriptors.push({key: 'enso', label: `ENSO: ${$('#mlaEnso').selectedOptions[0].textContent}`, group: 'context'});
 		if (state.stateIndex >= 0) descriptors.push({key: 'state', label: `Crosses: ${CORE.states[state.stateIndex]}`, group: 'context'});
+		if (state.regionBox) descriptors.push({key: 'region-box', label: regionBoxLabel(), group: 'context'});
 		if (state.search) descriptors.push({key: 'search', label: `${exactSearchIndex == null ? 'Search' : 'Opened'}: ${state.search}`, group: 'context'});
 		return descriptors;
 	}
@@ -1377,6 +1403,7 @@
 	}
 
 	function updateFilterReadout() {
+		syncRegionControls();
 		$('#mlaResultCount').textContent = `${fmt(state.active.length)} of ${fmt(CORE.tracks.length)} systems`;
 		const descriptors = activeFilterDescriptors();
 		$('#mlaActiveFilters').innerHTML = descriptors.map(item => `<button class="mla-chip mla-filter-chip" type="button" data-clear-filter="${esc(item.key)}" aria-label="Remove ${esc(item.label)} filter">${esc(item.label)}<span aria-hidden="true">×</span></button>`).join('');
@@ -1541,6 +1568,8 @@
 		state.mjo = 'all';
 		state.enso = 'all';
 		state.stateIndex = -1;
+		state.regionBox = null;
+		setRegionDrawing(false);
 		state.stateMin = 0;
 		state.search = '';
 		state.stateFill = 'none';
@@ -1758,6 +1787,7 @@
 	}
 
 	function activateTab(name, push) {
+		if (name !== 'explore' && regionDrawing) setRegionDrawing(false);
 		state.tab = name;
 		$$('[role="tab"]').forEach(button => {
 			const selected = button.dataset.tab === name;
@@ -1811,6 +1841,7 @@
 		if (state.mjo !== 'all') parameters.set('mjo', state.mjo);
 		if (state.enso !== 'all') parameters.set('enso', state.enso);
 		if (state.stateIndex >= 0) parameters.set('over', CORE.state_slugs[state.stateIndex]);
+		if (state.regionBox) parameters.set('box', state.regionBox.join(','));
 		if (state.search) parameters.set('q', state.search);
 		if (state.mapLayer !== 'auto') parameters.set('layer', state.mapLayer);
 		if (state.trackSource !== 'era5') parameters.set('analysis', state.trackSource);
@@ -1860,6 +1891,8 @@
 
 	function readUrl() {
 		const parameters = new URLSearchParams(window.location.search);
+		const requestedBox = (parameters.get('box') || '').split(',').map(Number);
+		state.regionBox = window.LPSAtlasRegions.validBox(requestedBox) ? requestedBox : null;
 		const validTabs = new Set(['explore', 'forecast', 'climatology', 'extremes', 'data']);
 		if (ensureAtlasConfig().climateChangeBase) validTabs.add('climate-change');
 		if (validTabs.has(parameters.get('tab'))) state.tab = parameters.get('tab');
@@ -2983,6 +3016,7 @@
 
 	function drawMapOverlay() {
 		const drawing = setupCanvas('mlaMapOverlay');
+		drawRegionBox(drawing.context, drawing.projection);
 		const selectedOnly = effectiveLayer() === 'none';
 		if (!selectedOnly && state.hovered != null && state.hovered !== state.selected && state.activeBit[state.hovered]) strokeTrack(drawing.context, drawing.projection, state.hovered, css('--mla-madder', '#aa3d2d'), 2.5);
 		if (state.selected != null) {
@@ -3038,6 +3072,58 @@
 		state.mapCenterLon = (bounds.lonMin + bounds.lonMax) / 2;
 		state.mapCenterLat = (bounds.latMin + bounds.latMax) / 2;
 		mapScheduler.invalidate(MAP_DIRTY.ALL);
+	}
+
+	function syncRegionControls() {
+		$('#mlaSelectRegion').setAttribute('aria-pressed', String(regionDrawing));
+		$('#mlaClearRegion').hidden = !state.regionBox;
+		$('#mlaClearRegion').title = regionBoxLabel();
+		$('#mlaMapOverlay').classList.toggle('is-selecting-region', regionDrawing);
+	}
+
+	function setRegionDrawing(enabled) {
+		regionDrawing = enabled;
+		regionDraft = null;
+		regionKeyboardCursor = null;
+		state.hovered = null;
+		pendingPointer = null;
+		$('#mlaMapTip').dataset.visible = 'false';
+		syncRegionControls();
+		mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
+	}
+
+	function boxBetween(first, second) {
+		return [Math.min(first[1], second[1]), Math.min(first[0], second[0]), Math.max(first[1], second[1]), Math.max(first[0], second[0])].map(value => Math.round(value * 100) / 100);
+	}
+
+	function commitRegionBox(first, second) {
+		const box = boxBetween(first, second);
+		if (!window.LPSAtlasRegions.validBox(box)) return false;
+		state.regionBox = box;
+		setRegionDrawing(false);
+		applyFilters({noAutoFit: true});
+		return true;
+	}
+
+	function drawRegionBox(context, projection) {
+		const box = regionDraft ? boxBetween(regionDraft.start, regionDraft.end) : state.regionBox;
+		context.save();
+		context.strokeStyle = css('--mla-indigo-deep', '#17294f');
+		context.lineWidth = 2;
+		if (box) {
+			const a = projection.project(box[3], box[0]), b = projection.project(box[1], box[2]);
+			context.fillStyle = 'rgba(35, 63, 120, .07)';
+			context.fillRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+			if (regionDraft) context.setLineDash([5, 4]);
+			context.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+		}
+		if (regionDrawing && regionKeyboardCursor) {
+			const point = projection.project(...regionKeyboardCursor);
+			context.setLineDash([]);
+			context.beginPath(); context.moveTo(point[0] - 7, point[1]); context.lineTo(point[0] + 7, point[1]);
+			context.moveTo(point[0], point[1] - 7); context.lineTo(point[0], point[1] + 7); context.stroke();
+		}
+		context.restore();
 	}
 
 	const scheduleMapUrl = debounce(() => writeUrl('replace'), 180);
@@ -3245,9 +3331,15 @@
 	function bindMap() {
 		const canvas = $('#mlaMapOverlay');
 		const pointers = new Map();
+		const regionPointers = new Set();
 		let drag = null;
 		let pinch = null;
 		let suppressTap = false;
+		function regionPoint(event) {
+			const rectangle = canvas.getBoundingClientRect();
+			const point = mapProjection(rectangle.width, rectangle.height).invert(clamp(event.clientX - rectangle.left, 0, rectangle.width), clamp(event.clientY - rectangle.top, 0, rectangle.height));
+			return [clamp(point[0], -90, 90), clamp(point[1], -180, 180)];
+		}
 		function pinchMetrics() {
 			const points = [...pointers.values()].slice(0, 2);
 			if (points.length < 2) return null;
@@ -3258,6 +3350,16 @@
 			};
 		}
 		canvas.addEventListener('pointerdown', event => {
+			if (regionDrawing) {
+				if (event.button !== 0 && event.pointerType !== 'touch') return;
+				event.preventDefault();
+				regionPointers.add(event.pointerId);
+				if (!regionDraft || regionDraft.keyboard) regionDraft = {start: regionPoint(event), end: regionPoint(event), pointerId: event.pointerId, x: event.clientX, y: event.clientY};
+				regionKeyboardCursor = null;
+				canvas.setPointerCapture(event.pointerId);
+				mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
+				return;
+			}
 			pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
 			if (pointers.size === 1) drag = {x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false};
 			if (pointers.size === 2) {
@@ -3269,6 +3371,13 @@
 			if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
 		});
 		canvas.addEventListener('pointermove', event => {
+			if (regionDrawing || regionPointers.has(event.pointerId)) {
+				if (regionDrawing && regionDraft && regionDraft.pointerId === event.pointerId) {
+					regionDraft.end = regionPoint(event);
+					mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
+				}
+				return;
+			}
 			if (pointers.has(event.pointerId)) pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
 			if (pinch && pointers.size >= 2) {
 				event.preventDefault();
@@ -3301,6 +3410,17 @@
 			});
 		});
 		canvas.addEventListener('pointerup', event => {
+			if (regionPointers.delete(event.pointerId)) {
+				const draft = regionDraft;
+				if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+				if (draft && draft.pointerId === event.pointerId) {
+					regionDraft = null;
+					if (Math.abs(event.clientX - draft.x) >= 3 && Math.abs(event.clientY - draft.y) >= 3) commitRegionBox(draft.start, regionPoint(event));
+					mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
+				}
+				return;
+			}
+			if (regionDrawing) return;
 			const wasPinching = Boolean(pinch);
 			const moved = drag && drag.moved;
 			pointers.delete(event.pointerId);
@@ -3333,6 +3453,11 @@
 			} else if (index >= 0) selectTrack(index);
 		});
 		canvas.addEventListener('pointercancel', event => {
+			if (regionPointers.delete(event.pointerId)) {
+				regionDraft = null;
+				mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
+				return;
+			}
 			pointers.delete(event.pointerId);
 			drag = null;
 			pinch = null;
@@ -3341,17 +3466,56 @@
 		canvas.addEventListener('pointerleave', () => { if (!drag) { state.hovered = null; $('#mlaMapTip').dataset.visible = 'false'; mapScheduler.invalidate(MAP_DIRTY.OVERLAY); } });
 		canvas.addEventListener('wheel', event => {
 			event.preventDefault();
+			if (regionDraft) return;
 			const rectangle = canvas.getBoundingClientRect();
 			setMapZoom(state.mapZoom * (event.deltaY < 0 ? 1.22 : 1 / 1.22), event.clientX - rectangle.left, event.clientY - rectangle.top);
 		}, {passive: false});
 		canvas.addEventListener('dblclick', event => {
 			event.preventDefault();
+			if (regionDrawing || regionPointers.size) return;
 			const rectangle = canvas.getBoundingClientRect();
 			setMapZoom(state.mapZoom * 1.65, event.clientX - rectangle.left, event.clientY - rectangle.top, {immediateUrl: true});
 		});
 		$('#mlaZoomIn').addEventListener('click', () => setMapZoom(state.mapZoom * 1.35));
 		$('#mlaZoomOut').addEventListener('click', () => setMapZoom(state.mapZoom / 1.35));
 		$('#mlaZoomReset').addEventListener('click', () => { resetMapView(); writeUrl('replace'); });
+		$('#mlaSelectRegion').addEventListener('click', () => {
+			setRegionDrawing(!regionDrawing);
+			if (regionDrawing) {
+				canvas.focus({preventScroll: true});
+				toast('Drag a box to filter passing tracks. Or use arrow keys and Enter for each corner; Esc cancels.');
+			}
+		});
+		$('#mlaClearRegion').addEventListener('click', () => {
+			clearFilter('region-box');
+			applyFilters({noAutoFit: true});
+		});
+		canvas.addEventListener('keydown', event => {
+			if (!regionDrawing) return;
+			if (event.key === 'Escape') { event.preventDefault(); setRegionDrawing(false); $('#mlaSelectRegion').focus(); return; }
+			if (regionPointers.size) return;
+			if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', ' '].includes(event.key)) return;
+			event.preventDefault();
+			const rectangle = canvas.getBoundingClientRect();
+			const projection = mapProjection(rectangle.width, rectangle.height);
+			const point = regionKeyboardCursor ? projection.project(...regionKeyboardCursor) : [rectangle.width / 2, rectangle.height / 2];
+			const step = event.shiftKey ? 40 : 10;
+			if (event.key === 'ArrowLeft') point[0] -= step;
+			if (event.key === 'ArrowRight') point[0] += step;
+			if (event.key === 'ArrowUp') point[1] -= step;
+			if (event.key === 'ArrowDown') point[1] += step;
+			regionKeyboardCursor = projection.invert(clamp(point[0], 0, rectangle.width), clamp(point[1], 0, rectangle.height));
+			regionKeyboardCursor = [clamp(regionKeyboardCursor[0], -90, 90), clamp(regionKeyboardCursor[1], -180, 180)];
+			if (regionDraft && regionDraft.keyboard) regionDraft.end = [...regionKeyboardCursor];
+			if (event.key === 'Enter' || event.key === ' ') {
+				if (regionDraft && regionDraft.keyboard) commitRegionBox(regionDraft.start, regionKeyboardCursor);
+				else regionDraft = {start: [...regionKeyboardCursor], end: [...regionKeyboardCursor], keyboard: true};
+			}
+			mapScheduler.invalidate(MAP_DIRTY.OVERLAY);
+		});
+		root.addEventListener('keydown', event => {
+			if (event.key === 'Escape' && regionDrawing) { event.preventDefault(); setRegionDrawing(false); }
+		});
 		new ResizeObserver(() => mapScheduler.invalidate(MAP_DIRTY.ALL)).observe($('#mlaMapStack'));
 	}
 
@@ -5416,6 +5580,7 @@
 				mjo_rmm_phase_at_genesis: state.mjo === 'all' ? null : Number(state.mjo),
 				enso_category_at_genesis: state.enso === 'all' ? null : Number(state.enso),
 				track_crosses_state: state.stateIndex < 0 ? null : CORE.state_slugs[state.stateIndex],
+				track_passes_box: state.regionBox ? {west: state.regionBox[0], south: state.regionBox[1], east: state.regionBox[2], north: state.regionBox[3], definition: 'ERA5 track intersects the box at any point in its lifetime; recorded track gaps are excluded'} : null,
 				search: state.search || null
 			},
 			view: {map_layer: state.mapLayer, track_analysis: state.trackSource, map_colour: state.mapColour, state_fill: state.stateFill, state_outlines: state.stateOutlines, matched_ibtracs_overlay: state.ibtracsOverlay, weather_field: state.weatherLayer, show_subset_tracks_with_weather: state.weatherTracks, evolution_metric: state.evolutionMetric, subset_profile_metrics: PROFILE_METRIC_KEYS.filter(key => state.profileMetrics.has(key))},

@@ -1815,6 +1815,7 @@
 		return geography?.states?.find(s => s.id === id)?.name || ({northwest:'Northwest',north_central:'North-central',east:'East',northeast:'Northeast',west_coast:'West coast',south_peninsula:'South peninsula'})[id] || id.replaceAll('_',' ');
 	}
 	function populateInteractiveControls() {
+		$('#mlaClimateResetExploration').disabled = false;
 		const region = $('#mlaClimateRegion');
 		const opts = [['all','Whole domain'],['box','Draw / enter a box'],...Object.keys(subsets.regions).map(id=>[id,regionLabel(id)]),...(geography?.states || []).map(s=>[s.id,s.name || s.id.replaceAll('_',' ')])];
 		region.innerHTML = opts.map(([id,label])=>`<option value="${esc(id)}">${esc(label)}</option>`).join('');
@@ -1839,6 +1840,7 @@
 			actions.innerHTML='<button type="button" class="mla-btn mla-btn-small" data-climate-map-action="in" aria-label="Zoom climate maps in">+</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="out" aria-label="Zoom climate maps out">−</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="reset">Reset view</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="pan" aria-pressed="true">Pan / pick state</button><button type="button" class="mla-btn mla-btn-small" data-climate-map-action="box" aria-pressed="false">Select box</button>';
 			$('#mlaClimateDensityGrid').before(actions);
 		}
+		for (const button of panel.querySelectorAll('[data-climate-map-action="pan"], [data-climate-map-action="box"]')) button.setAttribute('aria-pressed', String(button.dataset.climateMapAction === mapMode));
 	}
 
 	async function applyInteractive() {
@@ -2179,6 +2181,13 @@
 	});
 	$('#mlaClimateRegion').addEventListener('change',()=>{$('#mlaClimateBoxFields').hidden=$('#mlaClimateRegion').value!=='box';});
 	$('#mlaClimateResetSubset').addEventListener('click',()=>{Object.assign(state,{models:[],focus:'',region:'all',month:0,category:1,location:'passage'});void applyInteractive();});
+	$('#mlaClimateResetExploration').addEventListener('click', () => {
+		Object.assign(state, structuredClone(interactiveDefaults));
+		mapMode = 'pan';
+		mapDrag = null;
+		if (tooltip) tooltip.hidden = true;
+		void applyInteractive();
+	});
 	for(const [id,key] of [['ScatterX','scatterX'],['ScatterY','scatterY'],['ScatterMode','scatterMode'],['ScatterIntervals','scatterIntervals']])$(`#mlaClimate${id}`).addEventListener('change',event=>{state[key]=event.target.value;writeState();render();});
 
 	function mapPoint(event,frame) {const rect=event.target.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,p=frame.plot,b=frame.bounds;return [b.west+(x-p.left)/(p.right-p.left)*(b.east-b.west),b.north-(y-p.top)/(p.bottom-p.top)*(b.north-b.south)];}

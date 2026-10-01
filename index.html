@@ -286,6 +286,7 @@
 #mlaMapWeather { pointer-events: none; }
 #mlaMapOverlay { cursor: grab; touch-action: none; }
 #mlaMapOverlay.is-dragging { cursor: grabbing; }
+#mlaMapOverlay.is-selecting-region { cursor: crosshair; }
 .mla-map-tip {
 	position: absolute;
 	z-index: 8;
@@ -1012,13 +1013,14 @@
 							<label class="mla-map-toggle" for="mlaStateOutlines"><input id="mlaStateOutlines" type="checkbox" checked> State outlines</label>
 							<label class="mla-map-toggle" for="mlaIbtracsOverlay"><input id="mlaIbtracsOverlay" type="checkbox" checked> Dashed matched IBTrACS track</label>
 							<div class="mla-map-nav-buttons" role="group" aria-label="Map view controls"><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomOut" type="button" aria-label="Zoom out">−</button><button class="mla-btn mla-btn-small" id="mlaZoomReset" type="button">Reset view</button><button class="mla-btn mla-btn-small" id="mlaFitCohort" type="button">Fit subset</button><button class="mla-btn mla-btn-icon mla-btn-small" id="mlaZoomIn" type="button" aria-label="Zoom in">+</button></div>
+							<div class="mla-map-nav-buttons" role="group" aria-label="Region selection"><button class="mla-btn mla-btn-small" id="mlaSelectRegion" type="button" aria-pressed="false" aria-controls="mlaMapOverlay" title="Draw a box to keep tracks passing through it">Select box</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClearRegion" type="button" hidden>Clear box</button></div>
 						</div>
 					</div>
 					<div class="mla-map-stack" id="mlaMapStack">
 						<canvas class="mla-map-layer" id="mlaMapBase" aria-hidden="true"></canvas>
 						<canvas class="mla-map-layer" id="mlaMapWeather" aria-hidden="true"></canvas>
 						<canvas class="mla-map-layer" id="mlaMapData" aria-hidden="true"></canvas>
-						<canvas class="mla-map-layer" id="mlaMapOverlay" role="img" aria-describedby="mlaMapDescription">Interactive map of filtered atlas tracks. Use the systems table for a keyboard-accessible alternative.</canvas>
+						<canvas class="mla-map-layer" id="mlaMapOverlay" role="img" tabindex="0" aria-describedby="mlaMapDescription mlaRegionInstructions">Interactive map of filtered atlas tracks. Use the systems table for a keyboard-accessible alternative.</canvas>
 						<div class="mla-map-tip" id="mlaMapTip" role="tooltip"></div>
 					</div>
 					<div class="mla-time-controls" id="mlaTimeControls" hidden>
@@ -1031,6 +1033,7 @@
 						<button class="mla-btn mla-btn-small" id="mlaRetryWeather" type="button" hidden>Retry weather field</button></div>
 					</div>
 					<p class="mla-sr-only" id="mlaMapDescription">The map shows the current filtered subset. Density counts each track at most once per half-degree cell. Individual systems use a uniform track style throughout.</p>
+					<p class="mla-sr-only" id="mlaRegionInstructions">Select box filters systems whose ERA5 track passes through a drawn region at any point in its lifetime. Drag between two corners, or use arrow keys and Enter to choose each corner; Shift moves faster and Escape cancels. Clear box removes only the region filter.</p>
 					<div class="mla-map-foot">
 						<span class="mla-sr-only" id="mlaMapStatus">Preparing map…</span>
 						<span class="mla-legend" id="mlaMapLegend"></span>
@@ -1088,7 +1091,7 @@
 				<label class="mla-field" for="mlaClimateDataset"><span class="mla-label">Dataset</span><select class="mla-select" id="mlaClimateDataset"></select></label>
 				<label class="mla-field" for="mlaClimateSeason"><span class="mla-label">Genesis season</span><select class="mla-select" id="mlaClimateSeason"><option value="jjas">JJAS</option><option value="all">All months</option><option value="mam">MAM</option><option value="ond">OND</option><option value="djf">DJF</option></select></label>
 				<label class="mla-field" for="mlaClimateMetric" id="mlaClimateMetricField"><span class="mla-label">Measure</span><select class="mla-select" id="mlaClimateMetric"></select></label>
-				<div class="mla-climate-control-meta"><div class="mla-climate-control-summary"><span class="mla-badge" data-tone="review" id="mlaClimateScope">Research preview</span><span class="mla-climate-metric-note" id="mlaClimateMetricNote"></span></div><div class="mla-climate-control-actions"><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateCopyLink" type="button">Copy link</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateDownloadCsv" type="button">Download CSV</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateSavePng" type="button">Save figure</button></div></div>
+				<div class="mla-climate-control-meta"><div class="mla-climate-control-summary"><span class="mla-badge" data-tone="review" id="mlaClimateScope">Research preview</span><span class="mla-climate-metric-note" id="mlaClimateMetricNote"></span></div><div class="mla-climate-control-actions"><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateResetExploration" type="button" title="Reset interactive filters, highlights, plot axes and map zoom; keep the current scenario and comparison" disabled>Reset exploration</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateCopyLink" type="button">Copy link</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateDownloadCsv" type="button">Download CSV</button><button class="mla-btn mla-btn-small mla-btn-quiet" id="mlaClimateSavePng" type="button">Save figure</button></div></div>
 			</section>
 			<details class="mla-card mla-climate-explore" id="mlaClimateExploreControls"><summary>Models &amp; track subset <span id="mlaClimateSubsetSummary"></span></summary>
 				<div id="mlaClimateModels" class="mla-climate-models" role="group" aria-label="Models included in comparisons"></div>
@@ -1185,10 +1188,11 @@
 
 <script id="mla-data-config" type="application/json">{"core":"assets/atlas-core.cefb51e2bde1.json.gz","detail":"assets/atlas-detail.4ca0b5c25000.json.gz","analysisSeries":"assets/atlas-analysis-series.c5ee5001daff.json.gz","climate":"assets/atlas-climate.952af82d2fff.json.gz","sections":"assets/atlas-sections.fb73f87d4d7a.json.gz","soiBoundary":"assets/atlas-soi-boundary.e28329742973.json.gz","climateChangeBase":"climate-change","geoCountryEndpoint":"https://api.country.is/","visitCounter":{"endpoint":"https://counterapi.com/api/kieranmrhunt.github.io/view/monsoon-low-atlas?startNumber=1000","productionHost":"kieranmrhunt.github.io"},"zenodo":"https://doi.org/10.5281/zenodo.22078693","weatherBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-weather-v5.6-r1","compositeBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-composites-v5.6-r1","forecastBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-forecasts-v1","reanalysisBase":"https://gws-access.jasmin.ac.uk/public/incompass/kieran/track_data/LPS/atlas-reanalyses-v1","weatherFormat":"webm","weatherFps":6,"weatherBounds":{"vorticity":[49.875,-5.875,109.875,40.125],"precipitation":[49.875,-5.875,109.875,40.125],"rh500":[49.875,-5.875,109.875,40.125]}}</script>
 
-<script src="assets/atlas-app.84fb7b3da7d0.js"></script>
+<script src="assets/atlas-regions.js?v=f999c3e0af09"></script>
+<script src="assets/atlas-app.c47c3ac17a98.js"></script>
 <script src="assets/forecast-app.8465188fea1a.js"></script>
 <script src="assets/climate-subsets.js?v=bc50c058d2e6"></script>
-<script src="assets/climate-change-app.26f013cb6156.js"></script>
+<script src="assets/climate-change-app.1b8e415cb9d5.js"></script>
 
 </body>
 </html>
