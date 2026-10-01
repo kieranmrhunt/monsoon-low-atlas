@@ -24,7 +24,7 @@
 		'tigge-ncep': '#e41a1c', 'tigge-ncmrwf': '#ff7f00', 'tigge-ukmo': '#795548'
 	};
 	const ANALYSIS_TRACKS = Object.freeze({
-		era5: {label: 'ERA5', colour: '#000000', detail: 'v5.6 track'},
+		era5: {label: 'ERA5', colour: '#000000', detail: 'all active systems'},
 		merra2: {label: 'MERRA-2', colour: '#c51b7d', detail: 'all active systems'},
 		imdaa: {label: 'IMDAA', colour: '#008c95', detail: 'all active systems'},
 		jra55: {label: 'JRA-55', colour: '#e66101', detail: 'all active systems'},
@@ -60,11 +60,11 @@
 		selectedSystem: null, selectedGroupKeys: new Set(), hoveredSystemKey: '', isolateSystem: false, initialization: typeof storedPreferences.initialization === 'string' ? storedPreferences.initialization : 'latest',
 		archiveDate: /^\d{4}-\d{2}-\d{2}$/.test(storedPreferences.archiveDate || '') ? storedPreferences.archiveDate : DEFAULT_ARCHIVE_DATE,
 		archiveHour: ['00', '06', '12', '18'].includes(storedPreferences.archiveHour) ? storedPreferences.archiveHour : '00', archiveMonth: '', archiveEntry: null,
-		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(),
+		archiveSelected: new Set(), archivePayloads: new Map(), archiveLoads: new Map(), archiveTimelineTarget: null,
 		leadIndex: 0, timelineTimes: [], weather: 'none', weatherModel: '', showMembers: Boolean(storedPreferences.showMembers), analysisSources: new Set(storedAnalyses),
 		mapZoom: DEFAULT_MAP.zoom, mapCenterLon: DEFAULT_MAP.longitude,
 		mapCenterLat: DEFAULT_MAP.latitude,
-		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0, atlasContextTrack: null,
+		initialised: false, loading: false, weatherCache: new Map(), loadSerial: 0, atlasContextTrack: null, era5Catalogue: null,
 		renderSerial: 0, archiveSearchTimer: 0, archiveAvailability: null,
 		requestedArchiveRuns: null, requestedSystem: null, requestedValidTime: null,
 		verificationSummary: null, verificationLoad: null,
@@ -128,7 +128,7 @@
 			const query = $('#mlaForecastArchiveSearch').value.trim();
 			if (query) url.searchParams.set('fquery', query);
 			const selectedRuns = state.archiveSelected.size ? state.archiveSelected : state.requestedArchiveRuns;
-			if (selectedRuns && selectedRuns.size) url.searchParams.set('fruns', [...selectedRuns].sort().join(','));
+			url.searchParams.set('fruns', selectedRuns && selectedRuns.size ? [...selectedRuns].sort().join(',') : 'none');
 		}
 		const selectedSystem = state.selectedSystem || state.requestedSystem;
 		if (selectedSystem) url.searchParams.set('fsystem', `${selectedSystem.runKey}~${selectedSystem.systemId}`);
@@ -274,7 +274,6 @@
 	async function initialiseReanalysisTracks() {
 		try {
 			await ensureReanalysisManifest();
-			if (state.mode === 'archive') configureTimeline(Boolean(displayEntries().length), archiveTargetTime());
 			await ensureArchiveNativeReanalyses();
 			if (state.mode === 'archive') {
 				populateArchiveTimeControls();
@@ -570,7 +569,52 @@
 
 	async function loadGeography() {
 		const core = await fetchGzipJson(config.core);
+		state.era5Catalogue = indexEra5Catalogue(core);
 		return core.geo;
+	}
+
+	function indexEra5Catalogue(core) {
+		const fields = Object.fromEntries(core.track_fields.map((field, index) => [field, index]));
+		const tracksByDay = new Map();
+		for (let index = 0; index < core.tracks.length; index++) {
+			const row = core.tracks[index];
+			const track = {id: String(row[fields.id]), start: Number(row[fields.start_ms]), end: Number(row[fields.end_ms]), path: core.paths[index], points: null};
+			for (let day = Math.floor(track.start / (24 * HOUR_MS)); day <= Math.floor(track.end / (24 * HOUR_MS)); day++) {
+				if (!tracksByDay.has(day)) tracksByDay.set(day, []);
+				tracksByDay.get(day).push(track);
+			}
+		}
+		return {start: Date.parse(core.meta.coverage_start), end: Date.parse(core.meta.coverage_end), tracksByDay};
+	}
+
+	function era5CatalogueAvailable(timeMs) {
+		const catalogue = state.era5Catalogue;
+		return Boolean(catalogue && Number.isFinite(timeMs) && timeMs >= catalogue.start && timeMs <= catalogue.end);
+	}
+
+	function era5CatalogueTracksOnDay(timeMs) {
+		return era5CatalogueAvailable(timeMs) ? state.era5Catalogue.tracksByDay.get(Math.floor(timeMs / (24 * HOUR_MS))) || [] : [];
+	}
+
+	function era5CataloguePoints(track) {
+		if (track.points) return track.points;
+		let index = 0, latitude = 0, longitude = 0;
+		const points = [], encoded = track.path;
+		function delta() {
+			let result = 0, shift = 0, item;
+			do {
+				item = encoded.charCodeAt(index++) - 63;
+				result |= (item & 31) << shift;
+				shift += 5;
+			} while (item >= 32 && index <= encoded.length);
+			return result & 1 ? ~(result >> 1) : result >> 1;
+		}
+		while (index < encoded.length) {
+			latitude += delta(); longitude += delta();
+			points.push([track.start / HOUR_MS + points.length, longitude / 10000, latitude / 10000]);
+		}
+		track.points = points;
+		return points;
 	}
 
 	function preferredModel() {
@@ -702,7 +746,16 @@
 	}
 
 	function archiveMonths() {
-		return [...new Set([...archiveAvailability().keys()].map(date => date.slice(0, 7)))].sort();
+		const months = new Set([...archiveAvailability().keys()].map(date => date.slice(0, 7)));
+		if (state.era5Catalogue) {
+			const date = new Date(state.era5Catalogue.start);
+			date.setUTCDate(1);
+			while (date.getTime() <= state.era5Catalogue.end) {
+				months.add(date.toISOString().slice(0, 7));
+				date.setUTCMonth(date.getUTCMonth() + 1);
+			}
+		}
+		return [...months].sort();
 	}
 
 	function archiveMonthLabel(value) {
@@ -758,13 +811,15 @@
 		for (let day = 1; day <= days; day += 1) {
 			const date = `${state.archiveMonth}-${String(day).padStart(2, '0')}`;
 			const slots = availability.get(date) || new Map();
-			const available = slots.size > 0;
+			const analysisAvailable = era5CatalogueAvailable(Date.parse(`${date}T00:00:00Z`));
+			const available = slots.size > 0 || analysisAvailable;
 			const dayModels = new Set();
 			for (const slot of slots.values()) for (const model of slot.models) dayModels.add(model);
 			const orderedModels = archiveModelOrder(dayModels);
-			const details = orderedModels.length
+			let details = orderedModels.length
 				? orderedModels.map(modelId => modelDefinition(modelId).label).join(', ')
 				: 'No processed models';
+			if (analysisAvailable) details += ` · ERA5: ${era5CatalogueTracksOnDay(Date.parse(`${date}T00:00:00Z`)).length} systems active on this date`;
 			const bars = orderedModels.map(modelId => {
 				const model = modelDefinition(modelId);
 				return `<i style="--calendar-model-colour:${esc(modelTrackColour(modelId, model.colour))}" title="${esc(model.label)}" aria-hidden="true"></i>`;
@@ -899,6 +954,10 @@
 		const entries = archiveEntries();
 		const starts = entries.map(entry => String(entry.valid_start_utc || entry.cycle_utc || '').slice(0, 10)).filter(Boolean);
 		const ends = entries.map(entry => String(entry.valid_end_utc || '').slice(0, 10)).filter(Boolean);
+		if (state.era5Catalogue) {
+			starts.push(new Date(state.era5Catalogue.start).toISOString().slice(0, 10));
+			ends.push(new Date(state.era5Catalogue.end).toISOString().slice(0, 10));
+		}
 		if (reanalysisManifest && reanalysisManifest.sources) for (const definition of Object.values(reanalysisManifest.sources)) {
 			if (definition && definition.status === 'ready' && definition.native_tracks) {
 				if (definition.coverage_start_utc) starts.push(String(definition.coverage_start_utc).slice(0, 10));
@@ -1054,20 +1113,16 @@
 			return `<section class="mla-forecast-matrix-group" style="--model-colour:${esc(modelColour)}"><div class="mla-forecast-matrix-model" title="${esc(version)}"><i aria-hidden="true"></i><span><strong>${esc(model.label)}</strong><small>${esc(version)}</small></span></div><div class="mla-forecast-matrix-cells">${cells}</div></section>`;
 		}).join('');
 		const available = entries.length;
-		const era5Available = atlasContextTrackActive(target) || entries.some(entry => entry.verification_status === 'matched' || (entry.verification_labels || []).length);
-		const verificationIds = new Set();
-		for (const entry of entries) {
-			for (const value of entry.verification_track_ids || []) verificationIds.add(String(value));
-			const payload = state.archivePayloads.get(payloadKey(entry.model, entry));
-			for (const track of (payload && payload.verification ? payload.verification.tracks : []) || []) verificationIds.add(String(track.id));
-		}
+		const era5Available = era5CatalogueAvailable(target);
+		const era5Count = era5CatalogueTracksOnDay(target).length;
 		const analysisTiles = Object.entries(ANALYSIS_TRACKS).map(([source, definition]) => {
 			const sourceAvailable = source === 'era5' ? era5Available : nativeReanalysisAvailable(source, target);
-			const availability = source === 'era5' ? 'No matched track' : reanalysisCoverageLabel(source);
+			const availability = source === 'era5' ? 'Outside catalogue coverage' : reanalysisCoverageLabel(source);
 			const title = sourceAvailable
-				? source === 'era5' ? 'Show or hide matched ERA5 verification tracks' : `Show or hide all ${definition.label} tracks active on this UTC date`
+				? `Show or hide all ${definition.label} tracks active on this UTC date`
 				: `No ${definition.label} analysis is available on this date · ${availability}`;
-			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(definition.detail) : esc(availability)}</small></button>`;
+			const detail = source === 'era5' ? `${era5Count} active system${era5Count === 1 ? '' : 's'}` : definition.detail;
+			return `<button class="mla-forecast-era5-tile" type="button" style="--analysis-colour:${definition.colour}" data-forecast-analysis-source="${source}" aria-pressed="${state.analysisSources.has(source) && sourceAvailable}" title="${esc(title)}" ${sourceAvailable ? '' : 'disabled'}><strong>${esc(definition.label)}</strong><small>${sourceAvailable ? esc(detail) : esc(availability)}</small></button>`;
 		}).join('');
 		const summary = available
 			? `${available} model–lead pair${available === 1 ? '' : 's'} available · ${selected} selected`
@@ -1093,6 +1148,8 @@
 		populateArchiveTimeControls();
 		const entries = filteredArchive();
 		const target = archiveTargetTime();
+		const targetChanged = target !== state.archiveTimelineTarget;
+		state.archiveTimelineTarget = target;
 		const maximumLead = Math.max(1, ...entries.map(entry => entryLeadAt(entry, target)).filter(Number.isFinite));
 		state.archiveColourIndexes = new Map();
 		const colourGroups = new Map();
@@ -1117,15 +1174,13 @@
 		if (selectionChanged) {
 			const remaining = displayEntries();
 			state.payload = remaining.length ? remaining[remaining.length - 1].payload : null;
-			configureTimeline(false, archiveTargetTime());
 			populateWeatherModels();
-			render();
 		}
 		const results = $('#mlaForecastArchiveResults');
 		results.innerHTML = archiveRunMatrix(entries);
 		const selected = loadFirst && !state.archiveSelected.size ? defaultArchiveEntry(entries) : null;
 		if (selected) loadArchive(selected);
-		else if (!state.archiveSelected.size) configureTimeline(false, target);
+		else if (!state.archiveSelected.size || targetChanged || selectionChanged) configureTimeline(!targetChanged, targetChanged ? target : undefined);
 		if (!entries.length) {
 			notice(noArchiveMatchMessage(), 'flag', false);
 			render();
@@ -1287,7 +1342,7 @@
 		const requested = state.requestedArchiveRuns;
 		if (!requested || !requested.size) {
 			state.requestedArchiveRuns = null;
-			populateArchive(true);
+			populateArchive(requested == null);
 			return;
 		}
 		const available = new Map(filteredArchive().map(entry => [payloadKey(entry.model, entry), entry]));
@@ -1363,7 +1418,7 @@
 	function analysisOnlyTimeline(target) {
 		if (state.mode === 'latest' || !Number.isFinite(target)) return [];
 		const available = (
-			state.analysisSources.has('era5') && atlasContextTrackActive(target)
+			state.analysisSources.has('era5') && era5CatalogueAvailable(target)
 		) || ALTERNATIVE_ANALYSIS_KEYS.some(source => state.analysisSources.has(source) && nativeReanalysisAvailable(source, target));
 		if (!available) return [];
 		const day = new Date(target);
@@ -2036,7 +2091,7 @@
 	}
 
 	function analysisTracksForDisplay(items, group, markerForItem) {
-		return state.isolateSystem ? closestAnalysisTrack(items, group, markerForItem) : items;
+		return state.isolateSystem && group ? closestAnalysisTrack(items, group, markerForItem) : items;
 	}
 
 	function groupReference(group) {
@@ -2208,6 +2263,10 @@
 	}
 
 	function era5AnalysisTracks(validTime) {
+		if (state.era5Catalogue) return era5CatalogueTracksOnDay(validTime).map(track => {
+			const points = era5CataloguePoints(track);
+			return {id: track.id, points, marker: validTime >= track.start && validTime <= track.end ? pointAtEpoch(points, validTime) : null};
+		});
 		const tracks = new Map();
 		for (const entry of displayEntries()) for (const track of (entry.payload.verification || {}).tracks || []) if (!tracks.has(String(track.id))) tracks.set(String(track.id), {
 			id: String(track.id),
@@ -2969,9 +3028,10 @@
 			: [];
 		if (state.isolateSystem) status.unshift('Focused system');
 		if (state.mode !== 'latest') for (const source of state.analysisSources) {
-			if (analysisCounts[source]) status.push(source === 'era5'
-				? `${analysisCounts[source]} ERA5 match${analysisCounts[source] === 1 ? '' : 'es'}`
-				: `${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} track${analysisCounts[source] === 1 ? '' : 's'}`);
+			if (analysisCounts[source]) status.push(`${analysisCounts[source]} ${ANALYSIS_TRACKS[source].label} track${analysisCounts[source] === 1 ? '' : 's'}`);
+			else if (source === 'era5' && era5CatalogueAvailable(currentValidTime() == null ? archiveTargetTime() : currentValidTime())) {
+				status.push(state.isolateSystem && selectedForecastGroup(systemGroups) ? 'No matching ERA5 system' : 'No ERA5 systems active on this date');
+			}
 			else if (source !== 'era5' && nativeReanalysisAvailable(source, currentValidTime() == null ? archiveTargetTime() : currentValidTime())) {
 				status.push(`No ${ANALYSIS_TRACKS[source].label} physical track active at this time`);
 			}
@@ -3379,7 +3439,7 @@
 		state.weather = ['none', 'vorticity', 'precipitation'].includes(parameters.get('fweather')) ? parameters.get('fweather') : 'none';
 		state.weatherModel = parameters.get('fweather_run') || '';
 		const runs = parameters.get('fruns');
-		state.requestedArchiveRuns = runs ? new Set(runs.split(',').filter(Boolean)) : null;
+		state.requestedArchiveRuns = runs === 'none' ? new Set() : runs ? new Set(runs.split(',').filter(Boolean)) : null;
 		const selected = parameters.get('fsystem') || '';
 		const separator = selected.lastIndexOf('~');
 		if (separator > 0 && separator < selected.length - 1) state.requestedSystem = {runKey: selected.slice(0, separator), systemId: selected.slice(separator + 1)};
