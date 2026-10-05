@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import xarray as xr
 
-from forecast_pipeline.dynamical_reader import cumulative_rain, read_member, regional_field, unit_factor
+from forecast_pipeline.dynamical_reader import cumulative_rain, read_member, regional_field, unit_factor, transient_read
 from forecast_pipeline.dynamical import AifsHybridAdapter, DynamicalAdapter, load_arrays
 from forecast_pipeline.plan_dynamical import planned_cycles
 from forecast_pipeline.forecast_core import GRID_LATS, GRID_LONS
@@ -41,6 +41,18 @@ def synthetic_groups(model="aifs"):
 
 
 class DynamicalTests(unittest.TestCase):
+    def test_throttled_reads_retry_but_invalid_data_does_not(self):
+        from unittest.mock import Mock
+        read = Mock(side_effect=[RuntimeError("SlowDown: reduce your request rate"), np.array([5.])])
+        with patch("forecast_pipeline.dynamical_reader.time.sleep") as sleep:
+            np.testing.assert_array_equal(transient_read(read), [5.])
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(sleep.call_count, 1)
+        read = Mock(side_effect=ValueError("missing precipitation"))
+        with self.assertRaisesRegex(ValueError, "missing precipitation"):
+            transient_read(read)
+        self.assertEqual(read.call_count, 1)
+
     def test_planner_excludes_pre_rainfall_aifs_and_reuses_complete_cycles(self):
         inventory = {"aifs": {"cycles": ["2024-07-12T00:00:00", "2025-02-24T00:00:00", "2025-02-24T06:00:00"], "steps": list(range(0, 361, 6))}}
         start, end = datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 12, 31, tzinfo=UTC)

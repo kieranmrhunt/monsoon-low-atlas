@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +26,25 @@ LEVELS = (850, 700, 500)
 # Required rainfall was added later than the nominal AIFS archive start.
 # https://dynamical.org/catalog/ecmwf-aifs-single-forecast-virtual/validation/
 TRACKABLE_START = {"aifs": "2025022406", "gefs-extended": "2020100100"}
+
+
+def transient_read(call, attempts=6):
+    """Retry the same field after provider throttling, never fill missing data."""
+    for attempt in range(attempts):
+        try:
+            return call()
+        except Exception as error:
+            message = str(error).lower()
+            transient = any(token in message for token in (
+                "slowdown", "too many requests", "toomanyrequests", "timed out",
+                "timeout", "connection reset", "temporarily unavailable",
+                "service unavailable", "status code: 503", "status code: 429",
+            ))
+            if not transient or attempt + 1 == attempts:
+                raise
+            delay = min(45, 2 ** (attempt + 1)) + random.uniform(0, 1)
+            logging.getLogger(__name__).warning("Transient provider read; retry %d/%d in %.1f s", attempt + 2, attempts, delay)
+            time.sleep(delay)
 
 
 def open_groups(model: str):
@@ -68,7 +90,7 @@ def regional_field(variable, selection: dict, lats: np.ndarray, lons: np.ndarray
     for name, expected in (("latitude", lats), ("longitude", lons)):
         if not np.allclose(selected[name].values, expected, atol=1e-5, rtol=0):
             raise ValueError(f"{name} does not align with the atlas grid")
-    return np.asarray(selected.transpose("latitude", "longitude").values, dtype=np.float32)
+    return transient_read(lambda: np.asarray(selected.transpose("latitude", "longitude").values, dtype=np.float32))
 
 
 def read_member(model: str, cycle: str, member: str, steps: list[int],
