@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -245,12 +246,113 @@ def checksum(path: Path) -> str:
     return digest.hexdigest()
 
 
+def multipart_metadata_valid(record: dict[str, Any]) -> bool:
+    """Authenticate the ordered part manifest against the ECDS checksum."""
+    parts = record.get("checksum_parts", [])
+    if not isinstance(parts, list) or not parts:
+        return False
+    if any(
+        not isinstance(part, dict)
+        or not isinstance(part.get("size"), int)
+        or part["size"] <= 0
+        or not re.fullmatch(r"[0-9a-f]{32}", str(part.get("md5", "")))
+        for part in parts
+    ):
+        return False
+    digest = hashlib.md5(usedforsecurity=False)
+    for part in parts:
+        digest.update(bytes.fromhex(part["md5"]))
+    expected = normalized_md5(record.get("checksum", ""))
+    return (
+        digest.hexdigest() == expected
+        and sum(part["size"] for part in parts) == int(record.get("size", 0))
+        and record.get("checksum_etag") == f"{expected}-{len(parts)}"
+    )
+
+
+def resolve_download_checksum(record: dict[str, Any], headers: Any) -> None:
+    """Retain strict byte verification for ECDS's S3 multipart ETags.
+
+    ECDS file:checksum contains the ETag's hash, without its -N suffix.
+    For multipart objects this is MD5(concatenated binary part MD5s), not
+    MD5(file). Discover the actual boundaries; never assume a part size.
+    https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html
+    """
+    etag = str(headers.get("ETag", "")).strip().strip('"').lower()
+    match = re.fullmatch(r"([0-9a-f]{1,32})-([1-9][0-9]*)", etag)
+    if not match:
+        # Existing single-part MD5 validation remains unchanged.
+        return
+    expected = normalized_md5(record.get("checksum", ""))
+    digest, count = normalized_md5(match[1]), int(match[2])
+    if digest != expected or count > 10000:
+        raise RuntimeError("ECDS result checksum and multipart download ETag disagree")
+    canonical_etag = f"{digest}-{count}"
+    if (
+        record.get("checksum_algorithm") == "s3-multipart-md5"
+        and record.get("checksum_etag") == canonical_etag
+        and multipart_metadata_valid(record)
+    ):
+        return
+
+    def inspect_part(number: int) -> dict[str, Any]:
+        with requests.head(
+            str(record["asset_url"]),
+            params={"partNumber": number},
+            timeout=(15, 60),
+        ) as response:
+            response.raise_for_status()
+            part_etag = str(response.headers.get("ETag", "")).strip().strip('"').lower()
+            size = int(response.headers.get("Content-Length", 0))
+            if (
+                int(response.headers.get("x-amz-mp-parts-count", 0)) != count
+                or size <= 0
+                or not re.fullmatch(r"[0-9a-f]{1,32}", part_etag)
+            ):
+                raise RuntimeError(f"ECDS multipart part {number} has invalid integrity metadata")
+            return {"size": size, "md5": normalized_md5(part_etag)}
+
+    with ThreadPoolExecutor(max_workers=min(8, count)) as executor:
+        parts = list(executor.map(inspect_part, range(1, count + 1)))
+    metadata = {
+        "checksum_algorithm": "s3-multipart-md5",
+        "checksum_etag": canonical_etag,
+        "checksum_parts": parts,
+    }
+    if not multipart_metadata_valid({**record, **metadata}):
+        raise RuntimeError("ECDS multipart part checksums or total size disagree with the result")
+    record.update(metadata)
+
+
+def multipart_file_valid(path: Path, record: dict[str, Any]) -> bool:
+    if not multipart_metadata_valid(record):
+        return False
+    with path.open("rb") as stream:
+        for part in record["checksum_parts"]:
+            remaining = part["size"]
+            digest = hashlib.md5(usedforsecurity=False)
+            while remaining:
+                chunk = stream.read(min(8 * 1024 * 1024, remaining))
+                if not chunk:
+                    return False
+                digest.update(chunk)
+                remaining -= len(chunk)
+            if digest.hexdigest() != part["md5"]:
+                return False
+        return not stream.read(1)
+
+
 def cached_result_valid(path: Path, record: dict[str, Any]) -> bool:
     if not path.is_file():
         return False
     expected_size = int(record.get("size", 0))
     expected_checksum = normalized_md5(record.get("checksum", ""))
     if expected_size and path.stat().st_size != expected_size:
+        return False
+    algorithm = record.get("checksum_algorithm", "md5")
+    if algorithm == "s3-multipart-md5":
+        return multipart_file_valid(path, record)
+    if algorithm != "md5":
         return False
     return not expected_checksum or checksum(path) == expected_checksum
 
@@ -271,6 +373,7 @@ def download_result(
                 str(record["asset_url"]), stream=True, timeout=(30, 300)
             ) as response:
                 response.raise_for_status()
+                resolve_download_checksum(record, response.headers)
                 with temporary.open("wb") as stream:
                     for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
                         if chunk:
@@ -282,8 +385,9 @@ def download_result(
                 actual_checksum = checksum(temporary) if expected_checksum else "not requested"
                 raise RuntimeError(
                     "Downloaded ECDS result failed QA "
-                    f"(size {actual_size}/{expected_size}; checksum "
-                    f"{actual_checksum}/{expected_checksum}): {target}"
+                    f"(size {actual_size}/{expected_size}; algorithm "
+                    f"{record.get('checksum_algorithm', 'md5')}; expected checksum "
+                    f"{expected_checksum}; whole-file MD5 {actual_checksum}): {target}"
                 )
             os.replace(temporary, target)
             return target
@@ -304,6 +408,20 @@ def atomic_write_json(path: Path, payload: Any) -> None:
         json.dump(payload, stream, indent=2, sort_keys=True)
         stream.write("\n")
     os.replace(temporary, path)
+
+
+def unresolved_errors(
+    records: Iterable[dict[str, Any]],
+    errors: Iterable[dict[str, str]],
+    ready: Iterable[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Keep one current error per job; a verified recovery resolves it."""
+    resolved = {
+        record["job_id"] for record in records
+        if record.get("published") or record.get("staged")
+    } | {record["job_id"] for record in ready}
+    latest = {error["job_id"]: error for error in errors if error["job_id"] not in resolved}
+    return sorted(latest.values(), key=lambda item: item["job_id"])
 
 
 def write_jobs(path: Path, records: Iterable[dict[str, Any]]) -> int:
@@ -491,7 +609,7 @@ def main() -> None:
         "recoverable": len(recoverable),
         "downloaded": len(ready),
         "records": records,
-        "errors": sorted(errors, key=lambda item: item["job_id"]),
+        "errors": unresolved_errors(records, errors, ready),
     }
     atomic_write_json(inventory_path, payload)
     count = write_jobs(jobs_path, ready)

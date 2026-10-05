@@ -4,25 +4,146 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from forecast_pipeline.recover_tigge_jobs import (
     cached_result_valid,
     cycle_from_request,
+    download_result,
     inspect_job,
     is_full_cycle_request,
     normalized_md5,
+    multipart_metadata_valid,
     recent_successful_jobs,
+    resolve_download_checksum,
     staged_cycle_complete,
+    unresolved_errors,
     write_jobs,
 )
 
 
 class TiggeRecoveryTests(unittest.TestCase):
+    @staticmethod
+    def multipart_fixture():
+        chunks = [b"GRIB-first-part", b"different-second-part", b"7777"]
+        parts = [
+            {"size": len(chunk), "md5": hashlib.md5(chunk, usedforsecurity=False).hexdigest()}
+            for chunk in chunks
+        ]
+        digest = hashlib.md5(b"".join(bytes.fromhex(p["md5"]) for p in parts), usedforsecurity=False).hexdigest()
+        record = {
+            "model": "tigge-ecmwf", "cycle": "2016070112",
+            "asset_url": "https://cache.invalid/result.grib",
+            "size": sum(p["size"] for p in parts), "checksum": digest,
+        }
+        return chunks, parts, record
+
+    @staticmethod
+    def response(headers, chunks=()):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = headers
+        response.iter_content.return_value = iter(chunks)
+        return response
+
+    def test_multipart_metadata_uses_actual_ordered_part_boundaries(self):
+        chunks, parts, record = self.multipart_fixture()
+        def head(url, *, params, timeout):
+            part = parts[params["partNumber"] - 1]
+            return self.response({"ETag": f'"{part["md5"]}"', "Content-Length": str(part["size"]), "x-amz-mp-parts-count": "3"})
+        with patch("forecast_pipeline.recover_tigge_jobs.requests.head", side_effect=head) as query:
+            resolve_download_checksum(record, {"ETag": f'"{record["checksum"]}-3"'})
+            self.assertEqual(query.call_count, 3)
+        self.assertEqual(record["checksum_parts"], parts)
+        self.assertTrue(multipart_metadata_valid(record))
+        # Offline revalidation checks all bytes, not just the response headers.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "all.grib"
+            content = b"".join(chunks)
+            path.write_bytes(content)
+            self.assertTrue(cached_result_valid(path, record))
+            for index in [0, len(chunks[0]), len(content)-1]:
+                damaged = bytearray(content); damaged[index] ^= 1
+                path.write_bytes(damaged)
+                self.assertFalse(cached_result_valid(path, record))
+            for damaged in [content[:-1], content+b"x"]:
+                path.write_bytes(damaged)
+                self.assertFalse(cached_result_valid(path, record))
+            path.write_bytes(content)
+            wrong = deepcopy(record); wrong["checksum_parts"][0]["size"] += 1; wrong["checksum_parts"][1]["size"] -= 1
+            self.assertFalse(cached_result_valid(path, wrong))
+            wrong = deepcopy(record); wrong["checksum_parts"].reverse()
+            self.assertFalse(cached_result_valid(path, wrong))
+        with patch("forecast_pipeline.recover_tigge_jobs.requests.head") as query:
+            resolve_download_checksum(record, {"ETag": f'"{record["checksum"]}-3"'})
+            query.assert_not_called()
+
+    def test_multipart_rejects_untrusted_or_incomplete_part_metadata(self):
+        _, parts, original = self.multipart_fixture()
+        for fault in ["etag", "size", "count", "multipart-part", "missing"]:
+            record = deepcopy(original)
+            def head(url, *, params, timeout):
+                part = parts[params["partNumber"] - 1]
+                headers = {"ETag": part["md5"], "Content-Length": str(part["size"]), "x-amz-mp-parts-count": "3"}
+                if fault == "etag": headers["ETag"] = "0"*32
+                if fault == "size": headers["Content-Length"] = str(part["size"]+1)
+                if fault == "count": headers["x-amz-mp-parts-count"] = "2"
+                if fault == "multipart-part": headers["ETag"] += "-3"
+                if fault == "missing": headers.pop("ETag")
+                return self.response(headers)
+            with self.subTest(fault=fault), patch("forecast_pipeline.recover_tigge_jobs.requests.head", side_effect=head):
+                with self.assertRaises(RuntimeError):
+                    resolve_download_checksum(record, {"ETag": f'"{record["checksum"]}-3"'})
+                self.assertNotIn("checksum_parts", record)
+        with self.assertRaises(RuntimeError):
+            resolve_download_checksum(original, {"ETag": '"'+'0'*32+'-3"'})
+
+    def test_multipart_download_checks_bytes_before_promotion(self):
+        chunks, parts, original = self.multipart_fixture()
+        def head(url, *, params, timeout):
+            part = parts[params["partNumber"] - 1]
+            return self.response({"ETag": part["md5"], "Content-Length": str(part["size"]), "x-amz-mp-parts-count": "3"})
+        for corrupt in [False, True]:
+            record = deepcopy(original); content = b"".join(chunks)
+            if corrupt: content = b"X" + content[1:]
+            # Transport chunks deliberately differ from object-store parts.
+            response = self.response({"ETag": f'"{record["checksum"]}-3"'}, [content[:3],content[3:]])
+            with tempfile.TemporaryDirectory() as directory, patch("forecast_pipeline.recover_tigge_jobs.requests.get",return_value=response), patch("forecast_pipeline.recover_tigge_jobs.requests.head",side_effect=head):
+                root = Path(directory)
+                if corrupt:
+                    with self.assertRaisesRegex(RuntimeError, "failed QA"):
+                        download_result(record, root, attempts=1)
+                    self.assertFalse(list(root.rglob("all.grib")))
+                else:
+                    target = download_result(record, root, attempts=1)
+                    self.assertTrue(cached_result_valid(target, record))
+                    self.assertEqual(target.read_bytes(), content)
+                self.assertFalse(list(root.rglob("*.part")))
+
+    def test_success_resolves_old_errors_and_failures_do_not_accumulate(self):
+        errors = [{"job_id":"a","message":"old"},{"job_id":"b","message":"old"},{"job_id":"b","message":"latest"},{"job_id":"c","message":"old"}]
+        self.assertEqual(unresolved_errors([{"job_id":"a","published":True}], errors, [{"job_id":"c"}]), [{"job_id":"b","message":"latest"}])
+
+    def test_single_part_md5_is_still_checked_and_unknown_algorithms_fail(self):
+        content = b"GRIB-result"
+        record = {"size": len(content), "checksum": hashlib.md5(content, usedforsecurity=False).hexdigest()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "all.grib"
+            path.write_bytes(content)
+            with patch("forecast_pipeline.recover_tigge_jobs.requests.head") as head:
+                resolve_download_checksum(record, {"ETag": f'"{record["checksum"]}"'})
+                head.assert_not_called()
+            self.assertTrue(cached_result_valid(path, record))
+            self.assertFalse(cached_result_valid(path, dict(record, checksum_algorithm="unknown")))
+            self.assertFalse(cached_result_valid(path, dict(record, checksum_algorithm="s3-multipart-md5")))
+            path.write_bytes(b"X" + content[1:])
+            self.assertFalse(cached_result_valid(path, record))
+
     def test_ecds_md5_is_left_padded_when_leading_zero_is_omitted(self) -> None:
         self.assertEqual(normalized_md5("abc"), "0" * 29 + "abc")
         self.assertEqual(normalized_md5(""), "")
