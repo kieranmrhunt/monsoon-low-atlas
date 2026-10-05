@@ -40,6 +40,14 @@ retains disposable regional inputs under `.forecast-runs/dynamical-inputs`;
 successful tracking removes its input cache. Public archives exclude internal
 tracking QA as before. `LPS_DYNAMICAL_INPUT_CACHE` can relocate the cache.
 
+Transient object-store throttling retries the same field with bounded backoff;
+it never substitutes a missing value. For Latest, coordinate presence alone
+is insufficient: an actual-field probe checks all GEFS members at +6, +390
+and +840 h. At least 22 of 31 must be present before the full build starts,
+matching the normal 70% ensemble publication gate. The full build still
+validates every required field and lead. An incomplete extension falls back
+to the previous complete daily initialization.
+
 ## Scheduling and publication
 
 ```bash

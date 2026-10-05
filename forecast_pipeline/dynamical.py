@@ -63,6 +63,7 @@ class DynamicalAdapter(EcmwfAdapter):
         BaseAdapter.__init__(self, workers=workers)
         self.definition = MODEL_DEFINITIONS[model]
         self._inventory = None
+        self._availability = {}
 
     def inventory(self):
         if self._inventory is None:
@@ -74,11 +75,20 @@ class DynamicalAdapter(EcmwfAdapter):
             return False
         inventory = self.inventory()
         cycles = {str(value)[:19] for value in inventory["cycles"]}
-        return (
+        metadata_ready = (
             cycle.replace(tzinfo=None).isoformat(timespec="seconds") in cycles
             and horizon in inventory["steps"]
             and set(LEVELS).issubset(inventory["pressure_levels"])
         )
+        if not metadata_ready:
+            return False
+        key = (cycle_id(cycle), horizon)
+        if key not in self._availability:
+            self._availability[key] = run_reader(
+                "--model", self.definition.id, "--cycle", key[0],
+                "--horizon", str(horizon), "--availability", timeout=300,
+            )
+        return bool(self._availability[key]["complete"])
 
     def resolve_available_cycle(self, requested: str):
         if requested != "latest":

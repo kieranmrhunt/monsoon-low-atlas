@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import xarray as xr
 
-from forecast_pipeline.dynamical_reader import cumulative_rain, read_member, regional_field, unit_factor, transient_read
+from forecast_pipeline.dynamical_reader import cumulative_rain, read_member, regional_field, unit_factor, transient_read, probe_availability
 from forecast_pipeline.dynamical import AifsHybridAdapter, DynamicalAdapter, load_arrays
 from forecast_pipeline.plan_dynamical import planned_cycles
 from forecast_pipeline.forecast_core import GRID_LATS, GRID_LONS
@@ -41,6 +41,13 @@ def synthetic_groups(model="aifs"):
 
 
 class DynamicalTests(unittest.TestCase):
+    def test_preallocated_but_empty_leads_are_not_available(self):
+        surface, _ = synthetic_groups()
+        self.assertTrue(probe_availability(surface, "aifs", "2025071200", 12)["complete"])
+        surface["pressure_reduced_to_mean_sea_level"].loc[{"lead_time": np.timedelta64(12, "h")}] = np.nan
+        self.assertFalse(probe_availability(surface, "aifs", "2025071200", 12)["complete"])
+        self.assertFalse(probe_availability(surface, "aifs", "2025071200", 360)["complete"])
+
     def test_throttled_reads_retry_but_invalid_data_does_not(self):
         from unittest.mock import Mock
         read = Mock(side_effect=[RuntimeError("SlowDown: reduce your request rate"), np.array([5.])])
@@ -157,10 +164,22 @@ class DynamicalTests(unittest.TestCase):
         adapter = DynamicalAdapter("gefs-extended")
         adapter._inventory = {"cycles": ["2026-10-01T00:00:00", "2026-10-05T00:00:00", "2026-10-06T00:00:00"],
                               "steps": list(range(0, 841, 6)), "pressure_levels": [850, 700, 500]}
-        with patch("forecast_pipeline.dynamical.utc_now", return_value=datetime(2026, 10, 5, 10, tzinfo=UTC)):
+        with patch("forecast_pipeline.dynamical.utc_now", return_value=datetime(2026, 10, 5, 10, tzinfo=UTC)), \
+                patch("forecast_pipeline.dynamical.run_reader", return_value={"complete": True}):
             cycle, steps = adapter.resolve_available_cycle("latest")
         self.assertEqual(cycle.strftime("%Y%m%d%H"), "2026100500")
         self.assertEqual(steps[-1], 840)
+
+    def test_latest_falls_back_past_incomplete_extension(self):
+        adapter = DynamicalAdapter("gefs-extended")
+        adapter._inventory = {"cycles": ["2026-10-04T00:00:00", "2026-10-05T00:00:00"],
+                              "steps": list(range(0, 841, 6)), "pressure_levels": [850, 700, 500]}
+        with patch("forecast_pipeline.dynamical.utc_now", return_value=datetime(2026, 10, 5, 10, tzinfo=UTC)), \
+                patch("forecast_pipeline.dynamical.run_reader", side_effect=[{"complete": False}, {"complete": True}]) as reader:
+            cycle, _ = adapter.resolve_available_cycle("latest")
+            self.assertTrue(adapter.cycle_complete(cycle, 840))
+        self.assertEqual(cycle.strftime("%Y%m%d%H"), "2026100400")
+        self.assertEqual(reader.call_count, 2, "reuse the actual-field probe within one update")
 
 
 if __name__ == "__main__":

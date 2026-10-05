@@ -93,6 +93,34 @@ def regional_field(variable, selection: dict, lats: np.ndarray, lons: np.ndarray
     return transient_read(lambda: np.asarray(selected.transpose("latitude", "longitude").values, dtype=np.float32))
 
 
+def probe_availability(surface, model: str, cycle: str, horizon: int) -> dict:
+    """Coordinates can be preallocated before all GEFS extension files arrive."""
+    steps = sorted({6, horizon} | ({390} if model == "gefs-extended" and horizon > 384 else set()))
+    members = list(range(31)) if model == "gefs-extended" else [None]
+    stamp = np.datetime64(datetime.strptime(cycle, "%Y%m%d%H"), "ns")
+    field = surface["pressure_reduced_to_mean_sea_level"]
+
+    def present(member):
+        for step in steps:
+            selection = {"init_time": stamp, "lead_time": np.timedelta64(step, "h")}
+            if member is not None:
+                selection["ensemble_member"] = member
+            try:
+                value = regional_field(field, selection, np.array([20.]), np.array([80.]))
+            except KeyError:
+                return False
+            if not np.isfinite(value).all():
+                return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=min(8, len(members))) as pool:
+        flags = list(pool.map(present, members))
+    minimum = 22 if model == "gefs-extended" else 1
+    return {"cycle": cycle, "horizon": horizon, "sampled_steps": steps,
+            "members_present": sum(flags), "members_expected": len(members),
+            "complete": sum(flags) >= minimum}
+
+
 def read_member(model: str, cycle: str, member: str, steps: list[int],
                 lats: np.ndarray, lons: np.ndarray, workers: int = 4,
                 groups=None) -> tuple[dict, dict]:
@@ -175,8 +203,14 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--inventory", action="store_true")
+    parser.add_argument("--availability", action="store_true")
     args = parser.parse_args()
     groups = open_groups(args.model)
+    if args.availability:
+        if not args.cycle:
+            parser.error("availability requires --cycle")
+        print(json.dumps(probe_availability(groups[0], args.model, args.cycle, args.horizon)))
+        return
     if args.inventory:
         surface, pressure = groups
         print(json.dumps({
