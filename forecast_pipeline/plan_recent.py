@@ -20,6 +20,8 @@ def recent_cycle_is_scheduled(model: str, cycle: datetime) -> bool:
 
     if model in TWICE_DAILY_MODELS:
         return cycle.hour in {0, 12}
+    if model == "gefs-extended":
+        return cycle.hour == 0
     return cycle.hour in {0, 6, 12, 18}
 
 

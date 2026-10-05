@@ -12,7 +12,7 @@
 	const DEFAULT_ARCHIVE_DATE = '2016-07-01';
 	const PREFERENCES_KEY = 'monsoon-low-atlas.forecast.v2';
 	const MODEL_TRACK_COLOURS = {
-		gfs: '#d43b20', gefs: '#ff1e78', ifs: '#0057b8', 'ifs-ens': '#a55a69',
+		gfs: '#d43b20', gefs: '#ff1e78', 'gefs-extended': '#a45b00', ifs: '#0057b8', 'ifs-ens': '#a55a69',
 		aigfs: '#699600', aigefs: '#6969a5',
 		weathernext2: '#00694b',
 		'graphcast-noaa': '#008d9e', 'graphcast-ifs-noaa': '#754319',
@@ -32,7 +32,7 @@
 	});
 	const ALTERNATIVE_ANALYSIS_KEYS = Object.freeze(Object.keys(ANALYSIS_TRACKS).filter(source => source !== 'era5'));
 	const OPERATIONAL_MODEL_ORDER = [
-		'gfs', 'gefs', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
+		'gfs', 'gefs', 'gefs-extended', 'ifs', 'ifs-ens', 'aifs', 'aifs-ens', 'aigfs', 'aigefs',
 		'weathernext2', 'graphcast-noaa', 'graphcast-ifs-noaa', 'mogreps-g'
 	];
 	let storedPreferences = {};

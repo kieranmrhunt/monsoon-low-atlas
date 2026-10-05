@@ -117,6 +117,28 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
             "label": "AIFS Single v2",
             "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/567162191/Implementation%2Bof%2BIFS%2BCycle%2B50r1",
         },
+        {
+            "from": "2025082706",
+            "label": "AIFS Single v1.1",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/496875126/Implementation+of+AIFS+Single+v1",
+        },
+        {
+            "from": "2025073106",
+            "label": "AIFS Single v1/v1.1 transition",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/496875126/Implementation+of+AIFS+Single+v1",
+            "basis": "v1.1 deployed 31 July then reverted 1 August; precise rollback cycle not crosswalked",
+        },
+        {
+            "from": "2025022506",
+            "label": "AIFS Single v1",
+            "source_url": "https://confluence.ecmwf.int/spaces/FCST/pages/496875126/Implementation+of+AIFS+Single+v1",
+        },
+        {
+            "from": "2024040100",
+            "label": "AIFS experimental",
+            "source_url": "https://dynamical.org/catalog/ecmwf-aifs-single-forecast-virtual/",
+            "basis": "pre-operational archive; experimental subversions are not yet crosswalked",
+        },
     ),
     "aifs-ens": (
         {
@@ -315,6 +337,7 @@ VERSION_INTERVALS: dict[str, tuple[dict[str, Any], ...]] = {
 # The archive-only GEFS control product shares the operational GEFS model
 # generation and its documented implementation dates.
 VERSION_INTERVALS["gefs-control"] = VERSION_INTERVALS["gefs"]
+VERSION_INTERVALS["gefs-extended"] = VERSION_INTERVALS["gefs"]
 
 # TIGGE's participating centres expose long model-upgrade tables, but several
 # do not provide a stable machine-readable cycle-to-suite crosswalk. Keep the

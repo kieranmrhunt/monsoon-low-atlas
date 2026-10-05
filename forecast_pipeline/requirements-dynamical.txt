@@ -1,0 +1,5 @@
+# Isolated reader only: keep the frozen tracker in its existing environment.
+# Python >=3.12 is required by the current Icechunk repositories.
+dynamical-catalog>=1.0,<2
+numpy>=2,<3
+xarray>=2025.1

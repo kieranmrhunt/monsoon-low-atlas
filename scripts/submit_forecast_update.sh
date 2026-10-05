@@ -27,6 +27,7 @@ while IFS= read -r job_name; do
       /usr/bin/bash "$ATLAS_ROOT/scripts/submit_forecast_recent_backfill.sh"
       /usr/bin/bash "$ATLAS_ROOT/scripts/submit_aigefs_shards.sh" recent
       /usr/bin/bash "$ATLAS_ROOT/scripts/submit_weathernext2_shards.sh" recent
+      /usr/bin/bash "$ATLAS_ROOT/scripts/submit_dynamical_forecasts.sh" recent || echo "Daily GEFS extension submission failed; existing operational models unaffected." >&2
       exit 0
       ;;
   esac
@@ -58,8 +59,9 @@ done
 DEPENDENCY="$(IFS=:; echo "${JOB_IDS[*]}")"
 FINAL_ID="$(sbatch --parsable --job-name=mla-fc-operational \
   --dependency="afterany:$DEPENDENCY" \
-  scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT" full aigefs,weathernext2)"
+  scripts/finalize_forecasts.slurm "$RUN_ROOT" "$OUTPUT" full aigefs,weathernext2,gefs-extended)"
 echo "Submitted model jobs ${JOB_IDS[*]} and finalizer $FINAL_ID"
 /usr/bin/bash "$ATLAS_ROOT/scripts/submit_forecast_recent_backfill.sh"
 /usr/bin/bash "$ATLAS_ROOT/scripts/submit_aigefs_shards.sh" recent
 /usr/bin/bash "$ATLAS_ROOT/scripts/submit_weathernext2_shards.sh" recent
+/usr/bin/bash "$ATLAS_ROOT/scripts/submit_dynamical_forecasts.sh" recent || echo "Daily GEFS extension submission failed; existing operational models unaffected." >&2

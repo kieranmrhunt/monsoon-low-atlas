@@ -7,6 +7,7 @@ import argparse
 import gzip
 import json
 import shutil
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from .forecast_core import (
     utc_now,
 )
 from .update import read_manifest, replace_archive_entry
+from .sources import MODEL_DEFINITIONS
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,10 +137,13 @@ def main() -> None:
 
         for key in (
             "schema", "schedule", "weather_archive_policy", "forecast_horizon_policy",
-            "catalogue_verification", "models", "source_notes",
+            "catalogue_verification", "source_notes",
         ):
             if key in source_manifests[0]:
                 manifest[key] = source_manifests[0][key]
+        # A long-running old backfill must not remove newly enabled model
+        # definitions when it eventually publishes its staging manifest.
+        manifest["models"] = [asdict(value) for value in MODEL_DEFINITIONS.values()]
         manifest["generated_utc"] = iso_z(utc_now())
         horizon_groups: dict[str, set[int]] = {}
         for entry in manifest.get(collection_key, []):

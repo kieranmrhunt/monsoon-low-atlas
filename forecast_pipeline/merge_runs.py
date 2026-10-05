@@ -202,7 +202,7 @@ def main() -> None:
         # deployed updater rather than inheriting stale labels from a seed or
         # earlier per-model manifest.
         manifest["models"] = [
-            asdict(MODEL_DEFINITIONS[model]) for model in DEFAULT_MODELS
+            asdict(value) for value in MODEL_DEFINITIONS.values()
         ]
         manifest["forecast_horizons_hours"] = {
             model: manifest_entry_horizon_hours(entry)

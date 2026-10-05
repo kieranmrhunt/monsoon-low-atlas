@@ -81,6 +81,10 @@ def available_forecast_steps(model: str, cycle: datetime) -> list[int]:
     value = cycle if cycle.tzinfo is not None else cycle.replace(tzinfo=UTC)
     if model in {"gfs", "gefs", "gefs-control", "aigfs", "aigefs"}:
         horizon = 384
+    elif model == "gefs-extended":
+        if value.hour != 0:
+            raise ValueError("GEFS 35-day forecasts are initialized at 00 UTC only")
+        horizon = 840
     elif model in {"graphcast-noaa", "graphcast-ifs-noaa"}:
         horizon = 240
     elif model in {"ifs", "ifs-ens"}:
@@ -164,6 +168,12 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
         "gefs-control", "GEFS control", "NOAA/NCEP", "deterministic", 1,
         "NOAA Global Ensemble Forecast System unperturbed control member, retained for pre-GFS-cloud historical coverage",
         "https://registry.opendata.aws/noaa-gefs/", "NOAA Open Data cloud mirror", "NOAA public data", "#b46722",
+    ),
+    "gefs-extended": ModelDefinition(
+        "gefs-extended", "GEFS 35-day", "NOAA/NCEP", "ensemble", 31,
+        "Once-daily GEFS control plus 30 perturbed members to 35 days; long-range guidance is best interpreted as ensemble activity",
+        "https://dynamical.org/catalog/noaa-gefs-forecast-35-day-0-5-degree-virtual/",
+        "NOAA GEFS via dynamical.org", "NOAA public data", "#a45b00",
     ),
     "aigfs": ModelDefinition(
         "aigfs", "AIGFS", "NOAA/NCEP", "deterministic", 1,
@@ -294,7 +304,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
 
 DEFAULT_MODELS = (
     "gfs", "gefs", "aigfs", "aigefs", "graphcast-noaa", "graphcast-ifs-noaa", "mogreps-g",
-    "ifs", "ifs-ens", "aifs", "aifs-ens", "weathernext2",
+    "ifs", "ifs-ens", "aifs", "aifs-ens", "weathernext2", "gefs-extended",
 )
 
 
@@ -3693,6 +3703,11 @@ class EcmwfAdapter(BaseAdapter):
 
 
 def adapter_for(model: str, *, workers: int = 16, archive_root: str | None = None) -> BaseAdapter:
+    if model in {"gefs-extended", "aifs"}:
+        if archive_root:
+            raise ValueError("Dynamical archive sources use STAC discovery, not archive_root")
+        from .dynamical import AifsHybridAdapter, DynamicalAdapter
+        return AifsHybridAdapter(workers=workers) if model == "aifs" else DynamicalAdapter(model, workers=workers)
     if model == "weathernext2":
         if archive_root:
             raise ValueError("WeatherNext 2 uses its fixed authenticated Google Cloud Storage Zarr")

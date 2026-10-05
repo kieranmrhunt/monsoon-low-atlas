@@ -37,6 +37,7 @@ cd "$ATLAS_ROOT"
   --output "$PLAN" \
   --jobs "$JOBS" \
   --exclude-model aigefs \
+  --exclude-model gefs-extended \
   --exclude-model weathernext2
 
 COUNT="$(wc -l < "$JOBS")"
